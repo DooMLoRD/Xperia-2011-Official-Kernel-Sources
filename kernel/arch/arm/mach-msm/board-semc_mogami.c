@@ -2490,7 +2490,7 @@ static int cyttsp_xres(void)
 		       __func__, rc);
 		return -EIO;
 	}
-	udelay(250);
+	msleep(1);
 	gpio_set_value(CYPRESS_TOUCH_GPIO_RESET, polarity);
 	return 0;
 }
@@ -2530,9 +2530,13 @@ static int cyttsp_wakeup(void)
 		__func__);
                 return ret;
 	}
-	msleep(10);
+	msleep(50);
 	gpio_set_value(CYPRESS_TOUCH_GPIO_IRQ, 0);
-	udelay(250);
+	msleep(1);
+	gpio_set_value(CYPRESS_TOUCH_GPIO_IRQ, 1);
+	udelay(100);
+	gpio_set_value(CYPRESS_TOUCH_GPIO_IRQ, 0);
+	msleep(1);
 	gpio_set_value(CYPRESS_TOUCH_GPIO_IRQ, 1);
 	printk(KERN_INFO "%s: wakeup\n", __func__);
 	ret = gpio_direction_input(CYPRESS_TOUCH_GPIO_IRQ);
@@ -2541,7 +2545,7 @@ static int cyttsp_wakeup(void)
 		__func__);
 		return ret;
 	}
-	msleep(3);
+	msleep(50);
 	return 0;
 }
 
