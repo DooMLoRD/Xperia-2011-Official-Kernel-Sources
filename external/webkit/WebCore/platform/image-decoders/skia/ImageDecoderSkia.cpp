@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  * Copyright (C) 2008, 2009 Google, Inc.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,10 +33,17 @@
 
 namespace WebCore {
 
+#if ENABLE(WEBGL)
+RGBA32Buffer::RGBA32Buffer(bool premultiplyAlpha)
+#else
 RGBA32Buffer::RGBA32Buffer()
+#endif
     : m_status(FrameEmpty)
     , m_duration(0)
     , m_disposalMethod(DisposeNotSpecified)
+#if ENABLE(WEBGL)
+    , m_premultiplyAlpha(premultiplyAlpha)
+#endif
 {
 }
 
@@ -118,6 +126,9 @@ RGBA32Buffer& RGBA32Buffer::operator=(const RGBA32Buffer& other)
     setStatus(other.status());
     setDuration(other.duration());
     setDisposalMethod(other.disposalMethod());
+#if ENABLE(WEBGL)
+    m_premultiplyAlpha = other.m_premultiplyAlpha;
+#endif
     return *this;
 }
 

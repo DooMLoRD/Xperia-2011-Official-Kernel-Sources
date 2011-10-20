@@ -2,6 +2,7 @@
  * Copyright (C) 2006 Apple Computer, Inc.
  * Copyright (C) 2007-2009 Torch Mobile, Inc.
  * Copyright (C) Research In Motion Limited 2009-2010. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Portions are Copyright (C) 2001 mozilla.org
  *
@@ -152,6 +153,12 @@ private:
 PNGImageDecoder::PNGImageDecoder()
 {
 }
+#if ENABLE(WEBGL)
+PNGImageDecoder::PNGImageDecoder(bool premultiplyAlpha, bool ignoreGammaAndColorProfile)
+    : ImageDecoder(premultiplyAlpha, ignoreGammaAndColorProfile)
+{
+}
+#endif
 
 PNGImageDecoder::~PNGImageDecoder()
 {
@@ -185,8 +192,12 @@ RGBA32Buffer* PNGImageDecoder::frameBufferAtIndex(size_t index)
     if (index)
         return 0;
 
-    if (m_frameBufferCache.isEmpty())
+    if (m_frameBufferCache.isEmpty()) {
         m_frameBufferCache.resize(1);
+#if ENABLE(WEBGL)
+        m_frameBufferCache[0].setPremultiplyAlpha(m_premultiplyAlpha);
+#endif
+    }
 
     RGBA32Buffer& frame = m_frameBufferCache[0];
     if (frame.status() != RGBA32Buffer::FrameComplete && m_reader)
@@ -282,7 +293,11 @@ void PNGImageDecoder::headerAvailable()
 
     // Deal with gamma and keep it under our control.
     double gamma;
+#if ENABLE(WEBGL)
+    if (!m_ignoreGammaAndColorProfile && png_get_gAMA(png, info, &gamma)) {
+#else
     if (png_get_gAMA(png, info, &gamma)) {
+#endif
         if ((gamma <= 0.0) || (gamma > cMaxGamma)) {
             gamma = cInverseGamma;
             png_set_gAMA(png, info, gamma);

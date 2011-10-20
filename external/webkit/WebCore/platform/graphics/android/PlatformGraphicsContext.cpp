@@ -1,5 +1,6 @@
 /*
  * Copyright 2006, The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,6 +28,7 @@
 #include "Node.h"
 #include "PlatformGraphicsContext.h"
 #include "SkCanvas.h"
+#include "SkDevice.h"
 
 namespace WebCore {
 
@@ -69,6 +71,11 @@ void PlatformGraphicsContext::storeButtonInfo(Node* node, const IntRect& r)
     mCanvas->drawPicture(*(container.picture()));
     // Keep track of the information about the button.
     m_buttons->append(container);
+}
+
+const SkBitmap *PlatformGraphicsContext::bitmap() const
+{
+    return &mCanvas->getDevice()->accessBitmap(false);
 }
 
 }   // WebCore

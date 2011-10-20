@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,39 +27,103 @@
 #ifndef WebGLTexture_h
 #define WebGLTexture_h
 
-#include "CanvasObject.h"
+#include "WebGLObject.h"
 
 #include <wtf/PassRefPtr.h>
 #include <wtf/RefCounted.h>
+#include <wtf/Vector.h>
 
 namespace WebCore {
     
-    class WebGLTexture : public CanvasObject {
+    class WebGLTexture : public WebGLObject {
     public:
         virtual ~WebGLTexture() { deleteObject(); }
         
         static PassRefPtr<WebGLTexture> create(WebGLRenderingContext*);
     
-        // For querying previously created objects via e.g. getFramebufferAttachmentParameter
-        // FIXME: should consider canonicalizing these objects
-        static PassRefPtr<WebGLTexture> create(WebGLRenderingContext*, Platform3DObject);
+    void setTarget(GC3Denum target, GC3Dint maxLevel);
+    void setParameteri(GC3Denum pname, GC3Dint param);
+    void setParameterf(GC3Denum pname, GC3Dfloat param);
 
-        bool isCubeMapRWrapModeInitialized() {
-            return cubeMapRWrapModeInitialized;
-        }
+    GC3Denum getTarget() const { return m_target; }
 
-        void setCubeMapRWrapModeInitialized(bool initialized) {
-            cubeMapRWrapModeInitialized = initialized;
-        }
+    int getMinFilter() const { return m_minFilter; }
+
+    void setLevelInfo(GC3Denum target, GC3Dint level, GC3Denum internalFormat, GC3Dsizei width, GC3Dsizei height, GC3Denum type);
+
+    bool canGenerateMipmaps();
+    // Generate all level information.
+    void generateMipmapLevelInfo();
+
+    GC3Denum getInternalFormat(GC3Denum target, GC3Dint level) const;
+    GC3Denum getType(GC3Denum target, GC3Dint level) const;
+    GC3Dsizei getWidth(GC3Denum target, GC3Dint level) const;
+    GC3Dsizei getHeight(GC3Denum target, GC3Dint level) const;
+
+    // Whether width/height is NotPowerOfTwo.
+    static bool isNPOT(GC3Dsizei, GC3Dsizei);
+
+    bool isNPOT() const;
+    // Determine if texture sampling should always return [0, 0, 0, 1] (OpenGL ES 2.0 Sec 3.8.2).
+    bool needToUseBlackTexture() const;
+
+    bool hasEverBeenBound() const { return object() && m_target; }
+
+    static GC3Dint computeLevelCount(GC3Dsizei width, GC3Dsizei height);
 
     protected:
         WebGLTexture(WebGLRenderingContext*);
-        WebGLTexture(WebGLRenderingContext*, Platform3DObject);
 
-        virtual void _deleteObject(Platform3DObject);
+        virtual void deleteObjectImpl(Platform3DObject);
 
     private:
-        bool cubeMapRWrapModeInitialized;
+    class LevelInfo {
+    public:
+        LevelInfo()
+            : valid(false)
+            , internalFormat(0)
+            , width(0)
+            , height(0)
+            , type(0)
+        {
+        }
+
+        void setInfo(GC3Denum internalFmt, GC3Dsizei w, GC3Dsizei h, GC3Denum tp)
+        {
+            valid = true;
+            internalFormat = internalFmt;
+            width = w;
+            height = h;
+            type = tp;
+        }
+
+        bool valid;
+        GC3Denum internalFormat;
+        GC3Dsizei width;
+        GC3Dsizei height;
+        GC3Denum type;
+    };
+
+    virtual bool isTexture() const { return true; }
+
+    void update();
+
+    int mapTargetToIndex(GC3Denum) const;
+
+    const LevelInfo* getLevelInfo(GC3Denum target, GC3Dint level) const;
+
+    GC3Denum m_target;
+
+    GC3Denum m_minFilter;
+    GC3Denum m_magFilter;
+    GC3Denum m_wrapS;
+    GC3Denum m_wrapT;
+
+    Vector<Vector<LevelInfo> > m_info;
+
+    bool m_isNPOT;
+    bool m_isComplete;
+    bool m_needToUseBlackTexture;
     };
     
 } // namespace WebCore

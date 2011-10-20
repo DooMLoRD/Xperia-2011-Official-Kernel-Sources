@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,6 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ * Modifications are licensed under the License.
  */
 
 #ifndef GraphicsLayerAndroid_h
@@ -102,6 +106,10 @@ public:
 
     void pauseDisplay(bool state);
 
+#if ENABLE(WEBGL)
+    void setContentsToGraphicsContext3D(const GraphicsContext3D*);
+#endif
+
 #ifndef NDEBUG
     virtual void setDebugBackgroundColor(const Color&);
     virtual void setDebugBorder(const Color&, float borderWidth);
@@ -151,6 +159,9 @@ private:
     Vector<FloatRect> m_invalidatedRects;
 
     LayerAndroid* m_contentLayer;
+#if ENABLE(WEBGL)
+    GraphicsContext3D* m_context;
+#endif
 };
 
 } // namespace WebCore

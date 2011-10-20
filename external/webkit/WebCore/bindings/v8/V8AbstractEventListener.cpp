@@ -116,6 +116,9 @@ void V8AbstractEventListener::setListenerObject(v8::Handle<v8::Object> listener)
 
 void V8AbstractEventListener::invokeEventHandler(ScriptExecutionContext* context, Event* event, v8::Handle<v8::Value> jsEvent)
 {
+    // If jsEvent is empty, attempt to set it as a hidden value would crash v8.
+    if (jsEvent.IsEmpty())
+        return;
 
     v8::Local<v8::Context> v8Context = toV8Context(context, worldContext());
     if (v8Context.IsEmpty())

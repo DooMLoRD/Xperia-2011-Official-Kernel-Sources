@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2008 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -76,6 +77,10 @@ namespace WTF {
         bits = (bits & 0x33333333) + ((bits >> 2) & 0x33333333);
         return (((bits + (bits >> 4)) & 0xF0F0F0F) * 0x1010101) >> 24;
     }
+
+// Macro that returns a compile time constant with the length of an array, but gives an error if passed a non-array.
+template<typename T, size_t Size> char (&ArrayLengthHelperFunction(T (&)[Size]))[Size];
+#define WTF_ARRAY_LENGTH(array) sizeof(::WTF::ArrayLengthHelperFunction(array))
 
 } // namespace WTF
 

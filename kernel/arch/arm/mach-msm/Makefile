@@ -150,11 +150,12 @@ obj-$(CONFIG_MACH_SEMC_SMULTRON) += board-semc_mogami.o board-semc_mogami-rfkill
 obj-$(CONFIG_MACH_SEMC_MANGO) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-mango.o leds-mango.o gpio-mango.o charger-mango.o
 obj-$(CONFIG_MACH_SEMC_COCONUT) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-coconut.o leds-coconut.o gpio-coconut.o charger-coconut.o
 obj-$(CONFIG_MACH_SEMC_AKANE) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-akane.o leds-akane.o gpio-akane.o charger-akane.o keypad-pmic-mogami.o keypad-pmic-akane.o
-obj-$(CONFIG_MACH_SEMC_AZUSA) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-azusa.o leds-azusa.o gpio-azusa.o charger-azusa.o
+obj-$(CONFIG_MACH_SEMC_AZUSA) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-azusa.o leds-azusa.o gpio-azusa.o charger-azusa.o keypad-pmic-mogami.o keypad-pmic-azusa.o
 obj-$(CONFIG_MACH_SEMC_SATSUMA) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-satsuma.o leds-satsuma.o gpio-satsuma.o charger-satsuma.o
+obj-$(CONFIG_MACH_SEMC_AYAME) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-anzu.o leds-anzu.o gpio-anzu.o charger-anzu.o
+obj-$(CONFIG_MACH_SEMC_HAIDA) += board-semc_mogami.o board-semc_mogami-rfkill.o keypad-haida.o leds-haida.o gpio-haida.o charger-haida.o
 obj-$(CONFIG_MOGAMI_VIBRATOR) += vibrator-mogami.o
 
-obj-$(CONFIG_MACH_SEMC_ZEUS) += keypad-pmic-mogami.o keypad-pmic-zeus.o
 obj-$(CONFIG_MACH_SEMC_ZEUS) += keypad-zeus.o
 obj-$(CONFIG_MACH_SEMC_ZEUS) += board-semc_zeus-wifi.o board-semc_zeus-rfkill.o
 

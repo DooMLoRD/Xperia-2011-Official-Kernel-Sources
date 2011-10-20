@@ -1,5 +1,6 @@
 /*
  * Copyright 2007, The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -428,6 +429,10 @@ public:
             WebCore::pageCache()->setCapacity(size);
         } else
             s->setUsesPageCache(false);
+
+#if ENABLE(WEBGL)
+        s->setWebGLEnabled(true);
+#endif
     }
 };
 

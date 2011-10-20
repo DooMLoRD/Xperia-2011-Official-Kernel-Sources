@@ -1,3 +1,6 @@
+/*
+ * Partly modified 2011 Sony Ericsson Mobile Communications AB.
+ */
 #include "config.h"
 #include "LayerAndroid.h"
 
@@ -50,6 +53,9 @@ LayerAndroid::LayerAndroid(bool isRootLayer) : SkLayer(),
     m_doRotation(false),
     m_isFixed(false),
     m_recordingPicture(0),
+#if ENABLE(WEBGL)
+    m_context(0),
+#endif
     m_extra(0),
     m_uniqueId(++gUniqueId)
 {
@@ -90,6 +96,10 @@ LayerAndroid::LayerAndroid(const LayerAndroid& layer) : SkLayer(layer),
     m_recordingPicture = layer.m_recordingPicture;
     SkSafeRef(m_recordingPicture);
 
+#if ENABLE(WEBGL)
+    m_context = layer.m_context;
+#endif
+
     for (int i = 0; i < layer.countChildren(); i++)
         addChild(new LayerAndroid(*layer.getChild(i)))->unref();
 
@@ -106,6 +116,9 @@ LayerAndroid::LayerAndroid(SkPicture* picture) : SkLayer(),
     m_doRotation(false),
     m_isFixed(false),
     m_recordingPicture(picture),
+#if ENABLE(WEBGL)
+    m_context(0),
+#endif
     m_extra(0),
     m_uniqueId(-1)
 {
@@ -116,6 +129,25 @@ LayerAndroid::LayerAndroid(SkPicture* picture) : SkLayer(),
     SkSafeRef(m_recordingPicture);
     gDebugLayerAndroidInstances++;
 }
+
+#if ENABLE(WEBGL)
+LayerAndroid::LayerAndroid(GraphicsContext3D* context): SkLayer(),
+    m_isRootLayer(true),
+    m_haveClip(false),
+    m_doRotation(false),
+    m_isFixed(false),
+    m_recordingPicture(0),
+    m_context(context),
+    m_extra(0),
+    m_uniqueId(++gUniqueId)
+{
+    m_angleTransform = 0;
+    m_translation.set(0, 0);
+    m_scale.set(1, 1);
+    m_backgroundColor = 0;
+    gDebugLayerAndroidInstances++;
+}
+#endif
 
 LayerAndroid::~LayerAndroid()
 {
@@ -336,6 +368,11 @@ void LayerAndroid::onDraw(SkCanvas* canvas, SkScalar opacity) {
         canvas->setDrawFilter(new OpacityDrawFilter(canvasOpacity));
 
     canvas->drawPicture(*m_recordingPicture);
+#if ENABLE(WEBGL)
+    if (m_context.get()) {
+        m_context->paint(canvas);
+    }
+#endif
     if (m_extra)
         m_extra->draw(canvas, this);
 

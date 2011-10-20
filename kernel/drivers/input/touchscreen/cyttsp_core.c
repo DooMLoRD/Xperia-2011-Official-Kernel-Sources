@@ -1713,8 +1713,8 @@ static int cyttsp_suspend(struct cyttsp *ts)
 	if (ts->platform_data->use_sleep &&
 			(ts->platform_data->power_state == CY_ACTIVE_STATE)) {
 		sleep_mode = CY_DEEP_SLEEP_MODE;
-		retval = ttsp_write_block_data(ts,
-			CY_REG_BASE, sizeof(sleep_mode), &sleep_mode);
+		retval = ttsp_write_confirm(ts,
+			CY_REG_BASE, sizeof(sleep_mode), &sleep_mode, 100);
 		if (!(retval < 0))
 			ts->platform_data->power_state = CY_SLEEP_STATE;
 		else

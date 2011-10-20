@@ -1,5 +1,6 @@
 ##
 ## Copyright 2009, The Android Open Source Project
+## Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 ##
 ## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted provided that the following conditions
@@ -31,7 +32,7 @@ js_binding_scripts := \
 	$(LOCAL_PATH)/bindings/scripts/generate-bindings.pl
 
 # Add ACCELERATED_COMPOSITING=1 and ENABLE_3D_RENDERING=1 for layers support
-FEATURE_DEFINES := ENABLE_ORIENTATION_EVENTS=1 ENABLE_TOUCH_EVENTS=1 V8_BINDING ENABLE_DATABASE=1 ENABLE_OFFLINE_WEB_APPLICATIONS=1 ENABLE_DOM_STORAGE=1 ENABLE_VIDEO=1 ENABLE_GEOLOCATION=1 ENABLE_CONNECTION=1 ENABLE_APPLICATION_INSTALLED=1
+FEATURE_DEFINES := ENABLE_ORIENTATION_EVENTS=1 ENABLE_TOUCH_EVENTS=1 V8_BINDING ENABLE_DATABASE=1 ENABLE_OFFLINE_WEB_APPLICATIONS=1 ENABLE_DOM_STORAGE=1 ENABLE_VIDEO=1 ENABLE_GEOLOCATION=1 ENABLE_CONNECTION=1 ENABLE_APPLICATION_INSTALLED=1 ENABLE_WEBGL=1
 
 # CSS
 GEN := \
@@ -230,31 +231,36 @@ $(patsubst %.h,%.cpp,$(GEN)): $(intermediates)/bindings/%.cpp : $(intermediates)
 
 # Canvas
 GEN := \
+    $(intermediates)/bindings/V8ArrayBuffer.h \
+    $(intermediates)/bindings/V8ArrayBufferView.h \
     $(intermediates)/bindings/V8CanvasGradient.h \
     $(intermediates)/bindings/V8CanvasNumberArray.h \
     $(intermediates)/bindings/V8CanvasPattern.h \
     $(intermediates)/bindings/V8CanvasPixelArray.h \
     $(intermediates)/bindings/V8CanvasRenderingContext.h \
     $(intermediates)/bindings/V8CanvasRenderingContext2D.h \
+    $(intermediates)/bindings/V8Float32Array.h \
+    $(intermediates)/bindings/V8Int16Array.h \
+    $(intermediates)/bindings/V8Int32Array.h \
+    $(intermediates)/bindings/V8Int8Array.h \
+    $(intermediates)/bindings/V8OESStandardDerivatives.h \
+    $(intermediates)/bindings/V8OESTextureFloat.h \
+    $(intermediates)/bindings/V8OESVertexArrayObject.h \
+    $(intermediates)/bindings/V8Uint16Array.h \
+    $(intermediates)/bindings/V8Uint32Array.h \
+    $(intermediates)/bindings/V8Uint8Array.h \
     $(intermediates)/bindings/V8WebGLActiveInfo.h \
-    $(intermediates)/bindings/V8WebGLArray.h \
-    $(intermediates)/bindings/V8WebGLArrayBuffer.h \
     $(intermediates)/bindings/V8WebGLBuffer.h \
-    $(intermediates)/bindings/V8WebGLByteArray.h \
     $(intermediates)/bindings/V8WebGLContextAttributes.h \
-    $(intermediates)/bindings/V8WebGLFloatArray.h \
     $(intermediates)/bindings/V8WebGLFramebuffer.h \
-    $(intermediates)/bindings/V8WebGLIntArray.h \
     $(intermediates)/bindings/V8WebGLProgram.h \
     $(intermediates)/bindings/V8WebGLRenderbuffer.h \
     $(intermediates)/bindings/V8WebGLRenderingContext.h \
     $(intermediates)/bindings/V8WebGLShader.h \
-    $(intermediates)/bindings/V8WebGLShortArray.h \
     $(intermediates)/bindings/V8WebGLTexture.h \
     $(intermediates)/bindings/V8WebGLUniformLocation.h \
-    $(intermediates)/bindings/V8WebGLUnsignedByteArray.h \
-    $(intermediates)/bindings/V8WebGLUnsignedIntArray.h \
-    $(intermediates)/bindings/V8WebGLUnsignedShortArray.h
+    $(intermediates)/bindings/V8WebGLVertexArrayObjectOES.h \
+    $(intermediates)/bindings/V8WebKitLoseContext.h
 
 $(GEN): PRIVATE_PATH := $(LOCAL_PATH)
 $(GEN): PRIVATE_CUSTOM_TOOL = SOURCE_ROOT=$(PRIVATE_PATH) perl -I$(PRIVATE_PATH)/bindings/scripts $(PRIVATE_PATH)/bindings/scripts/generate-bindings.pl --defines "$(FEATURE_DEFINES) LANGUAGE_JAVASCRIPT" --generator V8 --include dom --include html --include html/canvas --outputdir $(dir $@) $<

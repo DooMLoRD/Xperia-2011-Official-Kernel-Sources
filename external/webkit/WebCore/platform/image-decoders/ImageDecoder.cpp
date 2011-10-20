@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2008-2009 Torch Mobile, Inc.
  * Copyright (C) Research In Motion Limited 2009-2010. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -52,6 +53,31 @@ static unsigned copyFromSharedBuffer(char* buffer, unsigned bufferLength, const 
     return bytesExtracted;
 }
 
+#if ENABLE(WEBGL)
+ImageDecoder* ImageDecoder::create(const SharedBuffer& data, bool premultiplyAlpha, bool ignoreGammaAndColorProfile)
+{
+    // We need at least 4 bytes to figure out what kind of image we're dealing with.
+    static const unsigned maxMarkerLength = 4;
+    char contents[maxMarkerLength];
+    unsigned length = copyFromSharedBuffer(contents, maxMarkerLength, data, 0);
+    if (length < maxMarkerLength)
+        return 0;
+
+    const unsigned char* uContents = reinterpret_cast<const unsigned char*>(contents);
+
+    // Only support PNG for now.
+    // Test for PNG.
+    if (uContents[0]==0x89 &&
+        uContents[1]==0x50 &&
+        uContents[2]==0x4E &&
+        uContents[3]==0x47)
+        return new PNGImageDecoder(premultiplyAlpha, ignoreGammaAndColorProfile);
+
+    // Give up. We don't know what the heck this is.
+    return 0;
+}
+#endif
+
 #if !OS(ANDROID)
 // This method requires BMPImageDecoder, PNGImageDecoder, ICOImageDecoder and
 // JPEGDecoder, which aren't used on Android, and which don't all compile.
@@ -100,7 +126,6 @@ ImageDecoder* ImageDecoder::create(const SharedBuffer& data)
 #endif // !OS(ANDROID)
 
 #if !PLATFORM(SKIA)
-
 RGBA32Buffer::RGBA32Buffer()
     : m_hasAlpha(false)
     , m_status(FrameEmpty)

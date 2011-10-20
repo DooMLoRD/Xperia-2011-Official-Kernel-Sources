@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2006, 2007, 2008, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -443,17 +444,29 @@ module window {
 
         attribute CanvasRenderingContext2DConstructor CanvasRenderingContext2D;
         attribute ImageDataConstructor ImageData;
-        attribute [Conditional=3D_CANVAS] WebGLRenderingContextConstructor WebGLRenderingContext;
+#if defined(ENABLE_WEBGL) && ENABLE_WEBGL
+        attribute [Conditional=WEBGL] WebGLActiveInfoConstructor WebGLActiveInfo;
+        attribute [Conditional=WEBGL] WebGLBufferConstructor WebGLBuffer;
+        attribute [Conditional=WEBGL] WebGLFramebufferConstructor WebGLFramebuffer;
+        attribute [Conditional=WEBGL] WebGLProgramConstructor WebGLProgram;
+        attribute [Conditional=WEBGL] WebGLRenderbufferConstructor WebGLRenderbuffer;
+        attribute [Conditional=WEBGL] WebGLRenderingContextConstructor WebGLRenderingContext;
+        attribute [Conditional=WEBGL] WebGLShaderConstructor WebGLShader;
+        attribute [Conditional=WEBGL] WebGLTextureConstructor WebGLTexture;
+        attribute [Conditional=WEBGL] WebGLUniformLocationConstructor WebGLUniformLocation;
+#endif
         attribute TextMetricsConstructor TextMetrics;
 
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLArrayBufferConstructor WebGLArrayBuffer; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLByteArrayConstructor WebGLByteArray; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLUnsignedByteArrayConstructor WebGLUnsignedByteArray; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLShortArrayConstructor WebGLShortArray; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLUnsignedShortArrayConstructor WebGLUnsignedShortArray; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLIntArrayConstructor WebGLIntArray; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLUnsignedIntArrayConstructor WebGLUnsignedIntArray; // Usable with new operator
-        attribute [JSCCustomGetter,Conditional=3D_CANVAS] WebGLFloatArrayConstructor WebGLFloatArray; // Usable with new operator
+#if defined(ENABLE_WEBGL) && ENABLE_WEBGL
+        attribute [JSCCustomGetter,Conditional=WEBGL] ArrayBufferConstructor ArrayBuffer; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Float32ArrayConstructor Float32Array; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Int16ArrayConstructor Int16Array; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Int32ArrayConstructor Int32Array; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Int8ArrayConstructor Int8Array; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Uint16ArrayConstructor Uint16Array; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Uint32ArrayConstructor Uint32Array; // Usable with new operator
+        attribute [JSCCustomGetter,Conditional=WEBGL] Uint8ArrayConstructor Uint8Array; // Usable with new operator
+#endif
 
         attribute EventConstructor Event;
         attribute BeforeLoadEventConstructor BeforeLoadEvent;

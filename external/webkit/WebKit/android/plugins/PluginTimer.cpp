@@ -26,6 +26,7 @@
 
 #include "config.h"
 #include "PluginTimer.h"
+#include "RefPtr.h"
 
 namespace WebCore {
 
@@ -63,11 +64,19 @@ namespace WebCore {
         
     void PluginTimer::fired()
     {
+        // ensure the timer cannot be deleted until this method completes
+        RefPtr<PluginTimer> protector(this);
+
         if (!m_unscheduled)
             m_timerFunc(m_instance, m_timerID);
 
-        if (!m_repeat || m_unscheduled)
-            delete this;
+        // remove the timer if it is a one-shot timer (!m_repeat) or if is a
+        // repeating timer that has been unscheduled. In either case we must
+        // ensure that the refcount is 2 or greater since the PluginTimerList
+        // could have been deleted by the timerFunc and we must ensure that we
+        // do not double delete.
+        if ((!m_repeat || m_unscheduled) && refCount() > 1)
+            deref(); // mark the timer for deletion as it is no longer needed
     }
     
     // may return null if timerID is not found
@@ -84,11 +93,15 @@ namespace WebCore {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    
+
     PluginTimerList::~PluginTimerList()
     {
-        while (m_list) {
-            delete m_list;
+        PluginTimer* curr = m_list;
+        PluginTimer* next;
+        while (curr) {
+            next = curr->next();
+            curr->deref();
+            curr = next;
         }
     }
 

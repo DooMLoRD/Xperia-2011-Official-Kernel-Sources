@@ -1,5 +1,6 @@
 ##
 ## Copyright 2009, The Android Open Source Project
+## Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 ##
 ## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted provided that the following conditions
@@ -91,6 +92,8 @@ LOCAL_C_INCLUDES := \
 	external/ \
 	external/icu4c/common \
 	external/icu4c/i18n \
+	external/libpng \
+	external/zlib \
 	external/libxml2/include \
 	external/skia/emoji \
 	external/skia/include/core \
@@ -136,6 +139,7 @@ LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
 	$(LOCAL_PATH)/WebCore/platform/image-decoders/ico \
 	$(LOCAL_PATH)/WebCore/platform/image-decoders/jpeg \
 	$(LOCAL_PATH)/WebCore/platform/image-decoders/png \
+	$(LOCAL_PATH)/WebCore/platform/image-encoders/skia \
 	$(LOCAL_PATH)/WebCore/platform/mock \
 	$(LOCAL_PATH)/WebCore/platform/network \
 	$(LOCAL_PATH)/WebCore/platform/network/android \
@@ -282,6 +286,11 @@ LOCAL_SHARED_LIBRARIES := \
 	libmedia \
 	libsurfaceflinger_client
 
+LOCAL_SHARED_LIBRARIES += \
+	libEGL \
+	libGLESv2 \
+	libz
+
 ifeq ($(WEBCORE_INSTRUMENTATION),true)
 LOCAL_SHARED_LIBRARIES += libhardware_legacy
 endif
@@ -293,7 +302,8 @@ include external/stlport/libstlport.mk
 endif
 
 # Build the list of static libraries
-LOCAL_STATIC_LIBRARIES := libxml2
+LOCAL_STATIC_LIBRARIES := libxml2 \
+	libpng
 ifeq ($(JAVASCRIPT_ENGINE),v8)
 LOCAL_STATIC_LIBRARIES += libv8
 endif

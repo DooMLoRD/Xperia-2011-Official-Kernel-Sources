@@ -4,6 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2010, Code Aurora Forum
  *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  *
@@ -706,6 +707,7 @@ static void a2dp_config_complete(struct avdtp *session, struct a2dp_sep *sep,
 	struct a2dp_data *a2dp = &client->d.a2dp;
 	uint16_t imtu, omtu;
 	GSList *caps;
+	struct avdtp_service_capability *protection;
 
 	client->req_id = 0;
 
@@ -736,6 +738,19 @@ static void a2dp_config_complete(struct avdtp *session, struct a2dp_sep *sep,
 
 	/* FIXME: Use imtu when fd_opt is CFG_FD_OPT_READ */
 	rsp->link_mtu = omtu;
+
+	protection = avdtp_get_protection(stream);
+	rsp->content_protection = 0;
+
+	if ((protection != NULL) && (protection->length >= 2)) {
+		struct avdtp_content_protection_capability *prot = (void *)protection->data;
+		rsp->content_protection = (prot->cp_type_msb << 8) | prot->cp_type_lsb;
+		DBG("sink_set_protected true.");
+		sink_set_protected(client->dev, TRUE);
+	}else{
+		DBG("sink_set_protected FALSE.");
+		sink_set_protected(client->dev, FALSE);
+	}
 
 	unix_ipc_sendmsg(client, &rsp->h);
 
@@ -1001,6 +1016,9 @@ static void start_config(struct audio_device *dev, struct unix_client *client)
 {
 	struct a2dp_data *a2dp;
 	struct headset_data *hs;
+	struct avdtp_remote_sep *rsep;
+	struct avdtp_service_capability *media_scms_t;
+	struct avdtp_content_protection_capability scms_t_cap = {0x02, 0x00};
 	unsigned int id;
 
 	switch (client->type) {
@@ -1021,6 +1039,15 @@ static void start_config(struct audio_device *dev, struct unix_client *client)
 			goto failed;
 		}
 
+		rsep = avdtp_get_remote_sep(a2dp->session, client->seid);
+		media_scms_t = avdtp_get_remote_sep_protection(rsep);
+
+		if (media_scms_t &&
+			(memcmp(media_scms_t->data, &scms_t_cap, sizeof(scms_t_cap)) == 0)) {
+			media_scms_t = avdtp_service_cap_new(AVDTP_CONTENT_PROTECTION,
+						&scms_t_cap, 2);
+			client->caps = g_slist_append(client->caps, media_scms_t);
+		}
 		id = a2dp_config(a2dp->session, a2dp->sep, a2dp_config_complete,
 					client->caps, client);
 		client->cancel = a2dp_cancel;

@@ -2,6 +2,8 @@
  * Copyright (C) 2006, 2008 Apple Inc. All rights reserved.
  * Copyright (C) 2009 Google Inc. All rights reserved.
  *
+ * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -22,6 +24,9 @@
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ */
+/*
+ * This file has been modified by Sony Ericsson on 2011-08-08.
  */
 
 #include "config.h"
@@ -97,8 +102,8 @@ void ThreadTimers::sharedTimerFiredInternal()
         return;
     m_firingTimers = true;
 
-    double fireTime = currentTime();
-    double timeToQuit = fireTime + maxDurationOfFiringTimers;
+    volatile double fireTime = currentTime();
+    volatile double timeToQuit = fireTime + maxDurationOfFiringTimers;
 
     while (!m_timerHeap.isEmpty() && m_timerHeap.first()->m_nextFireTime <= fireTime) {
         TimerBase* timer = m_timerHeap.first();

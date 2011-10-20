@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2005, 2007 Apple Inc. All rights reserved.
  * Copyright (C) 2006 Jon Shier (jshier@iastate.edu)
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -156,6 +157,10 @@ namespace WebCore {
 /* #endif */ \
     \
     macro(success) \
+    \
+    macro(webglcontextlost) \
+    macro(webglcontextrestored) \
+    macro(webglcontextcreationerror) \
     \
 // end of DOM_EVENT_NAMES_FOR_EACH
 

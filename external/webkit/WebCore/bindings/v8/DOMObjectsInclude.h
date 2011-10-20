@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -31,20 +32,24 @@
 #ifndef DOMObjectsInclude_h
 #define DOMObjectsInclude_h
 
+#include "ArrayBuffer.h"
+#include "ArrayBufferView.h"
 #include "Attr.h"
 #include "BarInfo.h"
 #include "BeforeLoadEvent.h"
 #include "Blob.h"
+#include "Float32Array.h"
+#include "Int16Array.h"
+#include "Int32Array.h"
+#include "Int8Array.h"
+#include "Uint16Array.h"
+#include "Uint32Array.h"
+#include "Uint8Array.h"
 #include "WebGLActiveInfo.h"
-#include "WebGLArray.h"
-#include "WebGLArrayBuffer.h"
 #include "WebGLBuffer.h"
-#include "WebGLByteArray.h"
-#include "WebGLFloatArray.h"
 #include "WebGLFramebuffer.h"
 #include "CanvasGradient.h"
-#include "WebGLIntArray.h"
-#include "CanvasObject.h"
+#include "WebGLObject.h"
 #include "CanvasPattern.h"
 #include "CanvasPixelArray.h"
 #include "WebGLProgram.h"
@@ -53,10 +58,6 @@
 #include "CanvasRenderingContext2D.h"
 #include "WebGLRenderingContext.h"
 #include "WebGLShader.h"
-#include "WebGLShortArray.h"
-#include "WebGLUnsignedByteArray.h"
-#include "WebGLUnsignedIntArray.h"
-#include "WebGLUnsignedShortArray.h"
 #include "CanvasStyle.h"
 #include "WebGLTexture.h"
 #include "CharacterData.h"
@@ -166,6 +167,11 @@
 #include "XMLHttpRequestProgressEvent.h"
 #include "XMLHttpRequestUpload.h"
 #include "XMLSerializer.h"
+#include "OESStandardDerivatives.h"
+#include "OESTextureFloat.h"
+#include "OESVertexArrayObject.h"
+#include "WebGLVertexArrayObjectOES.h"
+#include "WebKitLoseContext.h"
 
 #if ENABLE(OFFLINE_WEB_APPLICATIONS)
 #include "DOMApplicationCache.h"

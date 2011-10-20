@@ -4,6 +4,8 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2010, Code Aurora Forum
+ *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -50,6 +52,9 @@
  * STREAMING state. */
 #define SUSPEND_TIMEOUT 5
 #define RECONFIGURE_TIMEOUT 500
+
+/* Content protection types */
+#define CP_TYPE_SCMS_T 0x0002
 
 #ifndef MIN
 # define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -351,6 +356,8 @@ static gboolean sbc_getcap_ind(struct avdtp *session, struct avdtp_local_sep *se
 {
 	struct a2dp_sep *a2dp_sep = user_data;
 	struct avdtp_service_capability *media_transport, *media_codec;
+	struct avdtp_service_capability *media_scms_t;
+	struct avdtp_content_protection_capability scms_t_cap;
 	struct sbc_codec_cap sbc_cap;
 
 	if (a2dp_sep->type == AVDTP_SEP_TYPE_SINK)
@@ -401,6 +408,14 @@ static gboolean sbc_getcap_ind(struct avdtp *session, struct avdtp_local_sep *se
 						sizeof(sbc_cap));
 
 	*caps = g_slist_append(*caps, media_codec);
+
+	memset(&scms_t_cap, 0, sizeof(scms_t_cap));
+	scms_t_cap.cp_type_lsb = (CP_TYPE_SCMS_T & 0xFF);
+	scms_t_cap.cp_type_msb = (CP_TYPE_SCMS_T >> 8) & 0xFF;
+	media_scms_t = avdtp_service_cap_new(AVDTP_CONTENT_PROTECTION,
+						&scms_t_cap, 2);
+
+	*caps = g_slist_append(*caps, media_scms_t);
 
 	if (get_all) {
 		struct avdtp_service_capability *delay_reporting;

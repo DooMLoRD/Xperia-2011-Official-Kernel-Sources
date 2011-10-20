@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2009, Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -35,20 +36,27 @@
 // the generated bindings cause an expensive implicit conversion.
 #define NO_IMPLICIT_ATOMICSTRING
 
+#include "bindings/V8ArrayBuffer.cpp"
+#include "bindings/V8ArrayBufferView.cpp"
 #include "bindings/V8Attr.cpp"
 #include "bindings/V8BarInfo.cpp"
 #include "bindings/V8BeforeLoadEvent.cpp"
 #include "bindings/V8Blob.cpp"
+#include "bindings/V8Float32Array.cpp"
+#include "bindings/V8Int16Array.cpp"
+#include "bindings/V8Int32Array.cpp"
+#include "bindings/V8Int8Array.cpp"
+#include "bindings/V8OESStandardDerivatives.cpp"
+#include "bindings/V8OESTextureFloat.cpp"
+#include "bindings/V8OESVertexArrayObject.cpp"
+#include "bindings/V8Uint16Array.cpp"
+#include "bindings/V8Uint32Array.cpp"
+#include "bindings/V8Uint8Array.cpp"
 #include "bindings/V8WebGLActiveInfo.cpp"
-#include "bindings/V8WebGLArray.cpp"
-#include "bindings/V8WebGLArrayBuffer.cpp"
 #include "bindings/V8WebGLBuffer.cpp"
-#include "bindings/V8WebGLByteArray.cpp"
 #include "bindings/V8WebGLContextAttributes.cpp"
-#include "bindings/V8WebGLFloatArray.cpp"
 #include "bindings/V8WebGLFramebuffer.cpp"
 #include "bindings/V8CanvasGradient.cpp"
-#include "bindings/V8WebGLIntArray.cpp"
 #include "bindings/V8CanvasPattern.cpp"
 #include "bindings/V8CanvasPixelArray.cpp"
 #include "bindings/V8WebGLProgram.cpp"
@@ -57,12 +65,10 @@
 #include "bindings/V8CanvasRenderingContext2D.cpp"
 #include "bindings/V8WebGLRenderingContext.cpp"
 #include "bindings/V8WebGLShader.cpp"
-#include "bindings/V8WebGLShortArray.cpp"
 #include "bindings/V8WebGLTexture.cpp"
 #include "bindings/V8WebGLUniformLocation.cpp"
-#include "bindings/V8WebGLUnsignedByteArray.cpp"
-#include "bindings/V8WebGLUnsignedIntArray.cpp"
-#include "bindings/V8WebGLUnsignedShortArray.cpp"
+#include "bindings/V8WebGLVertexArrayObjectOES.cpp"
+#include "bindings/V8WebKitLoseContext.cpp"
 #include "bindings/V8CDATASection.cpp"
 #include "bindings/V8CharacterData.cpp"
 #include "bindings/V8ClientRect.cpp"

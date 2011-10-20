@@ -1,5 +1,6 @@
 /*
 * Copyright (C) 2009 Google Inc. All rights reserved.
+* Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 * 
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -106,6 +107,17 @@ namespace WebCore {
     {
         bool ok;
         return toInt32(value, ok);
+    }
+
+    // Convert a value to a 32-bit unsigned integer.  The conversion fails if the
+    // value cannot be converted to an unsigned integer or converts to nan or to an infinity.
+    uint32_t toUInt32(v8::Handle<v8::Value> value, bool& ok);
+
+    // Convert a value to a 32-bit unsigned integer assuming the conversion cannot fail.
+    inline uint32_t toUInt32(v8::Handle<v8::Value> value)
+    {
+        bool ok;
+        return toUInt32(value, ok);
     }
 
     inline float toFloat(v8::Local<v8::Value> value)

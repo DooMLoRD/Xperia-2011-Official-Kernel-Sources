@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -1035,6 +1036,7 @@ bool RenderLayerCompositor::requiresCompositingLayer(const RenderLayer* layer) c
     return (inCompositingMode() && layer->isRootLayer()) ||
 #if PLATFORM(ANDROID)
              requiresCompositingForMobileSites(layer) ||
+             requiresCompositingForCanvas(renderer) ||
 #else
              requiresCompositingForTransform(renderer) ||
              requiresCompositingForVideo(renderer) ||
@@ -1114,7 +1116,7 @@ bool RenderLayerCompositor::requiresCompositingForVideo(RenderObject* renderer) 
 
 bool RenderLayerCompositor::requiresCompositingForCanvas(RenderObject* renderer) const
 {
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
     if (renderer->isCanvas()) {
         HTMLCanvasElement* canvas = static_cast<HTMLCanvasElement*>(renderer->node());
         return canvas->is3D();

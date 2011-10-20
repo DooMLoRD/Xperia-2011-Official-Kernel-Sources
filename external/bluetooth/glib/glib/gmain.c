@@ -1,5 +1,6 @@
 /* GLIB - Library of useful routines for C programming
  * Copyright (C) 1995-1997  Peter Mattis, Spencer Kimball and Josh MacDonald
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * gmain.c: Main loop abstraction, timeouts, and idle functions
  * Copyright 1998 Owen Taylor
@@ -1473,6 +1474,28 @@ g_get_current_time (GTimeVal *result)
 
   result->tv_sec = time64 / 1000000;
   result->tv_usec = time64 % 1000000;
+#endif
+}
+
+/**
+ * g_get_monotonic_time:
+ * @result: #GTimeVal structure in which to store the time
+ *
+ * Queries the system monotonic time, if available.
+ **/
+static void
+g_get_monotonic_time (GTimeVal *result)
+{
+#if defined(HAVE_CLOCK_GETTIME) && defined(HAVE_MONOTONIC_CLOCK)
+  struct timespec ts;
+
+  g_return_if_fail (result != NULL);
+
+  clock_gettime (CLOCK_MONOTONIC, &ts);
+  result->tv_sec = ts.tv_sec;
+  result->tv_usec = ts.tv_nsec / 1000;
+#else
+  g_get_current_time (result);
 #endif
 }
 
@@ -2964,7 +2987,7 @@ g_source_get_current_time (GSource  *source,
 
   if (!context->time_is_current)
     {
-      g_get_current_time (&context->current_time);
+      g_get_monotonic_time (&context->current_time);
       context->time_is_current = TRUE;
     }
   

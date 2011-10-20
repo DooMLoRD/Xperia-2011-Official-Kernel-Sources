@@ -4,6 +4,7 @@
  * Copyright (C) 2008, 2009 Torch Mobile Inc. All rights reserved. (http://www.torchmobile.com/)
  * Copyright (C) 2008 Alp Toker <alp@atoker.com>
  * Copyright (C) Research In Motion Limited 2009. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -194,6 +195,9 @@ FrameLoader::FrameLoader(Frame* frame, FrameLoaderClient* client)
     , m_receivedData(false)
     , m_encodingWasChosenByUser(false)
     , m_containsPlugIns(false)
+#if ENABLE(WEBGL)
+    , m_contains3DCanvas(false)
+#endif
     , m_checkTimer(this, &FrameLoader::checkTimerFired)
     , m_shouldCallCheckCompleted(false)
     , m_shouldCallCheckLoadComplete(false)
@@ -753,6 +757,9 @@ void FrameLoader::clear(bool clearWindowProperties, bool clearScriptObjects, boo
     m_decoder = 0;
 
     m_containsPlugIns = false;
+#if ENABLE(WEBGL)
+    m_contains3DCanvas = false;
+#endif
 
     if (clearScriptObjects)
         m_frame->script()->clearScriptObjects();
@@ -1549,6 +1556,9 @@ bool FrameLoader::canCachePageContainingThisFrame()
         // they would need to be destroyed and then recreated, and there is no way that we can recreate
         // the right NPObjects. See <rdar://problem/5197041> for more information.
         && !m_containsPlugIns
+#if ENABLE(WEBGL)
+        && !m_contains3DCanvas
+#endif
         && !m_URL.protocolIs("https")
         && (!m_frame->domWindow() || !m_frame->domWindow()->hasEventListeners(eventNames().unloadEvent))
 #if ENABLE(DATABASE)

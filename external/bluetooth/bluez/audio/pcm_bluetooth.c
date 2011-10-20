@@ -4,6 +4,8 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2010, Code Aurora Forum
+ *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  *
  *  This library is free software; you can redistribute it and/or
@@ -141,6 +143,7 @@ struct bluetooth_data {
 	unsigned int link_mtu;				/* MTU for selected transport channel */
 	volatile struct pollfd stream;			/* Audio stream filedescriptor */
 	struct pollfd server;				/* Audio daemon filedescriptor */
+	size_t sizeof_scms_t;				/* Indicates protection hdr */
 	uint8_t buffer[BUFFER_SIZE];		/* Encoded transfer buffer */
 	unsigned int count;				/* Transfer buffer counter */
 	struct bluetooth_a2dp a2dp;			/* A2DP data */
@@ -153,6 +156,9 @@ struct bluetooth_data {
 	int stopped;
 	sig_atomic_t reset;				/* Request XRUN handling */
 };
+
+#define CP_TYPE_SCMS_T          0x0002
+#define SCMS_T_COPY_NOT_ALLOWED 0x00
 
 static int audioservice_send(int sk, const bt_audio_msg_header_t *msg);
 static int audioservice_expect(int sk, bt_audio_msg_header_t *outmsg,
@@ -789,6 +795,12 @@ static int bluetooth_a2dp_hw_params(snd_pcm_ioplug_t *io,
 
 	data->transport = BT_CAPABILITIES_TRANSPORT_A2DP;
 	data->link_mtu = rsp->link_mtu;
+	if (rsp->content_protection == CP_TYPE_SCMS_T) {
+		data->sizeof_scms_t = 1;
+	} else {
+		data->sizeof_scms_t = 0;
+	}
+	DBG("MTU: %d -- SCMS-T Enabled: %d", data->link_mtu, rsp->content_protection);
 
 	/* Setup SBC encoder now we agree on parameters */
 	bluetooth_a2dp_setup(a2dp);
@@ -1019,10 +1031,13 @@ static int avdtp_write(struct bluetooth_data *data)
 	struct bluetooth_a2dp *a2dp = &data->a2dp;
 
 	header = (void *) a2dp->buffer;
-	payload = (void *) (a2dp->buffer + sizeof(*header));
+	payload = (void *) (a2dp->buffer + sizeof(*header) + data->sizeof_scms_t);
 
-	memset(a2dp->buffer, 0, sizeof(*header) + sizeof(*payload));
+	memset(a2dp->buffer, 0, sizeof(*header) + sizeof(*payload) + data->sizeof_scms_t);
 
+	if (data->sizeof_scms_t) {
+		data->buffer[sizeof(*header)] = SCMS_T_COPY_NOT_ALLOWED;
+	}
 	payload->frame_count = a2dp->frame_count;
 	header->v = 2;
 	header->pt = 1;
@@ -1037,7 +1052,7 @@ static int avdtp_write(struct bluetooth_data *data)
 	}
 
 	/* Reset buffer of data to send */
-	a2dp->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload);
+	a2dp->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload) + data->sizeof_scms_t;
 	a2dp->frame_count = 0;
 	a2dp->samples = 0;
 	a2dp->seq_num++;

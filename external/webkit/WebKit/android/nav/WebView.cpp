@@ -1,5 +1,6 @@
 /*
  * Copyright 2007, The Android Open Source Project
+ * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -22,7 +23,11 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+* This file has been modified by SonyEricsson.
+* 2011-08-10:
+*     Unreferenced the navPictureUI in the destructor
+*/
 #define LOG_TAG "webviewglue"
 
 #include "config.h"
@@ -189,7 +194,7 @@ WebView(JNIEnv* env, jobject javaWebView, int viewImpl) :
         m_javaGlue.m_obj = 0;
     }
     delete m_frameCacheUI;
-    delete m_navPictureUI;
+    SkSafeUnref(m_navPictureUI);
     delete m_rootLayer;
 }
 

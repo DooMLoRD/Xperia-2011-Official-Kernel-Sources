@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2008, 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -700,6 +701,16 @@ v8::Handle<v8::Value> V8Proxy::throwError(ErrorType type, const char* message)
     }
 }
 
+v8::Handle<v8::Value> V8Proxy::throwTypeError()
+{
+    return throwError(TypeError, "Type error");
+}
+
+v8::Handle<v8::Value> V8Proxy::throwSyntaxError()
+{
+    return throwError(SyntaxError, "Syntax error");
+}
+
 v8::Local<v8::Context> V8Proxy::context(Frame* frame)
 {
     v8::Local<v8::Context> context = V8Proxy::mainWorldContext(frame);
@@ -809,6 +820,7 @@ void V8Proxy::createUtilityContext()
 
 bool V8Proxy::sourceLineNumber(int& result)
 {
+#ifdef USE_DEFAULT_JS_ENGINE
     v8::HandleScope scope;
     v8::Handle<v8::Context> v8UtilityContext = V8Proxy::utilityContext();
     if (v8UtilityContext.IsEmpty())
@@ -822,11 +834,21 @@ bool V8Proxy::sourceLineNumber(int& result)
     if (value.IsEmpty())
         return false;
     result = value->Int32Value();
+#else
+    v8::Local<v8::StackTrace> st = v8::StackTrace::CurrentStackTrace(1, v8::StackTrace::kLineNumber);
+    if (st.IsEmpty())
+        return false;
+    v8::Local<v8::StackFrame> sf = st->GetFrame(0);
+    if (sf.IsEmpty())
+        return false;
+    result = sf->GetLineNumber();
+#endif
     return true;
 }
 
 bool V8Proxy::sourceName(String& result)
 {
+#ifdef USE_DEFAULT_JS_ENGINE
     v8::HandleScope scope;
     v8::Handle<v8::Context> v8UtilityContext = utilityContext();
     if (v8UtilityContext.IsEmpty())
@@ -840,6 +862,18 @@ bool V8Proxy::sourceName(String& result)
     if (value.IsEmpty())
         return false;
     result = toWebCoreString(value);
+#else
+    v8::Local<v8::StackTrace> st = v8::StackTrace::CurrentStackTrace(1, v8::StackTrace::kScriptNameOrSourceURL);
+    if (st.IsEmpty())
+        return false;
+    v8::Local<v8::StackFrame> sf = st->GetFrame(0);
+    if (sf.IsEmpty())
+        return false;
+    v8::Local<v8::String> sn = sf->GetScriptNameOrSourceURL();
+    if (sn.IsEmpty())
+        return false;
+    result = toWebCoreString(sn);
+#endif
     return true;
 }
 

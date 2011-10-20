@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2004, 2005, 2006 Apple Inc.
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -93,6 +94,12 @@
 #endif
 #define ENABLE_3D_RENDERING 0
 #define ENABLE_VIDEO 1
+
+#ifdef ANDROID_LARGE_MEMORY_DEVICE
+#define ENABLE_WEBGL 1
+#else
+#undef ENABLE_WEBGL
+#endif
 
 #if ENABLE_SVG
 #if !defined(ENABLE_SVG_ANIMATION)

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -182,12 +183,15 @@ namespace WebCore {
         // Check whether a V8 value is a wrapper of type |classType|.
         static bool isWrapperOfType(v8::Handle<v8::Value>, V8ClassIndex::V8WrapperType);
 
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
         static void setIndexedPropertiesToExternalArray(v8::Handle<v8::Object>,
                                                         int,
                                                         void*,
                                                         int);
 #endif
+
+        static void setHiddenReference(v8::Handle<v8::Object> parent, v8::Handle<v8::Value> child);
+
         // Set hidden references in a DOMWindow object of a frame.
         static void setHiddenWindowReference(Frame*, const int internalIndex, v8::Handle<v8::Object>);
 

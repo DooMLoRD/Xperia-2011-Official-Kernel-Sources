@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2004, 2006, 2007 Apple Inc. All rights reserved.
  * Copyright (C) 2007 Alp Toker <alp@atoker.com>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,7 +32,7 @@
 #include "CanvasGradient.h"
 #include "CanvasPattern.h"
 #include "CanvasRenderingContext2D.h"
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
 #include "WebGLContextAttributes.h"
 #include "WebGLRenderingContext.h"
 #endif
@@ -79,6 +80,7 @@ HTMLCanvasElement::~HTMLCanvasElement()
 {
     if (m_observer)
         m_observer->canvasDestroyed(this);
+    document()->unregisterForDocumentActivationCallbacks(this);
 }
 
 #if ENABLE(DASHBOARD_SUPPORT)
@@ -143,6 +145,7 @@ String HTMLCanvasElement::toDataURL(const String& mimeType, ExceptionCode& ec)
     if (m_size.isEmpty() || !buffer())
         return String("data:,");
 
+    makeRenderingResultsAvailable();
     if (mimeType.isNull() || !MIMETypeRegistry::isSupportedImageMIMETypeForEncoding(mimeType))
         return buffer()->toDataURL("image/png");
 
@@ -166,12 +169,13 @@ CanvasRenderingContext* HTMLCanvasElement::getContext(const String& type, Canvas
             m_context = new CanvasRenderingContext2D(this);
         return m_context.get();
     }
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
     Settings* settings = document()->settings();
     if (settings && settings->webGLEnabled()) {
         // Accept the legacy "webkit-3d" name as well as the provisional "experimental-webgl" name.
         // Once ratified, we will also accept "webgl" as the context name.
-        if ((type == "webkit-3d") ||
+        if (/*(type == "webgl") ||*/
+            (type == "webkit-3d") ||
             (type == "experimental-webgl")) {
             if (m_context && !m_context->is3d())
                 return 0;
@@ -180,6 +184,8 @@ CanvasRenderingContext* HTMLCanvasElement::getContext(const String& type, Canvas
                 if (m_context) {
                     // Need to make sure a RenderLayer and compositing layer get created for the Canvas
                     setNeedsStyleRecalc(SyntheticStyleChange);
+                    document()->registerForDocumentActivationCallbacks(this);
+                    document()->frame()->loader()->setContains3DCanvas(true);
                 }
             }
             return m_context.get();
@@ -227,7 +233,7 @@ void HTMLCanvasElement::reset()
     IntSize oldSize = m_size;
     m_size = IntSize(w, h);
 
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
     if (m_context && m_context->is3d())
         static_cast<WebGLRenderingContext*>(m_context.get())->reshape(width(), height());
 #endif
@@ -259,12 +265,13 @@ void HTMLCanvasElement::paint(GraphicsContext* context, const IntRect& r)
     if (context->paintingDisabled())
         return;
     
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
     WebGLRenderingContext* context3D = 0;
     if (m_context && m_context->is3d()) {
         context3D = static_cast<WebGLRenderingContext*>(m_context.get());
-        context3D->beginPaint();
+        //context3D->beginPaint();
     }
+    else
 #endif
 
     if (m_imageBuffer) {
@@ -272,10 +279,39 @@ void HTMLCanvasElement::paint(GraphicsContext* context, const IntRect& r)
         if (image)
             context->drawImage(image, DeviceColorSpace, r);
     }
+}
 
-#if ENABLE(3D_CANVAS)
-    if (context3D)
-        context3D->endPaint();
+#if ENABLE(WEBGL)
+void HTMLCanvasElement::documentDidBecomeActive()
+{
+    WebGLRenderingContext* context3D = 0;
+    if (m_context && m_context->is3d()) {
+        context3D = static_cast<WebGLRenderingContext*>(m_context.get());
+        context3D->recreateSurface();
+    }
+}
+
+void HTMLCanvasElement::documentWillBecomeInactive()
+{
+    WebGLRenderingContext* context3D = 0;
+    if (m_context && m_context->is3d()) {
+        context3D = static_cast<WebGLRenderingContext*>(m_context.get());
+        context3D->releaseSurface();
+    }
+}
+#endif
+
+PassRefPtr<ImageData> HTMLCanvasElement::getImageData()
+{
+    if (!m_context || !m_context->is3d())
+       return 0;
+
+#if ENABLE(WEBGL)
+    WebGLRenderingContext* ctx = static_cast<WebGLRenderingContext*>(m_context.get());
+
+    return ctx->paintRenderingResultsToImageData();
+#else
+    return 0;
 #endif
 }
 
@@ -329,6 +365,11 @@ IntPoint HTMLCanvasElement::convertLogicalToDevice(const FloatPoint& logicalPos)
     return IntPoint(static_cast<unsigned>(xf), static_cast<unsigned>(yf));
 }
 
+const SecurityOrigin& HTMLCanvasElement::securityOrigin() const
+{
+    return *document()->securityOrigin();
+}
+
 void HTMLCanvasElement::createImageBuffer() const
 {
     ASSERT(!m_imageBuffer);
@@ -373,11 +414,17 @@ AffineTransform HTMLCanvasElement::baseTransform() const
     return transform;
 }
 
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
 bool HTMLCanvasElement::is3D() const
 {
     return m_context && m_context->is3d();
 }
 #endif
+
+void HTMLCanvasElement::makeRenderingResultsAvailable()
+{
+    if (m_context)
+        m_context->paintRenderingResultsToCanvas();
+}
 
 }

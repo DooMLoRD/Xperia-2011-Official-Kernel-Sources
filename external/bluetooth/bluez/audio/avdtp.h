@@ -4,6 +4,8 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2010, Code Aurora Forum
+ *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -96,6 +98,11 @@ struct avdtp_service_capability {
 	uint8_t category;
 	uint8_t length;
 	uint8_t data[0];
+} __attribute__ ((packed));
+
+struct avdtp_content_protection_capability {
+	uint8_t cp_type_lsb;
+	uint8_t cp_type_msb;
 } __attribute__ ((packed));
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
@@ -230,6 +237,10 @@ uint8_t avdtp_get_seid(struct avdtp_remote_sep *sep);
 uint8_t avdtp_get_type(struct avdtp_remote_sep *sep);
 
 struct avdtp_service_capability *avdtp_get_codec(struct avdtp_remote_sep *sep);
+
+struct avdtp_service_capability *avdtp_get_protection(struct avdtp_stream *stream);
+
+struct avdtp_service_capability *avdtp_get_remote_sep_protection(struct avdtp_remote_sep *sep);
 
 gboolean avdtp_get_delay_reporting(struct avdtp_remote_sep *sep);
 

@@ -45,6 +45,11 @@ LOCAL_CFLAGS += \
 	-DBOARD_HAVE_BLUETOOTH_BCM
 endif
 
+ifeq ($(SEMC_BLUETOOTH_TI),true)
+LOCAL_CFLAGS += \
+	-DSEMC_BLUETOOTH_TI
+endif
+
 LOCAL_C_INCLUDES:= \
 	$(LOCAL_PATH)/../lib \
 	$(LOCAL_PATH)/../gdbus \

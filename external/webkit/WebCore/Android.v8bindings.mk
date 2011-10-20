@@ -1,5 +1,6 @@
 ##
 ## Copyright 2009, The Android Open Source Project
+## Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 ##
 ## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted provided that the following conditions
@@ -25,7 +26,7 @@
 
 LOCAL_CFLAGS += -DWTF_USE_V8=1
 
-BINDING_C_INCLUDES := \
+BINDING_C_INCLUDES += \
 	external/v8/include \
 	\
 	$(LOCAL_PATH)/bindings/v8 \
@@ -165,6 +166,18 @@ LOCAL_SRC_FILES += \
 	bindings/v8/custom/V8SQLResultSetRowListCustom.cpp \
 	bindings/v8/custom/V8SQLTransactionCustom.cpp \
 	bindings/v8/custom/V8WebSocketCustom.cpp
+
+LOCAL_SRC_FILES += \
+        bindings/v8/custom/V8ArrayBufferCustom.cpp \
+        bindings/v8/custom/V8ArrayBufferViewCustom.cpp \
+        bindings/v8/custom/V8Float32ArrayCustom.cpp \
+        bindings/v8/custom/V8Int16ArrayCustom.cpp \
+        bindings/v8/custom/V8Int32ArrayCustom.cpp \
+        bindings/v8/custom/V8Int8ArrayCustom.cpp \
+        bindings/v8/custom/V8Uint16ArrayCustom.cpp \
+        bindings/v8/custom/V8Uint32ArrayCustom.cpp \
+        bindings/v8/custom/V8Uint8ArrayCustom.cpp \
+        bindings/v8/custom/V8WebGLRenderingContextCustom.cpp
 
 ifeq ($(ENABLE_SVG), true)
 LOCAL_SRC_FILES += \

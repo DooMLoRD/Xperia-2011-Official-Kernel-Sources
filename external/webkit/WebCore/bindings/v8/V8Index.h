@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -31,13 +32,11 @@
 #ifndef V8Index_h
 #define V8Index_h
 
+#include "WrapperTypeInfo.h"
+
 #include <v8.h>
 
 namespace WebCore {
-
-static const int v8DOMWrapperTypeIndex = 0;
-static const int v8DOMWrapperObjectIndex = 1;
-static const int v8DefaultWrapperInternalFieldCount = 2;
 
 #if ENABLE(DATAGRID)
 #define DATAGRID_HTMLELEMENT_TYPES(V)                                   \
@@ -468,29 +467,34 @@ static const int v8DefaultWrapperInternalFieldCount = 2;
 #define DOM_OBJECT_WORKERS_TYPES(V)
 #endif
 
-#if ENABLE(3D_CANVAS)
-#define DOM_OBJECT_3D_CANVAS_TYPES(V)                                   \
+#if ENABLE(WEBGL)
+#define DOM_OBJECT_WEBGL_TYPES(V)                                       \
+    V(ARRAYBUFFER, ArrayBuffer)                                         \
+    V(ARRAYBUFFERVIEW, ArrayBufferView)                                 \
+    V(FLOAT32ARRAY, Float32Array)                                       \
+    V(INT16ARRAY, Int16Array)                                           \
+    V(INT32ARRAY, Int32Array)                                           \
+    V(INT8ARRAY, Int8Array)                                             \
+    V(OESSTANDARDDERIVATIVES, OESStandardDerivatives)                   \
+    V(OESTEXTUREFLOAT, OESTextureFloat)                                 \
+    V(OESVERTEXARRAYOBJECT, OESVertexArrayObject)                       \
+    V(UINT16ARRAY, Uint16Array)                                         \
+    V(UINT32ARRAY, Uint32Array)                                         \
+    V(UINT8ARRAY, Uint8Array)                                           \
     V(WEBGLACTIVEINFO, WebGLActiveInfo)                                 \
-    V(WEBGLARRAY, WebGLArray)                                           \
-    V(WEBGLARRAYBUFFER, WebGLArrayBuffer)                               \
     V(WEBGLBUFFER, WebGLBuffer)                                         \
-    V(WEBGLBYTEARRAY, WebGLByteArray)                                   \
     V(WEBGLCONTEXTATTRIBUTES, WebGLContextAttributes)                   \
-    V(WEBGLFLOATARRAY, WebGLFloatArray)                                 \
     V(WEBGLFRAMEBUFFER, WebGLFramebuffer)                               \
-    V(WEBGLINTARRAY, WebGLIntArray)                                     \
     V(WEBGLPROGRAM, WebGLProgram)                                       \
     V(WEBGLRENDERBUFFER, WebGLRenderbuffer)                             \
     V(WEBGLRENDERINGCONTEXT, WebGLRenderingContext)                     \
     V(WEBGLSHADER, WebGLShader)                                         \
-    V(WEBGLSHORTARRAY, WebGLShortArray)                                 \
     V(WEBGLTEXTURE, WebGLTexture)                                       \
     V(WEBGLUNIFORMLOCATION, WebGLUniformLocation)                       \
-    V(WEBGLUNSIGNEDBYTEARRAY, WebGLUnsignedByteArray)                   \
-    V(WEBGLUNSIGNEDINTARRAY, WebGLUnsignedIntArray)                     \
-    V(WEBGLUNSIGNEDSHORTARRAY, WebGLUnsignedShortArray)
+    V(WEBGLVERTEXARRAYOBJECTOES, WebGLVertexArrayObjectOES)             \
+    V(WEBKITLOSECONTEXT, WebKitLoseContext)
 #else
-#define DOM_OBJECT_3D_CANVAS_TYPES(V)
+#define DOM_OBJECT_WEBGL_TYPES(V)
 #endif
 
 #if ENABLE(XPATH)
@@ -551,7 +555,7 @@ static const int v8DefaultWrapperInternalFieldCount = 2;
     DOM_OBJECT_STORAGE_TYPES(V)                                         \
     DOM_OBJECT_INDEXED_DATABASE_TYPES(V)                                \
     DOM_OBJECT_WORKERS_TYPES(V)                                         \
-    DOM_OBJECT_3D_CANVAS_TYPES(V)                                       \
+    DOM_OBJECT_WEBGL_TYPES(V)                                           \
     DOM_OBJECT_XPATH_TYPES(V)                                           \
     DOM_OBJECT_XSLT_TYPES(V)                                            \
     DOM_OBJECT_INSPECTOR_TYPES(V)                                       \

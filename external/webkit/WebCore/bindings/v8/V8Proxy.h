@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -297,6 +298,10 @@ namespace WebCore {
 
         // Schedule an error object to be thrown.
         static v8::Handle<v8::Value> throwError(ErrorType, const char* message);
+
+        // Helpers for throwing syntax and type errors with predefined messages.
+        static v8::Handle<v8::Value> throwTypeError();
+        static v8::Handle<v8::Value> throwSyntaxError();
 
         // Create an instance of a function descriptor and set to the global object
         // as a named property. Used by v8_test_shell.

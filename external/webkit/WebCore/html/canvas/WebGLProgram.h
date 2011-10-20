@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,23 +27,62 @@
 #ifndef WebGLProgram_h
 #define WebGLProgram_h
 
-#include "CanvasObject.h"
+#include "WebGLObject.h"
+
+#include "WebGLShader.h"
 
 #include <wtf/PassRefPtr.h>
 #include <wtf/RefCounted.h>
+#include <wtf/Vector.h>
 
 namespace WebCore {
     
-    class WebGLProgram : public CanvasObject {
+    class WebGLProgram : public WebGLObject {
     public:
         virtual ~WebGLProgram() { deleteObject(); }
         
         static PassRefPtr<WebGLProgram> create(WebGLRenderingContext*);
         
+    // cacheActiveAttribLocation() is only called once after linkProgram()
+    // succeeds.
+    bool cacheActiveAttribLocations();
+    unsigned numActiveAttribLocations() const;
+    GC3Dint getActiveAttribLocation(GC3Duint index) const;
+
+    bool isUsingVertexAttrib0() const;
+
+    bool getLinkStatus() const { return m_linkStatus; }
+    void setLinkStatus(bool status) { m_linkStatus = status; }
+
+    unsigned getLinkCount() const { return m_linkCount; }
+
+    // This is to be called everytime after the program is successfully linked.
+    // We don't deal with integer overflow here, assuming in reality a program
+    // will never be linked so many times.
+    void increaseLinkCount() { ++m_linkCount; }
+
+    WebGLShader* getAttachedShader(GC3Denum);
+    bool attachShader(WebGLShader*);
+    bool detachShader(WebGLShader*);
+
     protected:
         WebGLProgram(WebGLRenderingContext*);
         
-        virtual void _deleteObject(Platform3DObject);
+        virtual void deleteObjectImpl(Platform3DObject);
+
+private:
+    virtual bool isProgram() const { return true; }
+
+    Vector<GC3Dint> m_activeAttribLocations;
+
+    GC3Dint m_linkStatus;
+
+    // This is used to track whether a WebGLUniformLocation belongs to this
+    // program or not.
+    unsigned m_linkCount;
+
+    RefPtr<WebGLShader> m_vertexShader;
+    RefPtr<WebGLShader> m_fragmentShader;
     };
     
 } // namespace WebCore

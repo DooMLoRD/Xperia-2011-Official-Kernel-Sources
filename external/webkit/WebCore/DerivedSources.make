@@ -1,6 +1,7 @@
 # Copyright (C) 2006, 2007, 2008 Apple Inc. All rights reserved.
 # Copyright (C) 2006 Samuel Weinig <sam.weinig@gmail.com> 
 # Copyright (C) 2009 Cameron McCormack <cam@mcc.id.au>
+# Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -71,16 +72,20 @@ DOM_CLASSES = \
     CSSValueList \
     CSSVariablesRule \
     CSSVariablesDeclaration \
+    ArrayBuffer \
+    ArrayBufferView \
+    Float32Array \
+    Int16Array \
+    Int32Array \
+    Int8Array \
+    Uint16Array \
+    Uint32Array \
+    Uint8Array \
     WebGLActiveInfo \
-    WebGLArray \
-    WebGLArrayBuffer \
     WebGLBuffer \
-    WebGLByteArray \
     WebGLContextAttributes \
-    WebGLFloatArray \
     WebGLFramebuffer \
     CanvasGradient \
-    WebGLIntArray \
     CanvasPattern \
     WebGLProgram \
     WebGLRenderbuffer \
@@ -88,12 +93,8 @@ DOM_CLASSES = \
     CanvasRenderingContext2D \
     WebGLRenderingContext \
     WebGLShader \
-    WebGLShortArray \
     WebGLTexture \
     WebGLUniformLocation \
-    WebGLUnsignedByteArray \
-    WebGLUnsignedIntArray \
-    WebGLUnsignedShortArray \
     CharacterData \
     ClientRect \
     ClientRectList \

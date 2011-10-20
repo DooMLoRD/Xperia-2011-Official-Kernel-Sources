@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2007-2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -102,10 +103,10 @@ v8::Handle<v8::Value> V8Document::getCSSCanvasContextCallback(const v8::Argument
         return v8::Undefined();
     if (result->is2d())
         return toV8(static_cast<CanvasRenderingContext2D*>(result));
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
     else if (result->is3d())
         return toV8(static_cast<WebGLRenderingContext*>(result));
-#endif // ENABLE(3D_CANVAS)
+#endif // ENABLE(WEBGL)
     ASSERT_NOT_REACHED();
     return v8::Undefined();
 }

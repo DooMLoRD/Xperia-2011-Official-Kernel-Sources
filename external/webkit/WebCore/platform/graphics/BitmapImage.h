@@ -2,6 +2,7 @@
  * Copyright (C) 2006 Samuel Weinig (sam.weinig@gmail.com)
  * Copyright (C) 2004, 2005, 2006 Apple Computer, Inc.  All rights reserved.
  * Copyright (C) 2008-2009 Torch Mobile, Inc.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -158,6 +159,8 @@ public:
 
     virtual NativeImagePtr nativeImageForCurrentFrame() { return frameAtIndex(currentFrame()); }
 
+    bool frameHasAlphaAtIndex(size_t);
+
 protected:
     enum RepetitionCountStatus {
       Unknown,    // We haven't checked the source's repetition count.
@@ -187,7 +190,6 @@ protected:
     NativeImagePtr frameAtIndex(size_t);
     bool frameIsCompleteAtIndex(size_t);
     float frameDurationAtIndex(size_t);
-    bool frameHasAlphaAtIndex(size_t); 
 
     // Decodes and caches a frame. Never accessed except internally.
     void cacheFrame(size_t index);

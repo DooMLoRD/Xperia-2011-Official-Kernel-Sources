@@ -1,5 +1,6 @@
 /*
  * Copyright 2007, The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,12 +31,16 @@
 #include "NotImplemented.h"
 
 #include "android_graphics.h"
+#include "Base64.h"
 #include "GraphicsContext.h"
 #include "PlatformGraphicsContext.h"
+#include "PNGImageEncoder.h"
 #include "SkBitmapRef.h"
 #include "SkCanvas.h"
 #include "SkColorPriv.h"
 #include "SkDevice.h"
+#include "SkImageEncoder.h"
+#include "SkStream.h"
 #include "SkUnPreMultiply.h"
 
 using namespace std;
@@ -207,11 +212,23 @@ void ImageBuffer::putUnmultipliedImageData(ImageData* source, const IntRect& sou
 }
 
     
-String ImageBuffer::toDataURL(const String&) const
+String ImageBuffer::toDataURL(const String& mimeType) const
 {
-    // leaving this unimplemented, until I understand what its for (and what it
-    // really is).
-    return "data:,";    // I think this means we couldn't make the data url
+    // Encode the image into a vector.
+    SkDynamicMemoryWStream pngStream;
+    const SkBitmap& dst = android_gc2canvas(context())->getDevice()->accessBitmap(true);
+    SkImageEncoder::EncodeStream(&pngStream, dst, SkImageEncoder::kPNG_Type, 100);
+
+    // Convert it into base64.
+    Vector<char> pngEncodedData;
+    pngEncodedData.append(pngStream.getStream(), pngStream.getOffset());
+    Vector<char> base64EncodedData;
+    base64Encode(pngEncodedData, base64EncodedData);
+    // Append with a \0 so that it's a valid string.
+    base64EncodedData.append('\0');
+
+    // And the resulting string.
+    return String::format("data:image/png;base64,%s", base64EncodedData.data());
 }
 
 }

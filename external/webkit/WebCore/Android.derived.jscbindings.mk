@@ -251,16 +251,17 @@ GEN := \
     $(intermediates)/html/canvas/JSCanvasNumberArray.h \
     $(intermediates)/html/canvas/JSCanvasPattern.h \
     $(intermediates)/html/canvas/JSCanvasRenderingContext.h \
-    $(intermediates)/html/canvas/JSCanvasRenderingContext2D.h \
-    $(intermediates)/html/canvas/JSWebGLArrayBuffer.h \
-    $(intermediates)/html/canvas/JSWebGLByteArray.h \
-    $(intermediates)/html/canvas/JSWebGLFloatArray.h \
-    $(intermediates)/html/canvas/JSWebGLIntArray.h \
-    $(intermediates)/html/canvas/JSWebGLRenderingContext.h \
-    $(intermediates)/html/canvas/JSWebGLShortArray.h \
-    $(intermediates)/html/canvas/JSWebGLUnsignedByteArray.h \
-    $(intermediates)/html/canvas/JSWebGLUnsignedIntArray.h \
-    $(intermediates)/html/canvas/JSWebGLUnsignedShortArray.h
+    $(intermediates)/html/canvas/JSCanvasRenderingContext2D.h
+
+#    $(intermediates)/html/canvas/JSWebGLArrayBuffer.h \
+#    $(intermediates)/html/canvas/JSWebGLByteArray.h \
+#    $(intermediates)/html/canvas/JSWebGLFloatArray.h \
+#    $(intermediates)/html/canvas/JSWebGLIntArray.h \
+#    $(intermediates)/html/canvas/JSWebGLRenderingContext.h \
+#    $(intermediates)/html/canvas/JSWebGLShortArray.h \
+#    $(intermediates)/html/canvas/JSWebGLUnsignedByteArray.h \
+#    $(intermediates)/html/canvas/JSWebGLUnsignedIntArray.h \
+#    $(intermediates)/html/canvas/JSWebGLUnsignedShortArray.h
 
 $(GEN): PRIVATE_PATH := $(LOCAL_PATH)
 $(GEN): PRIVATE_CUSTOM_TOOL = perl -I$(PRIVATE_PATH)/bindings/scripts $(PRIVATE_PATH)/bindings/scripts/generate-bindings.pl --defines "$(FEATURE_DEFINES) LANGUAGE_JAVASCRIPT" --generator JS --include dom --include html --outputdir $(dir $@) $<

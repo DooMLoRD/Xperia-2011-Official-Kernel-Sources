@@ -1585,6 +1585,7 @@ event_end:
 
 	}
 	break;
+	case IPC_EVENT_NOT_ASSOCIATED:
 	case IPC_EVENT_DISASSOCIATED:
 		wrqu.ap_addr.sa_family = ARPHRD_ETHER;
 		os_memorySet (pCmdInterpret->hOs,wrqu.ap_addr.sa_data, 0, ETH_ALEN);

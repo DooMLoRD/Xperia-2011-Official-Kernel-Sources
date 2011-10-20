@@ -1038,7 +1038,7 @@ void CacheBuilder::BuildFrame(Frame* root, Frame* frame,
             hasCursorRing = style->tapHighlightColor().alpha() > 0;
 #endif
 #if USE(ACCELERATED_COMPOSITING)
-            if (nodeRenderer->hasLayer()) {
+            if (lastChild && nodeRenderer->hasLayer() && toRenderBoxModelObject(nodeRenderer)->layer()->backing()) {
                 TrackLayer(layerTracker, nodeRenderer, lastChild,
                     globalOffsetX - bodyPos.x(), globalOffsetY - bodyPos.y());
                 size_t size = tracker.size();

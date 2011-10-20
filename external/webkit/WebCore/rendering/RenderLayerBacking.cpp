@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,7 +29,7 @@
 #if USE(ACCELERATED_COMPOSITING)
 
 #include "AnimationController.h"
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
 #include "WebGLRenderingContext.h"
 #endif
 #include "CSSPropertyNames.h"
@@ -64,7 +65,7 @@ static bool hasBoxDecorationsOrBackgroundImage(const RenderStyle*);
 
 static inline bool is3DCanvas(RenderObject* renderer)
 {
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
     if (renderer->isCanvas())
         return static_cast<HTMLCanvasElement*>(renderer->node())->is3D();
 #else
@@ -216,7 +217,7 @@ bool RenderLayerBacking::updateGraphicsLayerConfiguration()
         m_graphicsLayer->setContentsToMedia(pluginWidget->platformLayer());
     }
 
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
     if (is3DCanvas(renderer())) {
         HTMLCanvasElement* canvas = static_cast<HTMLCanvasElement*>(renderer()->node());
         WebGLRenderingContext* context = static_cast<WebGLRenderingContext*>(canvas->renderingContext());
@@ -718,7 +719,7 @@ void RenderLayerBacking::rendererContentChanged()
         return;
     }
 
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
     if (is3DCanvas(renderer())) {
         m_graphicsLayer->setGraphicsContext3DNeedsDisplay();
         return;

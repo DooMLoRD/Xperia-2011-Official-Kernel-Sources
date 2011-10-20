@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2008 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,7 +35,7 @@
 #include "JSCanvasPattern.cpp"
 #include "JSCanvasRenderingContext.cpp"
 #include "JSCanvasRenderingContext2D.cpp"
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
 #include "JSWebGLRenderingContext.cpp"
 #endif
 #include "JSCDATASection.cpp"

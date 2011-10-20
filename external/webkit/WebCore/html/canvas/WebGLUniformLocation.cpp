@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,23 +27,42 @@
 
 #include "config.h"
 
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
 
 #include "WebGLUniformLocation.h"
 
 namespace WebCore {
     
-PassRefPtr<WebGLUniformLocation> WebGLUniformLocation::create(WebGLProgram* program, long location)
+PassRefPtr<WebGLUniformLocation> WebGLUniformLocation::create(WebGLProgram* program, GC3Dint location)
 {
     return adoptRef(new WebGLUniformLocation(program, location));
 }
 
-WebGLUniformLocation::WebGLUniformLocation(WebGLProgram* program, long location)
+WebGLUniformLocation::WebGLUniformLocation(WebGLProgram* program, GC3Dint location)
     : m_program(program)
     , m_location(location)
 {
+    ASSERT(m_program);
+    m_linkCount = m_program->getLinkCount();
+}
+
+WebGLProgram* WebGLUniformLocation::program() const
+{
+    // If the program has been linked again, then this UniformLocation is no
+    // longer valid.
+    if (m_program->getLinkCount() != m_linkCount)
+        return 0;
+    return m_program.get();
+}
+
+GC3Dint WebGLUniformLocation::location() const
+{
+    // If the program has been linked again, then this UniformLocation is no
+    // longer valid.
+    ASSERT(m_program->getLinkCount() == m_linkCount);
+    return m_location;
 }
 
 }
 
-#endif // ENABLE(3D_CANVAS)
+#endif // ENABLE(WEBGL)

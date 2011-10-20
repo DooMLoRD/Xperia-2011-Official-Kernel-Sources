@@ -160,6 +160,28 @@ static inline int write_key_value(int fd, const char *key, const char *value)
 	return err;
 }
 
+static char *strnpbrk(const char *s, ssize_t len, const char *accept)
+{
+	const char *p = s;
+	const char *end;
+
+	end = s + len - 1;
+
+	while (p <= end && *p) {
+		const char *a = accept;
+
+		while (*a) {
+			if (*p == *a)
+				return (char *) p;
+			a++;
+		}
+
+		p++;
+	}
+
+	return NULL;
+}
+
 static int write_key(const char *pathname, const char *key, const char *value, int icase)
 {
 	struct stat st;
@@ -211,7 +233,7 @@ static int write_key(const char *pathname, const char *key, const char *value, i
 
 	base = off - map;
 
-	end = strpbrk(off, "\r\n");
+	end = strnpbrk(off, size, "\r\n");
 	if (!end) {
 		err = EILSEQ;
 		goto unmap;
@@ -319,7 +341,7 @@ static char *read_key(const char *pathname, const char *key, int icase)
 		goto unmap;
 	}
 
-	end = strpbrk(off, "\r\n");
+	end = strnpbrk(off, size - (map - off), "\r\n");
 	if (!end) {
 		err = EILSEQ;
 		goto unmap;
@@ -409,8 +431,8 @@ int textfile_foreach(const char *pathname,
 
 	off = map;
 
-	while (1) {
-		end = strpbrk(off, " ");
+	while (size - (off - map) > 0) {
+		end = strnpbrk(off, size - (off - map), " ");
 		if (!end) {
 			err = EILSEQ;
 			break;
@@ -429,7 +451,13 @@ int textfile_foreach(const char *pathname,
 
 		off = end + 1;
 
-		end = strpbrk(off, "\r\n");
+		if (size - (off - map) < 0) {
+			err = EILSEQ;
+			free(key);
+			break;
+		}
+
+		end = strnpbrk(off, size - (off - map), "\r\n");
 		if (!end) {
 			err = EILSEQ;
 			free(key);

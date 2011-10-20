@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,6 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ * Modifications are licensed under the License.
  */
 
 #ifndef LayerAndroid_h
@@ -24,6 +28,9 @@
 #include "SkLayer.h"
 #include "StringHash.h"
 #include <wtf/HashMap.h>
+#if ENABLE(WEBGL)
+#include "GraphicsContext3D.h"
+#endif
 
 class SkCanvas;
 class SkMatrix;
@@ -70,6 +77,9 @@ public:
     LayerAndroid(bool isRootLayer);
     LayerAndroid(const LayerAndroid& layer);
     LayerAndroid(SkPicture* );
+#if ENABLE(WEBGL)
+    LayerAndroid(GraphicsContext3D*);
+#endif
     virtual ~LayerAndroid();
 
     static int instancesCount();
@@ -203,6 +213,10 @@ private:
     SkColor m_backgroundColor;
 
     SkPicture* m_recordingPicture;
+
+#if ENABLE(WEBGL)
+    RefPtr<GraphicsContext3D> m_context;
+#endif
 
     typedef HashMap<String, RefPtr<AndroidAnimation> > KeyframesMap;
     KeyframesMap m_animations;

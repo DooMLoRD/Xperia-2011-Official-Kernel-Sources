@@ -6,6 +6,7 @@
 # Copyright (C) 2006 Apple Computer, Inc.
 # Copyright (C) 2007, 2008, 2009 Google Inc.
 # Copyright (C) 2009 Cameron McCormack <cam@mcc.id.au>
+# Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 #
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Library General Public
@@ -1097,6 +1098,23 @@ END
             push(@implContentDecls, $functionCall);
             push(@implContentDecls, "    }\n");
         }
+
+	# If the "StrictTypeChecking" extended attribute is present, and the argument's type is an
+	# interface type, then if the incoming value does not implement that interface, a TypeError
+	# is thrown rather than silently passing NULL to the C++ code.
+	# Per the Web IDL and ECMAScript specifications, incoming values can always be converted
+	# to both strings and numbers, so do not throw TypeError if the argument is of these
+	# types.
+	if ($function->signature->extendedAttributes->{"StrictTypeChecking"}) {
+	  my $argValue = "args[$paramIndex]";
+	  my $argType = GetTypeFromSignature($parameter);
+	  if (IsWrapperType($argType)) {
+	    push(@implContentDecls, "    if (args.Length() > $paramIndex && !isUndefinedOrNull($argValue) && !V8${argType}::HasInstance($argValue)) {\n");
+	    push(@implContentDecls, "        V8Proxy::throwTypeError();\n");
+	    push(@implContentDecls, "        return notHandledByInterceptor();\n");
+	    push(@implContentDecls, "    }\n");
+	  }
+	}
 
         if (BasicTypeCanFailConversion($parameter)) {
             push(@implContentDecls, "    bool ${parameterName}Ok;\n");
@@ -2373,22 +2391,24 @@ sub GetNativeType
 
 my %typeCanFailConversion = (
     "Attr" => 1,
+    "ArrayBufferView" => 0,
     "WebGLArray" => 0,
     "WebGLBuffer" => 0,
-    "WebGLByteArray" => 0,
+    "Int8Array" => 0,
     "WebGLUnsignedByteArray" => 0,
     "WebGLContextAttributes" => 0,
-    "WebGLFloatArray" => 0,
+    "Float32Array" => 0,
     "WebGLFramebuffer" => 0,
     "CanvasGradient" => 0,
-    "WebGLIntArray" => 0,
+    "Int32Array" => 0,
     "CanvasPixelArray" => 0,
     "WebGLProgram" => 0,
     "WebGLRenderbuffer" => 0,
     "WebGLShader" => 0,
-    "WebGLShortArray" => 0,
+    "Int16Array" => 0,
     "WebGLTexture" => 0,
     "WebGLUniformLocation" => 0,
+    "WebGLVertexArrayObjectOES" => 0,
     "CompareHow" => 0,
     "DataGridColumn" => 0,
     "DOMString" => 0,
@@ -2611,6 +2631,10 @@ sub RequiresCustomSignature
     if ($function->signature->extendedAttributes->{"Custom"} ||
         $function->signature->extendedAttributes->{"V8Custom"}) {
         return 0;
+    }
+    # Type checking is performed in the generated code
+    if ($function->signature->extendedAttributes->{"StrictTypeChecking"}) {
+      return 0;
     }
 
     foreach my $parameter (@{$function->parameters}) {

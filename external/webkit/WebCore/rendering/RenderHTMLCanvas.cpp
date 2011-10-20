@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2004, 2006, 2007 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -48,7 +49,7 @@ bool RenderHTMLCanvas::requiresLayer() const
     if (RenderReplaced::requiresLayer())
         return true;
     
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
     HTMLCanvasElement* canvas = static_cast<HTMLCanvasElement*>(node());
     return canvas && canvas->is3D();
 #else

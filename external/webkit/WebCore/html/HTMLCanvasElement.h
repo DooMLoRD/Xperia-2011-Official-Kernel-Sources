@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2004, 2006, 2009 Apple Inc. All rights reserved.
  * Copyright (C) 2007 Alp Toker <alp@atoker.com>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,7 +31,8 @@
 #include "AffineTransform.h"
 #include "FloatRect.h"
 #include "HTMLElement.h"
-#if ENABLE(3D_CANVAS)    
+#include "ImageData.h"
+#if ENABLE(WEBGL)
 #include "GraphicsContext3D.h"
 #endif
 #include "IntSize.h"
@@ -45,6 +47,7 @@ class FloatSize;
 class GraphicsContext;
 class HTMLCanvasElement;
 class ImageBuffer;
+class ImageData;
 class IntPoint;
 class IntSize;
 
@@ -71,6 +74,11 @@ public:
 
     CanvasRenderingContext* getContext(const String&, CanvasContextAttributes* attributes = 0);
 
+#if ENABLE(WEBGL)
+    void documentWillBecomeInactive();
+    void documentDidBecomeActive();
+#endif
+
     const IntSize& size() const { return m_size; }
     void setSize(const IntSize& size)
     { 
@@ -90,11 +98,13 @@ public:
     GraphicsContext* drawingContext() const;
 
     ImageBuffer* buffer() const;
+    PassRefPtr<ImageData> getImageData();
 
     IntRect convertLogicalToDevice(const FloatRect&) const;
     IntSize convertLogicalToDevice(const FloatSize&) const;
     IntPoint convertLogicalToDevice(const FloatPoint&) const;
 
+    const SecurityOrigin& securityOrigin() const;
     void setOriginTainted() { m_originClean = false; } 
     bool originClean() const { return m_originClean; }
 
@@ -104,9 +114,11 @@ public:
 
     CanvasRenderingContext* renderingContext() const { return m_context.get(); }
 
-#if ENABLE(3D_CANVAS)    
+#if ENABLE(WEBGL)
     bool is3D() const;
 #endif
+
+    void makeRenderingResultsAvailable();
 
 private:
 #if ENABLE(DASHBOARD_SUPPORT)

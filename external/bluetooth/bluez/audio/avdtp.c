@@ -4,6 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2010, Code Aurora Forum
  *  Copyright (C) 2010-2011 Sony Ericsson Mobile Communications AB
  *
  *
@@ -320,6 +321,7 @@ struct avdtp_remote_sep {
 	uint8_t type;
 	uint8_t media_type;
 	struct avdtp_service_capability *codec;
+	struct avdtp_service_capability *protection;
 	gboolean delay_reporting;
 	GSList *caps; /* of type struct avdtp_service_capability */
 	struct avdtp_stream *stream;
@@ -368,6 +370,7 @@ struct avdtp_stream {
 	GSList *caps;
 	GSList *callbacks;
 	struct avdtp_service_capability *codec;
+	struct avdtp_service_capability *protection;
 	guint io_id;		/* Transport GSource ID */
 	guint timer;		/* Waiting for other side to close or open
 				 * the transport channel */
@@ -1080,6 +1083,8 @@ static void connection_lost(struct avdtp *session, int err)
 								err != EACCES)
 		audio_device_cancel_authorization(dev, auth_cb, session);
 
+	if (dev)
+		sink_set_protected(dev, FALSE);
 	finalize_discovery(session, err);
 
 	g_slist_foreach(session->streams, (GFunc) release_stream, session);
@@ -1210,10 +1215,13 @@ static struct avdtp_local_sep *find_local_sep(struct avdtp_server *server,
 
 static GSList *caps_to_list(uint8_t *data, int size,
 				struct avdtp_service_capability **codec,
+				struct avdtp_service_capability **protection,
 				gboolean *delay_reporting)
 {
 	GSList *caps;
 	int processed;
+	*protection = NULL;
+
 
 	if (delay_reporting)
 		*delay_reporting = FALSE;
@@ -1243,6 +1251,10 @@ static GSList *caps_to_list(uint8_t *data, int size,
 				length >=
 				sizeof(struct avdtp_media_codec_capability))
 			*codec = cap;
+		else if (category == AVDTP_CONTENT_PROTECTION &&
+				length >=
+				sizeof(struct avdtp_content_protection_capability))
+			*protection = cap;
 		else if (category == AVDTP_DELAY_REPORTING && delay_reporting)
 			*delay_reporting = TRUE;
 	}
@@ -1400,7 +1412,7 @@ static gboolean avdtp_setconf_cmd(struct avdtp *session, uint8_t transaction,
 	stream->rseid = req->int_seid;
 	stream->caps = caps_to_list(req->caps,
 					size - sizeof(struct setconf_req),
-					&stream->codec,
+					&stream->codec, &stream->protection,
 					&stream->delay_reporting);
 
 	/* Verify that the Media Transport capability's length = 0. Reject otherwise */
@@ -2675,11 +2687,12 @@ static gboolean avdtp_get_capabilities_resp(struct avdtp *session,
 		g_slist_free(sep->caps);
 		sep->caps = NULL;
 		sep->codec = NULL;
+		sep->protection = NULL;
 		sep->delay_reporting = FALSE;
 	}
 
 	sep->caps = caps_to_list(resp->caps, size - sizeof(struct getcap_resp),
-					&sep->codec, &sep->delay_reporting);
+					&sep->codec, &sep->protection, &sep->delay_reporting);
 
 	return TRUE;
 }
@@ -3164,6 +3177,22 @@ struct avdtp_service_capability *avdtp_get_codec(struct avdtp_remote_sep *sep)
 	return sep->codec;
 }
 
+struct avdtp_service_capability *avdtp_get_protection(struct avdtp_stream *stream)
+{
+	if (stream) {
+		return stream->protection;
+	}
+	return NULL;
+}
+
+struct avdtp_service_capability *avdtp_get_remote_sep_protection(struct avdtp_remote_sep *sep)
+{
+	if (sep) {
+		return sep->protection;
+	}
+	return NULL;
+}
+
 gboolean avdtp_get_delay_reporting(struct avdtp_remote_sep *sep)
 {
 	return sep->delay_reporting;
@@ -3229,10 +3258,10 @@ int avdtp_get_seps(struct avdtp *session, uint8_t acp_type, uint8_t media_type,
 {
 	GSList *l;
 	uint8_t int_type;
-
+	*rsep = NULL;
 	int_type = acp_type == AVDTP_SEP_TYPE_SINK ?
 				AVDTP_SEP_TYPE_SOURCE : AVDTP_SEP_TYPE_SINK;
-
+	DBG("");
 	*lsep = find_local_sep(session->server, int_type, media_type, codec);
 	if (!*lsep)
 		return -EINVAL;
@@ -3258,11 +3287,16 @@ int avdtp_get_seps(struct avdtp *session, uint8_t acp_type, uint8_t media_type,
 			continue;
 
 		if (!sep->stream) {
-			*rsep = sep;
-			return 0;
+			if (avdtp_get_remote_sep_protection(sep)) {
+				*rsep = sep;
+				return 0;
+			}
+			if (!*rsep)
+				*rsep = sep;
 		}
 	}
-
+	if(*rsep)
+		return 0;
 	return -EINVAL;
 }
 
@@ -3362,6 +3396,7 @@ int avdtp_set_configuration(struct avdtp *session,
 	new_stream->session = session;
 	new_stream->lsep = lsep;
 	new_stream->rseid = rsep->seid;
+	new_stream->protection = avdtp_get_remote_sep_protection(rsep);
 
 	if (rsep->delay_reporting && lsep->delay_reporting)
 		new_stream->delay_reporting = TRUE;

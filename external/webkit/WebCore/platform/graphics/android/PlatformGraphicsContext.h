@@ -1,5 +1,6 @@
 /*
  * Copyright 2006, The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,6 +30,7 @@
 #include "IntRect.h"
 #include "RenderSkinAndroid.h"
 #include "RenderSkinButton.h"
+#include "SkBitmap.h"
 #include "SkCanvas.h"
 #include "SkPicture.h"
 #include "SkTDArray.h"
@@ -155,6 +157,9 @@ public:
     // nod/rect, and record a new subpicture for this node/button in the current
     // mCanvas
     void storeButtonInfo(Node* node, const IntRect& r);
+
+    const SkBitmap* bitmap() const;
+
 private:
     bool                     m_deleteCanvas;
     WTF::Vector<Container>*    m_buttons;

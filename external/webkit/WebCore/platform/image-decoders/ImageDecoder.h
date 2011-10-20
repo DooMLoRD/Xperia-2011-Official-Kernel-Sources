@@ -3,6 +3,7 @@
  * Copyright (C) 2008-2009 Torch Mobile, Inc.
  * Copyright (C) Research In Motion Limited 2009-2010. All rights reserved.
  * Copyright (C) 2009 Nokia Corporation and/or its subsidiary(-ies)
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -65,7 +66,11 @@ namespace WebCore {
         typedef unsigned PixelData;
 #endif
 
+#if ENABLE(WEBGL)
+        RGBA32Buffer(bool premultiplyAlpha = true);
+#else
         RGBA32Buffer();
+#endif
 
         // For backends which refcount their data, this constructor doesn't need
         // to create a new copy of the image data, only increase the ref count.
@@ -130,6 +135,9 @@ namespace WebCore {
         void setStatus(FrameStatus status);
         void setDuration(unsigned duration) { m_duration = duration; }
         void setDisposalMethod(FrameDisposalMethod method) { m_disposalMethod = method; }
+#if ENABLE(WEBGL)
+        void setPremultiplyAlpha(bool premultiplyAlpha) { m_premultiplyAlpha = premultiplyAlpha; }
+#endif
 
         inline void setRGBA(int x, int y, unsigned r, unsigned g, unsigned b, unsigned a)
         {
@@ -160,17 +168,28 @@ namespace WebCore {
 
         inline void setRGBA(PixelData* dest, unsigned r, unsigned g, unsigned b, unsigned a)
         {
+#if ENABLE(WEBGL)
+            // Respect m_premultiplyAlpha
+            if (m_premultiplyAlpha && a == 0)
+#else
             // We store this data pre-multiplied.
             if (a == 0)
+#endif
                 *dest = 0;
             else {
+#if ENABLE(WEBGL)
+                if (m_premultiplyAlpha && a < 255) {
+#else
                 if (a < 255) {
+#endif
                     float alphaPercent = a / 255.0f;
                     r = static_cast<unsigned>(r * alphaPercent);
                     g = static_cast<unsigned>(g * alphaPercent);
                     b = static_cast<unsigned>(b * alphaPercent);
                 }
-#if PLATFORM(ANDROID)
+#if ENABLE(WEBGL)
+                *dest = SkPackARGB32(a, r, g, b);
+#elif PLATFORM(ANDROID)
                 *dest = SkPackARGB32(a, r, g, b);
 #else
                 *dest = (a << 24 | r << 16 | g << 8 | b);
@@ -197,6 +216,9 @@ namespace WebCore {
         unsigned m_duration;  // The animation delay.
         FrameDisposalMethod m_disposalMethod;
                               // What to do with this frame's data when initializing the next frame.
+#if ENABLE(WEBGL)
+        bool m_premultiplyAlpha;
+#endif
     };
 
     // The ImageDecoder class represents a base class for specific image format decoders
@@ -208,9 +230,26 @@ namespace WebCore {
         // scaled output buffers by down sampling. Call setMaxNumPixels() to specify the
         // biggest size that decoded images can have. Image decoders will deflate those
         // images that are bigger than m_maxNumPixels. (Not supported by all image decoders yet)
+#if ENABLE(WEBGL)
+        ImageDecoder(bool premultiplyAlpha, bool ignoreGammaAndColorProfile)
+            : m_scaled(false)
+            , m_failed(false)
+            , m_premultiplyAlpha(premultiplyAlpha)
+            , m_ignoreGammaAndColorProfile(ignoreGammaAndColorProfile)
+            , m_sizeAvailable(false)
+            , m_isAllDataReceived(false)
+            , m_maxNumPixels(-1)
+        {
+        }
+#endif
+
         ImageDecoder()
             : m_scaled(false)
             , m_failed(false)
+#if ENABLE(WEBGL)
+            , m_premultiplyAlpha(true)
+            , m_ignoreGammaAndColorProfile(false)
+#endif
             , m_sizeAvailable(false)
             , m_isAllDataReceived(false)
             , m_maxNumPixels(-1)
@@ -222,7 +261,11 @@ namespace WebCore {
         // Factory function to create an ImageDecoder.  Ports that subclass
         // ImageDecoder can provide their own implementation of this to avoid
         // needing to write a dedicated setData() implementation.
+#if ENABLE(WEBGL)
+        static ImageDecoder* create(const SharedBuffer& data, bool premultiplyAlpha = true, bool ignoreGammaAndColorProfile = false);
+#else
         static ImageDecoder* create(const SharedBuffer& data);
+#endif
 
         // The the filename extension usually associated with an undecoded image of this type.
         virtual String filenameExtension() const = 0;
@@ -326,6 +369,10 @@ namespace WebCore {
         bool m_scaled;
         Vector<RGBA32Buffer> m_frameBufferCache;
         bool m_failed;
+#if ENABLE(WEBGL)
+        bool m_premultiplyAlpha;
+        bool m_ignoreGammaAndColorProfile;
+#endif
 
     private:
         // Some code paths compute the size of the image as "width * height * 4"

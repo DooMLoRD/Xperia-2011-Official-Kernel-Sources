@@ -1,5 +1,6 @@
 ##
 ## Copyright 2009, The Android Open Source Project
+## Copyright (C) 2011 Sony Ericsson Mobile Communications AB
 ##
 ## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted provided that the following conditions
@@ -268,13 +269,43 @@ LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
 	\
 	html/canvas/CanvasGradient.cpp \
 	html/canvas/CanvasNumberArray.cpp \
-	html/canvas/CanvasObject.cpp \
 	html/canvas/CanvasPattern.cpp \
 	html/canvas/CanvasPixelArray.cpp \
 	html/canvas/CanvasRenderingContext.cpp \
 	html/canvas/CanvasRenderingContext2D.cpp \
 	html/canvas/CanvasStyle.cpp \
-	\
+
+LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
+        html/canvas/ArrayBuffer.cpp \
+        html/canvas/ArrayBufferView.cpp \
+        html/canvas/CanvasContextAttributes.cpp \
+        html/canvas/Float32Array.cpp \
+        html/canvas/Int16Array.cpp \
+        html/canvas/Int32Array.cpp \
+        html/canvas/Int8Array.cpp \
+	html/canvas/OESStandardDerivatives.cpp \
+	html/canvas/OESTextureFloat.cpp \
+	html/canvas/OESVertexArrayObject.cpp \
+        html/canvas/Uint16Array.cpp \
+        html/canvas/Uint32Array.cpp \
+        html/canvas/Uint8Array.cpp \
+        html/canvas/WebGLBuffer.cpp \
+        html/canvas/WebGLContextAttributes.cpp \
+        html/canvas/WebGLContextEvent.cpp \
+	html/canvas/WebGLExtension.cpp \
+        html/canvas/WebGLFramebuffer.cpp \
+        html/canvas/WebGLGetInfo.cpp \
+	html/canvas/WebGLObject.cpp \
+        html/canvas/WebGLProgram.cpp \
+        html/canvas/WebGLRenderbuffer.cpp \
+        html/canvas/WebGLRenderingContext.cpp \
+        html/canvas/WebGLShader.cpp \
+        html/canvas/WebGLTexture.cpp \
+        html/canvas/WebGLUniformLocation.cpp \
+	html/canvas/WebGLVertexArrayObjectOES.cpp \
+	html/canvas/WebKitLoseContext.cpp
+
+LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
 	loader/Cache.cpp \
 	loader/CachedCSSStyleSheet.cpp \
 	loader/CachedFont.cpp \
@@ -443,6 +474,7 @@ LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
 	platform/graphics/GlyphWidthMap.cpp \
 	platform/graphics/Gradient.cpp \
 	platform/graphics/GraphicsContext.cpp \
+	platform/graphics/GraphicsContext3D.cpp \
 	platform/graphics/GraphicsLayer.cpp \
 	platform/graphics/GraphicsTypes.cpp \
 	platform/graphics/Image.cpp \
@@ -459,6 +491,7 @@ LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
 	\
 	platform/graphics/android/AndroidAnimation.cpp \
 	platform/graphics/android/BitmapAllocatorAndroid.cpp \
+	platform/graphics/android/Extensions3DAndroid.cpp \
 	platform/graphics/android/FontAndroid.cpp \
 	platform/graphics/android/FontCacheAndroid.cpp \
 	platform/graphics/android/FontCustomPlatformData.cpp \
@@ -467,6 +500,7 @@ LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
 	platform/graphics/android/GlyphMapAndroid.cpp \
 	platform/graphics/android/GradientAndroid.cpp \
 	platform/graphics/android/GraphicsContextAndroid.cpp \
+	platform/graphics/android/GraphicsContext3DAndroid.cpp \
 	platform/graphics/android/GraphicsLayerAndroid.cpp \
 	platform/graphics/android/ImageAndroid.cpp \
 	platform/graphics/android/ImageBufferAndroid.cpp \
@@ -510,6 +544,8 @@ LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) \
 	platform/image-decoders/skia/ImageDecoderSkia.cpp \
 	platform/image-decoders/gif/GIFImageDecoder.cpp \
 	platform/image-decoders/gif/GIFImageReader.cpp \
+	platform/image-decoders/png/PNGImageDecoder.cpp \
+	platform/image-encoders/skia/PNGImageEncoder.cpp \
 	\
 	platform/mock/GeolocationServiceMock.cpp \
 	\

@@ -74,6 +74,9 @@
 #include "board-semc_mogami-keypad.h"
 #include "board-semc_mogami-gpio.h"
 #include <linux/usb/android_composite.h>
+#ifdef CONFIG_USB_ANDROID_ACCESSORY
+#include <linux/usb/f_accessory.h>
+#endif
 #include "pm.h"
 #include "spm.h"
 #include <linux/msm_kgsl.h>
@@ -1676,8 +1679,16 @@ static char *usb_functions_rndis_adb[] = {
 	"adb",
 };
 
+#ifdef CONFIG_USB_ANDROID_ACCESSORY
+static char *usb_functions_accessory[] = { "accessory" };
+static char *usb_functions_accessory_adb[] = { "accessory", "adb" };
+#endif
+
 static char *usb_functions_all[] = {
 	"rndis",
+#ifdef CONFIG_USB_ANDROID_ACCESSORY
+	"accessory",
+#endif
 	"usb_mass_storage",
 #if defined(CONFIG_USB_ANDROID_MTP_ARICENT)
 	"mtp",
@@ -1738,6 +1749,20 @@ static struct android_usb_product usb_products[] = {
 		.num_functions	= ARRAY_SIZE(usb_functions_msc_adb_eng),
 		.functions	= usb_functions_msc_adb_eng,
 	},
+#ifdef CONFIG_USB_ANDROID_ACCESSORY
+	{
+		.vendor_id      = USB_ACCESSORY_VENDOR_ID,
+		.product_id     = USB_ACCESSORY_PRODUCT_ID,
+		.num_functions  = ARRAY_SIZE(usb_functions_accessory),
+		.functions      = usb_functions_accessory,
+	},
+	{
+		.vendor_id      = USB_ACCESSORY_VENDOR_ID,
+		.product_id     = USB_ACCESSORY_ADB_PRODUCT_ID,
+		.num_functions  = ARRAY_SIZE(usb_functions_accessory_adb),
+		.functions      = usb_functions_accessory_adb,
+	},
+#endif
 };
 
 static struct usb_mass_storage_platform_data mass_storage_pdata = {
@@ -1750,6 +1775,12 @@ static struct usb_mass_storage_platform_data mass_storage_pdata = {
 	.cdrom_vendor = "SEMC",
 	.cdrom_product = "CD-ROM",
 	.cdrom_release = 0x0100,
+
+	/* EUI-64 based identifier format */
+	.eui64_id = {
+		.ieee_company_id = {0x00, 0x0A, 0xD9},
+		.vendor_specific_ext_field = {0x00, 0x00, 0x00, 0x00, 0x00},
+	},
 };
 
 static struct platform_device usb_mass_storage_device = {
@@ -1830,6 +1861,7 @@ static int __init board_serialno_setup(char *serialno)
 	}
 	usb_serial_number[20] = '\0';
 	android_usb_pdata.serial_number = usb_serial_number;
+	mass_storage_pdata.serial_number = usb_serial_number;
 
 	printk(KERN_INFO "USB serial number: %s\n",
 			android_usb_pdata.serial_number);
@@ -2674,6 +2706,7 @@ static struct synaptics_button synaptics_back_key = {
 
 static struct synaptics_funcarea clearpad_funcarea_array[] = {
 	{ 0, 0, 479, 853, SYN_FUNCAREA_POINTER, NULL },
+	{ 0, 854, 479, 863, SYN_FUNCAREA_BOTTOM_EDGE, NULL},
 	{ 0, 884, 159, 921, SYN_FUNCAREA_BUTTON, &synaptics_back_key },
 	{ 0, 864, 179, 921, SYN_FUNCAREA_BTN_INBOUND, &synaptics_back_key },
 	{ 320, 884, 479, 921, SYN_FUNCAREA_BUTTON, &synaptics_menu_key },
@@ -2935,9 +2968,11 @@ static struct registers bma250_reg_setup = {
 	.int_mode_ctrl        = BMA250_MODE_SLEEP_50MS,
 	.int_enable1          = BMA250_INT_SLOPE_Z |
 				BMA250_INT_SLOPE_Y |
-				BMA250_INT_SLOPE_X,
+				BMA250_INT_SLOPE_X |
+				BMA250_INT_ORIENT,
 	.int_enable2          = BMA250_INT_NEW_DATA,
-	.int_pin1             = BMA250_INT_PIN1_SLOPE,
+	.int_pin1             = BMA250_INT_PIN1_SLOPE |
+				BMA250_INT_PIN1_ORIENT,
 	.int_new_data         = BMA250_INT_PIN1,
 	.int_pin2             = -1,
 };
@@ -4692,7 +4727,7 @@ static void __init msm7x30_allocate_memory_regions(void)
 	size = pmem_adsp_size;
 
 	if (size) {
-		addr = alloc_bootmem(size);
+		addr = __alloc_bootmem(size, 8*1024, __pa(MAX_DMA_ADDRESS));
 		android_pmem_adsp_pdata.start = __pa(addr);
 		android_pmem_adsp_pdata.size = size;
 		pr_info("allocating %lu bytes at %p (%lx physical) for adsp "

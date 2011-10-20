@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 The Android Open Source Project
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,6 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ * Modifications are licensed under the License.
  */
 
 #include "config.h"
@@ -120,6 +124,9 @@ GraphicsLayerAndroid::GraphicsLayerAndroid(GraphicsLayerClient* client) :
     m_currentTranslateX(0),
     m_currentTranslateY(0),
     m_currentPosition(0, 0)
+#if ENABLE(WEBGL)
+    , m_context(0)
+#endif
 {
     m_contentLayer = new LayerAndroid(true);
     if (m_client) {
@@ -827,6 +834,24 @@ PlatformLayer* GraphicsLayerAndroid::platformLayer() const
     LOG("platformLayer");
     return (PlatformLayer*) m_contentLayer;
 }
+
+#if ENABLE(WEBGL)
+void GraphicsLayerAndroid::setContentsToGraphicsContext3D(const GraphicsContext3D* context)
+{
+    if (context && context != m_context) {
+        m_context = (GraphicsContext3D*)context;
+        m_haveContents = true;
+        m_drawsContent = true;
+        m_contentLayer->unref();
+        m_contentLayer = new LayerAndroid((GraphicsContext3D*)context);
+        if (m_client) {
+            RenderLayerBacking* backing = static_cast<RenderLayerBacking*>(m_client);
+            RenderLayer* renderLayer = backing->owningLayer();
+            m_contentLayer->setIsRootLayer(renderLayer->isRootLayer());
+        }
+    }
+}
+#endif
 
 #ifndef NDEBUG
 void GraphicsLayerAndroid::setDebugBackgroundColor(const Color& color)

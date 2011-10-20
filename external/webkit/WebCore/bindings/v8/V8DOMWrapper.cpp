@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -67,7 +68,7 @@
 #include "V8Worker.h"
 #include "V8WorkerContext.h"
 #include "V8XMLHttpRequest.h"
-#include "WebGLArray.h"
+#include "ArrayBufferView.h"
 #include "WebGLContextAttributes.h"
 #include "WebGLUniformLocation.h"
 #include "WorkerContextExecutionProxy.h"
@@ -86,7 +87,7 @@ namespace WebCore {
 typedef HashMap<Node*, v8::Object*> DOMNodeMap;
 typedef HashMap<void*, v8::Object*> DOMObjectMap;
 
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
 void V8DOMWrapper::setIndexedPropertiesToExternalArray(v8::Handle<v8::Object> wrapper,
                                                        int index,
                                                        void* address,
@@ -95,25 +96,25 @@ void V8DOMWrapper::setIndexedPropertiesToExternalArray(v8::Handle<v8::Object> wr
     v8::ExternalArrayType array_type = v8::kExternalByteArray;
     V8ClassIndex::V8WrapperType classIndex = V8ClassIndex::FromInt(index);
     switch (classIndex) {
-    case V8ClassIndex::WEBGLBYTEARRAY:
+    case V8ClassIndex::INT8ARRAY:
         array_type = v8::kExternalByteArray;
         break;
-    case V8ClassIndex::WEBGLUNSIGNEDBYTEARRAY:
+    case V8ClassIndex::UINT8ARRAY:
         array_type = v8::kExternalUnsignedByteArray;
         break;
-    case V8ClassIndex::WEBGLSHORTARRAY:
+    case V8ClassIndex::INT16ARRAY:
         array_type = v8::kExternalShortArray;
         break;
-    case V8ClassIndex::WEBGLUNSIGNEDSHORTARRAY:
+    case V8ClassIndex::UINT16ARRAY:
         array_type = v8::kExternalUnsignedShortArray;
         break;
-    case V8ClassIndex::WEBGLINTARRAY:
+    case V8ClassIndex::INT32ARRAY:
         array_type = v8::kExternalIntArray;
         break;
-    case V8ClassIndex::WEBGLUNSIGNEDINTARRAY:
+    case V8ClassIndex::UINT32ARRAY:
         array_type = v8::kExternalUnsignedIntArray;
         break;
-    case V8ClassIndex::WEBGLFLOATARRAY:
+    case V8ClassIndex::FLOAT32ARRAY:
         array_type = v8::kExternalFloatArray;
         break;
     default:
@@ -226,6 +227,17 @@ v8::Local<v8::Function> V8DOMWrapper::getConstructor(V8ClassIndex::V8WrapperType
     return getConstructorForContext(type, context);
 }
 #endif
+
+void V8DOMWrapper::setHiddenReference(v8::Handle<v8::Object> parent, v8::Handle<v8::Value> child)
+{
+    v8::Local<v8::Value> hiddenReferenceObject = parent->GetInternalField(v8DOMHiddenReferenceArrayIndex);
+    if (hiddenReferenceObject->IsNull() || hiddenReferenceObject->IsUndefined()) {
+        hiddenReferenceObject = v8::Array::New();
+        parent->SetInternalField(v8DOMHiddenReferenceArrayIndex, hiddenReferenceObject);
+    }
+    v8::Local<v8::Array> hiddenReferenceArray = v8::Local<v8::Array>::Cast(hiddenReferenceObject);
+    hiddenReferenceArray->Set(v8::Integer::New(hiddenReferenceArray->Length()), child);
+}
 
 void V8DOMWrapper::setHiddenWindowReference(Frame* frame, const int internalIndex, v8::Handle<v8::Object> jsObject)
 {

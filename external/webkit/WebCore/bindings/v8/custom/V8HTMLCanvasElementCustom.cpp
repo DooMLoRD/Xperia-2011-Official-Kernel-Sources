@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2007-2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -50,11 +51,11 @@ v8::Handle<v8::Value> V8HTMLCanvasElement::getContextCallback(const v8::Argument
     HTMLCanvasElement* imp = V8HTMLCanvasElement::toNative(holder);
     String contextId = toWebCoreString(args[0]);
     RefPtr<CanvasContextAttributes> attrs;
-#if ENABLE(3D_CANVAS)
-    if (contextId == "experimental-webgl" || contextId == "webkit-3d") {
+#if ENABLE(WEBGL)
+    if (/*contextId == "webgl" ||*/ contextId == "experimental-webgl" || contextId == "webkit-3d") {
         attrs = WebGLContextAttributes::create();
         WebGLContextAttributes* webGLAttrs = static_cast<WebGLContextAttributes*>(attrs.get());
-        if (args.Length() > 1 && args[0]->IsObject()) {
+        if (args.Length() > 1 && args[1]->IsObject()) {
             v8::Handle<v8::Object> jsAttrs = args[1]->ToObject();
             v8::Handle<v8::String> alpha = v8::String::New("alpha");
             if (jsAttrs->Has(alpha))
@@ -71,20 +72,23 @@ v8::Handle<v8::Value> V8HTMLCanvasElement::getContextCallback(const v8::Argument
             v8::Handle<v8::String> premultipliedAlpha = v8::String::New("premultipliedAlpha");
             if (jsAttrs->Has(premultipliedAlpha))
                 webGLAttrs->setPremultipliedAlpha(jsAttrs->Get(premultipliedAlpha)->BooleanValue());
+            v8::Handle<v8::String> preserveDrawingBuffer = v8::String::New("preserveDrawingBuffer");
+            if (jsAttrs->Has(preserveDrawingBuffer))
+                webGLAttrs->setPreserveDrawingBuffer(jsAttrs->Get(preserveDrawingBuffer)->BooleanValue());
         }
     }
 #endif
     CanvasRenderingContext* result = imp->getContext(contextId, attrs.get());
     if (!result)
-        return v8::Undefined();
+        return v8::Null();
     if (result->is2d())
         return toV8(static_cast<CanvasRenderingContext2D*>(result));
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
     else if (result->is3d())
         return toV8(static_cast<WebGLRenderingContext*>(result));
 #endif
     ASSERT_NOT_REACHED();
-    return v8::Undefined();
+    return v8::Null();
 }
 
 } // namespace WebCore

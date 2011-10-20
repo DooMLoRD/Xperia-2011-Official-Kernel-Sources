@@ -4,6 +4,7 @@
  *
  *  Copyright (C) 2004-2009  Marcel Holtmann <marcel@holtmann.org>
  *  Copyright (C) 2009 The Android Open Source Project
+ *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -51,6 +52,8 @@ void android_set_aid_and_cap() {
 	capset(&header, &cap);
 }
 
+#if defined(BOARD_HAVE_BLUETOOTH_BCM) || defined(SEMC_BLUETOOTH_TI)
+#ifdef BOARD_HAVE_BLUETOOTH_BCM
 static int write_flush_timeout(int fd, uint16_t handle,
         unsigned int timeout_ms) {
     uint16_t timeout = (timeout_ms * 1000) / 625;  // timeout units of 0.625ms
@@ -78,7 +81,6 @@ static int write_flush_timeout(int fd, uint16_t handle,
     return 0;
 }
 
-#ifdef BOARD_HAVE_BLUETOOTH_BCM
 static int vendor_high_priority(int fd, uint16_t handle) {
     unsigned char hci_sleep_cmd[] = {
         0x01,               // HCI command packet
@@ -100,6 +102,45 @@ static int vendor_high_priority(int fd, uint16_t handle) {
     }
     return 0;
 }
+#endif
+
+#ifdef SEMC_BLUETOOTH_TI
+static int write_flush_timeout(int fd, uint16_t handle,
+        unsigned int timeout_ms) {
+    // do not use flush timeout on TI hardware
+    return 0;
+}
+
+static int vendor_high_priority(int fd, uint16_t handle) {
+    // set of flow spec parameters recommended by TI
+    unsigned char hci_flow_spec_cmd[] = {
+        0x01,                   // HCI command packet
+        0x10, 0x08,             // HCI_Flow_Specification
+        0x15,                   // Length
+        0x00, 0x00,             // Handle
+        0x00,                   // Flags(reserved)
+        0x00,                   // Flow direction=outgoing
+        0x02,                   // Service type=guaranteed
+        0xa8, 0x61, 0x00, 0x00, // Token rate=25000
+        0x4d, 0x01, 0x00, 0x00, // Token bucket size=333
+        0xa8, 0x61, 0x00, 0x00, // Peak bandwidth=25000
+        0xc8, 0x32, 0x00, 0x00, // Access latency=13000
+    };
+
+    hci_flow_spec_cmd[4] = (uint8_t)handle;
+    hci_flow_spec_cmd[5] = (uint8_t)(handle >> 8);
+
+    int ret = write(fd, hci_flow_spec_cmd, sizeof(hci_flow_spec_cmd));
+    if (ret < 0) {
+        error("write(): %s (%d)]", strerror(errno), errno);
+        return -1;
+    } else if (ret != sizeof(hci_flow_spec_cmd)) {
+        error("write(): unexpected length %d", ret);
+        return -1;
+    }
+    return 0;
+}
+#endif
 
 static int get_hci_sock() {
     int sock = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);

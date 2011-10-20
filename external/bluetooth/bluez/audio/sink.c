@@ -5,6 +5,8 @@
  *  Copyright (C) 2006-2007  Nokia Corporation
  *  Copyright (C) 2004-2009  Marcel Holtmann <marcel@holtmann.org>
  *  Copyright (C) 2009-2010  Motorola Inc.
+ *  Copyright (C) 2010, Code Aurora Forum
+ *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -65,6 +67,7 @@ struct sink {
 	avdtp_session_state_t session_state;
 	avdtp_state_t stream_state;
 	sink_state_t state;
+	gboolean protected;
 	struct pending_request *connect;
 	struct pending_request *disconnect;
 	DBusConnection *conn;
@@ -95,6 +98,20 @@ static const char *state2str(sink_state_t state)
 		error("Invalid sink state %d", state);
 		return NULL;
 	}
+}
+
+void sink_set_protected(struct audio_device *dev, gboolean protected)
+{
+	struct sink *sink = dev->sink;
+
+	if (sink == NULL)
+		return;
+
+	sink->protected = protected;
+	emit_property_changed(dev->conn, dev->path,
+			AUDIO_SINK_INTERFACE, "Protected",
+			DBUS_TYPE_BOOLEAN, &protected);
+
 }
 
 static void sink_set_state(struct audio_device *dev, sink_state_t new_state)
@@ -323,6 +340,8 @@ static void stream_setup_complete(struct avdtp *session, struct a2dp_sep *sep,
 		sink->connect = NULL;
 		pending_request_free(sink->dev, pending);
 
+		sink_set_protected(sink->dev, sink->protected);
+
 		return;
 	}
 
@@ -457,6 +476,8 @@ static gboolean select_capabilities(struct avdtp *session,
 					GSList **caps)
 {
 	struct avdtp_service_capability *media_transport, *media_codec;
+	struct avdtp_service_capability *media_scms_t;
+	struct avdtp_content_protection_capability scms_t_cap = {0x02, 0x00};
 	struct sbc_codec_cap sbc_cap;
 
 	media_codec = avdtp_get_codec(rsep);
@@ -474,6 +495,13 @@ static gboolean select_capabilities(struct avdtp *session,
 						sizeof(sbc_cap));
 
 	*caps = g_slist_append(*caps, media_codec);
+
+	media_scms_t = avdtp_get_remote_sep_protection(rsep);
+
+	if (media_scms_t && (memcmp(media_scms_t->data, &scms_t_cap, sizeof(scms_t_cap)) == 0)) {
+		media_scms_t = avdtp_service_cap_new(AVDTP_CONTENT_PROTECTION, &scms_t_cap, 2);
+		*caps = g_slist_append(*caps, media_scms_t);
+	}
 
 	if (avdtp_get_delay_reporting(rsep)) {
 		struct avdtp_service_capability *delay_reporting;
@@ -520,6 +548,11 @@ static void discovery_complete(struct avdtp *session, GSList *seps, struct avdtp
 		error("No matching ACP and INT SEPs found");
 		goto failed;
 	}
+
+	if (avdtp_get_remote_sep_protection(rsep))
+		sink->protected = TRUE;
+	else
+		sink->protected = FALSE;
 
 	if (!select_capabilities(session, rsep, &caps)) {
 		error("Unable to select remote SEP capabilities");
@@ -765,6 +798,10 @@ static DBusMessage *sink_get_properties(DBusConnection *conn,
 	/* Connected */
 	value = (sink->stream_state >= AVDTP_STATE_CONFIGURED);
 	dict_append_entry(&dict, "Connected", DBUS_TYPE_BOOLEAN, &value);
+
+	/* Protected */
+	value = sink->protected;
+	dict_append_entry(&dict, "Protected", DBUS_TYPE_BOOLEAN, &value);
 
 	/* State */
 	state = state2str(sink->state);

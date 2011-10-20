@@ -2,6 +2,7 @@
  * Copyright (C) 2006, 2007, 2008, 2009 Apple Inc. All rights reserved.
  * Copyright (C) 2008, 2009 Torch Mobile Inc. All rights reserved. (http://www.torchmobile.com/)
  * Copyright (C) Research In Motion Limited 2009. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -285,6 +286,10 @@ public:
     const String& responseMIMEType() const;
 
     bool containsPlugins() const;
+#if ENABLE(WEBGL)
+    void setContains3DCanvas(bool state) { m_contains3DCanvas = state; }
+    bool contains3DCanvas() { return m_contains3DCanvas; }
+#endif
 
     void loadDone();
     void finishedParsing();
@@ -514,6 +519,9 @@ private:
     RefPtr<TextResourceDecoder> m_decoder;
 
     bool m_containsPlugIns;
+#if ENABLE(WEBGL)
+    bool m_contains3DCanvas;
+#endif
 
     KURL m_submittedFormURL;
 

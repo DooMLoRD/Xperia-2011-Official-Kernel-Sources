@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2008, 2009 Google Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -401,25 +402,30 @@
 #include "V8SharedWorkerContext.h"
 #endif
 
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
+#include "V8ArrayBuffer.h"
+#include "V8ArrayBufferView.h"
+#include "V8Float32Array.h"
+#include "V8Int16Array.h"
+#include "V8Int32Array.h"
+#include "V8Int8Array.h"
+#include "V8OESStandardDerivatives.h"
+#include "V8OESTextureFloat.h"
+#include "V8OESVertexArrayObject.h"
+#include "V8Uint16Array.h"
+#include "V8Uint32Array.h"
+#include "V8Uint8Array.h"
 #include "V8WebGLRenderingContext.h"
-#include "V8WebGLArrayBuffer.h"
-#include "V8WebGLArray.h"
-#include "V8WebGLByteArray.h"
 #include "V8WebGLBuffer.h"
 #include "V8WebGLContextAttributes.h"
-#include "V8WebGLFloatArray.h"
 #include "V8WebGLFramebuffer.h"
-#include "V8WebGLIntArray.h"
 #include "V8WebGLProgram.h"
 #include "V8WebGLRenderbuffer.h"
 #include "V8WebGLShader.h"
-#include "V8WebGLShortArray.h"
 #include "V8WebGLTexture.h"
 #include "V8WebGLUniformLocation.h"
-#include "V8WebGLUnsignedByteArray.h"
-#include "V8WebGLUnsignedIntArray.h"
-#include "V8WebGLUnsignedShortArray.h"
+#include "V8WebGLVertexArrayObjectOES.h"
+#include "V8WebKitLoseContext.h"
 #endif
 
 #if ENABLE(DATABASE)

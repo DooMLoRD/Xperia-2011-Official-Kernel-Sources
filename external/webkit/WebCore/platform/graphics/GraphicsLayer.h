@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,9 +34,7 @@
 #include "FloatPoint.h"
 #include "FloatPoint3D.h"
 #include "FloatSize.h"
-#if ENABLE(3D_CANVAS)
 #include "GraphicsContext3D.h"
-#endif
 #include "GraphicsLayerClient.h"
 #include "IntRect.h"
 #include "TransformationMatrix.h"
@@ -287,7 +286,7 @@ public:
     virtual void setContentsToMedia(PlatformLayer*) { } // video or plug-in
     virtual void setContentsBackgroundColor(const Color&) { }
     
-#if ENABLE(3D_CANVAS)
+#if ENABLE(WEBGL)
     virtual void setContentsToGraphicsContext3D(const GraphicsContext3D*) { }
     virtual void setGraphicsContext3DNeedsDisplay() { }
 #endif
