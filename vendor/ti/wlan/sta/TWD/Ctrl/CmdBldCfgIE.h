@@ -79,6 +79,7 @@ TI_STATUS cmdBld_CfgIeTxCmpltPacing             (TI_HANDLE hCmdBld, TI_UINT16 uT
 TI_STATUS cmdBld_CfgIeRxIntrPacing              (TI_HANDLE hCmdBld, TI_UINT16 uRxIntrPacingThreshold, TI_UINT16 uRxIntrPacingTimeout, void *fCb, TI_HANDLE hCb);
 TI_STATUS cmdBld_CfgIeCtsProtection            	(TI_HANDLE hCmdBld, TI_UINT8 uCtsToSelf, void *fCb, TI_HANDLE hCb);
 TI_STATUS cmdBld_CfgIeBcnBrcOptions            	(TI_HANDLE hCmdBld, TPowerMgmtConfig *pPMConfig, void *fCb, TI_HANDLE hCb);
+TI_STATUS cmdBld_CfgIeMulticastMACFixup         (TI_HANDLE hCmdBld, TI_UINT8 enableFixup, void *fCb, TI_HANDLE hCb);
 TI_STATUS cmdBld_CfgIePsWmm                    	(TI_HANDLE hCmdBld, TI_BOOL bEnableWA, void *fCb, TI_HANDLE hCb);
 TI_STATUS cmdBld_CfgIeRssiSnrTrigger           	(TI_HANDLE hCmdBld, RssiSnrTriggerCfg_t *pTriggerParam, void *fCb, TI_HANDLE hCb);
 TI_STATUS cmdBld_CfgIeRssiSnrWeights           	(TI_HANDLE hCmdBld, RssiSnrAverageWeights_t *pWeightsParam, void *fCb, TI_HANDLE hCb);

@@ -301,7 +301,13 @@ static named_value_t report_module[] = {
 	{ FILE_ID_135 ,  (PS8)"roamingMngr_autoSM      " },
 	{ FILE_ID_136 ,  (PS8)"roamingMngr_manualSM    " },
 	{ FILE_ID_137 ,  (PS8)"cmdinterpretoid         " },
-	{ FILE_ID_138 ,  (PS8)"WlanDrvIf               " }
+	{ FILE_ID_138 ,  (PS8)"WlanDrvIf               " },
+	{ FILE_ID_139 ,  (PS8)"roamingMgrDebug         " },
+	{ FILE_ID_140 ,  (PS8)"smeDebug                " },
+	{ FILE_ID_141 ,  (PS8)"osRgstry                " },
+	{ FILE_ID_142 ,  (PS8)"CmdInterpretWext        " },
+	{ FILE_ID_143 ,  (PS8)"WlanDrvWext             " },
+	{ FILE_ID_143 ,  (PS8)"osApi                   " }
 };
 
 static named_value_t report_severity[] = {

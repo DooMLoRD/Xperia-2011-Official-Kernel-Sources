@@ -699,17 +699,22 @@ static void semc_camera_sensor_exit(void)
 	/* 10ms wait */
 	mdelay(10);
 
+	/* Power off VCAM_IO(0V) */
+	ret = semc_camera_resource_disable(
+		&g_camera_ctrl->sensordata->vcam_io);
+	if (SEMC_CHK_ERR(ret))
+		SEMC_LOGE("camera_sensor_exit Power off VCAM_IO failed\n");
+
+	/* 50ms wait */
+	mdelay(50);
+
 	/* Power off VCAM_SD(0V) */
 	ret = semc_camera_resource_disable(
 		&g_camera_ctrl->sensordata->vcam_sd);
 	if (SEMC_CHK_ERR(ret))
 		SEMC_LOGE("camera_sensor_exit Power off VCAM_SD failed\n");
 
-	/* Power off VCAM_IO(0V) */
-	ret = semc_camera_resource_disable(
-		&g_camera_ctrl->sensordata->vcam_io);
-	if (SEMC_CHK_ERR(ret))
-		SEMC_LOGE("camera_sensor_exit Power off VCAM_IO failed\n");
+
 
 #if defined(CONFIG_SEMC_SUB_CAMERA_MODULE)
 	/* 5ms wait */
@@ -723,8 +728,8 @@ static void semc_camera_sensor_exit(void)
 	}
 #endif
 
-	/* 50ms wait */
-	mdelay(50);
+	/* 10ms wait */
+	mdelay(10);
 
 	SEMC_LOGD("camera_sensor_exit [E]\n");
 }

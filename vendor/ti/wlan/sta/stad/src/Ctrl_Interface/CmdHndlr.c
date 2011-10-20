@@ -48,6 +48,7 @@
 #include "CmdHndlr.h"
 #include "CmdInterpret.h"
 #include "DrvMainModules.h"
+#include "healthMonitor.h"
 
 
 /* The queue may contain only one command per configuration application but set as unlimited */
@@ -60,6 +61,7 @@ typedef struct {
 	TI_HANDLE       hContext;
 	TI_HANDLE       hCmdInterpret;
 
+	TI_HANDLE	hHealthMonitor;
 	TI_HANDLE       hCmdQueue;       /* Handle to the commands queue */
 	TI_BOOL         bProcessingCmds; /* Indicates if currently processing commands */
 	TI_UINT32       uContextId;      /* ID allocated to this module on registration to context module */
@@ -181,6 +183,7 @@ void cmdHndlr_Init (TStadHandlesList *pStadHandles)
 
 	pCmdHndlr->hReport  = pStadHandles->hReport;
 	pCmdHndlr->hContext = pStadHandles->hContext;
+	pCmdHndlr->hHealthMonitor = pStadHandles->hHealthMonitor;
 
 	cmdInterpret_Init (pCmdHndlr->hCmdInterpret, pStadHandles);
 
@@ -305,6 +308,8 @@ TI_STATUS cmdHndlr_InsertCommand (TI_HANDLE     hCmdHndlr,
 	{
 		/* Command did not complete within 10 seconds but can still be queued or running.
 		   Cannot free memory and signalobject */
+		healthMonitor_sendFailureEvent (pCmdHndlr->hHealthMonitor,
+						HW_AWAKE_FAILURE);
 		return TI_NOK;
 	}
 

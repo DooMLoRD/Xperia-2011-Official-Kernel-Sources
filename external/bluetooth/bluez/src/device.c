@@ -4,7 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010 Sony Ericsson Mobile Communications AB
+ *  Copyright (C) 2010-2011 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -2157,6 +2157,7 @@ void device_bonding_complete(struct btd_device *device, uint8_t status)
 	if (status) {
 		device_cancel_authentication(device, TRUE);
 		device_cancel_bonding(device, status);
+		device_set_temporary(device, TRUE);
 		return;
 	}
 

@@ -4,7 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010 Sony Ericsson Mobile Communications AB
+ *  Copyright (C) 2010-2011 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -480,11 +480,17 @@ int hcid_dbus_user_confirm(bdaddr_t *sba, bdaddr_t *dba, uint32_t passkey)
 	/* If local IO capabilities are DisplayYesNo and remote IO
 	 * capabiltiies are DisplayOnly or NoInputNoOutput;
 	 * call PairingConsent callback for incoming requests. */
-	if ((loc_cap == 0x01) &&
+	if ((loc_cap == 0x01) && (!bonding_initiator) &&
 		        (rem_cap == 0x00 || rem_cap == 0x03))
 		return device_request_authentication(device,
 				AUTH_TYPE_PAIRING_CONSENT, 0,
 				pairing_consent_cb);
+
+	if ((loc_cap == 0x01) && (loc_auth > 0x01) && (loc_auth != 0xff) &&
+			(rem_cap == 0x01) && (rem_auth > 0x01))
+		return device_request_authentication(device,
+				AUTH_TYPE_CONFIRM, passkey,
+				confirm_cb);
 
 	/* If no side requires MITM protection; auto-accept */
 	if ((loc_auth == 0xff || !(loc_auth & 0x01) || rem_cap == 0x03) &&
@@ -572,10 +578,12 @@ void hcid_dbus_simple_pairing_complete(bdaddr_t *local, bdaddr_t *peer,
 
 static char *extract_eir_name(uint8_t *data, uint8_t *type)
 {
+	char *end;
+
 	if (!data || !type)
 		return NULL;
 
-	if (data[0] == 0)
+	if (data[0] <= 1)
 		return NULL;
 
 	*type = data[1];
@@ -583,6 +591,8 @@ static char *extract_eir_name(uint8_t *data, uint8_t *type)
 	switch (*type) {
 	case 0x08:
 	case 0x09:
+		if (!g_utf8_validate((char *) (data + 2), data[0] - 1, (const char **) &end))
+			*end = '\0';
 		return strndup((char *) (data + 2), data[0] - 1);
 	}
 
@@ -904,7 +914,8 @@ void hcid_dbus_conn_complete(bdaddr_t *local, uint8_t status, uint16_t handle,
 
 		device_set_secmode3_conn(device, FALSE);
 
-		if (status == 0x0e || status == 0x18) {
+		if (status == 0x05 || status == 0x06 || status == 0x0e ||
+				status == 0x17 || status == 0x18) {
 			device_set_temporary(device, TRUE);
 			secmode3 = TRUE;
 		}

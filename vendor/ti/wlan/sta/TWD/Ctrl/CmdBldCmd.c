@@ -1159,7 +1159,7 @@ TI_STATUS cmdBld_CmdAddWpaKey (TI_HANDLE hCmdBld, TSecurityKeys* pKey, void *fCb
 	switch (pKey->keyType) {
 	case KEY_WEP:
 		/* Configure the encKeys to the HW - default keys cache*/
-		return cmdBld_CmdAddWepDefaultKey (hCmdBld, pKey, fCb, hCb);
+		return cmdBld_CmdAddWepMappingKey (hCmdBld, pKey, fCb, hCb);
 
 	case KEY_TKIP:
 		/* Set the REAL TKIP key into the TKIP key cache*/
@@ -1200,7 +1200,7 @@ TI_STATUS cmdBld_CmdRemoveWpaKey (TI_HANDLE hCmdBld, TSecurityKeys* pKey, void *
 	switch (pKey->keyType) {
 	case KEY_WEP:
 		/* Configure the encKeys to the HW - default keys cache*/
-		return cmdBld_CmdRemoveWepDefaultKey (hCmdBld, pKey, fCb, hCb);
+		return cmdBld_CmdRemoveWepMappingKey (hCmdBld, pKey, fCb, hCb);
 
 	case KEY_TKIP:
 		/* Configure the encKeys to the HW - mapping keys cache*/

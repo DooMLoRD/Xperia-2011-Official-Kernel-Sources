@@ -38,6 +38,7 @@
  * Support for Linux Wireless Extensions
  *
  */
+#define __FILE_ID__ FILE_ID_143
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/if.h>
@@ -48,6 +49,9 @@
 #include "CmdInterpretWext.h"
 #include "privateCmd.h"
 #include "DrvMain.h"
+#include "CmdDispatcher.h"
+#include "mlmeApi.h"
+#include "802_11Defs.h"
 
 /* Routine prototypes */
 
@@ -97,7 +101,7 @@ static const iw_handler aWextHandlers[] = {
 	(iw_handler) NULL,				            /* -- hole -- */
 	(iw_handler) NULL,				            /* -- hole -- */
 	(iw_handler) NULL,		        			/* SIOCSIWRATE */
-	(iw_handler) NULL,		        			/* SIOCGIWRATE */
+	(iw_handler) wlanDrvWext_Handler,		    /* SIOCGIWRATE */
 	(iw_handler) wlanDrvWext_Handler,		    /* SIOCSIWRTS */
 	(iw_handler) wlanDrvWext_Handler,		    /* SIOCGIWRTS */
 	(iw_handler) wlanDrvWext_Handler,		    /* SIOCSIWFRAG */
@@ -157,8 +161,96 @@ static struct iw_statistics *wlanDrvWext_GetWirelessStats(struct net_device *dev
 	return (struct iw_statistics *) cmdHndlr_GetStat (drv->tCommon.hCmdHndlr);
 }
 
-/* Generic callback for WEXT commands */
+/**
+ * Get Guard interval.
+ * return -1 on error. 0 on long and 1 on short.
+ */
+static int getGI(TWlanDrvIfObj *drv)
+{
+	int ret;
+	paramInfo_t pParam;
+	TI_UINT8 *assocRsp;
+	Tdot11HtCapabilitiesUnparse *htCapabilities;
+	TI_UINT16 htCapabilitiesInfo;
 
+	pParam.paramType   = ASSOC_ASSOCIATION_RESP_PARAM;
+	pParam.paramLength = sizeof(TAssocReqBuffer);
+	cmdDispatch_GetParam(drv->tCommon.hCmdDispatch, &pParam);
+
+	/* Make sure buffer is big enough */
+	if(pParam.content.assocReqBuffer.bufferSize < ASSOC_RESP_FIXED_DATA_LEN + sizeof(Tdot11HtCapabilitiesUnparse)) {
+		return -1;
+	}
+
+	assocRsp = pParam.content.assocReqBuffer.buffer;
+
+	ret = mlmeParser_ParseIeBuffer(NULL, &assocRsp[ASSOC_RESP_FIXED_DATA_LEN],
+	                               pParam.content.assocReqBuffer.bufferSize-ASSOC_RESP_FIXED_DATA_LEN,
+	                               HT_CAPABILITIES_IE_ID,
+	                               (TI_UINT8**)&htCapabilities, NULL, 0);
+	if(ret == TI_FALSE)
+		return -1;
+
+	if( ((TI_UINT8*)htCapabilities) + sizeof(Tdot11HtCapabilitiesUnparse) > assocRsp + pParam.content.assocReqBuffer.bufferSize) {
+		os_printf("Corrupt HT_CAPABILITIES_IE. Cannot get GI.\n");
+		return -1;
+	}
+
+	htCapabilitiesInfo = htCapabilities->aHtCapabilitiesIe[0];
+	htCapabilitiesInfo |= htCapabilities->aHtCapabilitiesIe[1] << 8;
+
+	if(htCapabilitiesInfo & 0x20)
+		return 1;
+	else
+		return 0;
+}
+
+/*
+ * Calculate the link speed. Taking GI time in account.
+ */
+static int calcLinkSpeed(TWlanDrvIfObj *drv)
+{
+	int shortGI = getGI(drv);
+	int baseSpeed = drv->tCommon.uLinkSpeed * 100;
+	int newSpeed;
+
+	if(shortGI != 1)
+		return baseSpeed;
+
+	switch(baseSpeed)
+	{
+	case 6500000:
+		newSpeed = 7200000;
+		break;
+	case 13000000:
+		newSpeed = 14400000;
+		break;
+	case 19500000:
+		newSpeed = 21700000;
+		break;
+	case 26000000:
+		newSpeed = 28900000;
+		break;
+	case 39000000:
+		newSpeed = 43300000;
+		break;
+	case 52000000:
+		newSpeed = 57800000;
+		break;
+	case 58500000:
+		newSpeed = 65000000;
+		break;
+	case 65000000:
+		newSpeed = 72200000;
+		break;
+	default:
+		newSpeed = ((baseSpeed / 100) * 111);
+
+	}
+	return newSpeed;
+}
+
+/* Generic callback for WEXT commands */
 int wlanDrvWext_Handler (struct net_device *dev,
                          struct iw_request_info *info,
                          void *iw_req,
@@ -217,6 +309,13 @@ int wlanDrvWext_Handler (struct net_device *dev,
 			my_command.out_buffer = os_memoryAlloc(drv, my_command.out_buffer_len);
 		}
 		param3 = &my_command;
+	}
+	break;
+
+	case SIOCGIWRATE: {
+		struct iw_param *vwrq = (struct iw_param *) iw_req;
+		vwrq->value = calcLinkSpeed(drv);
+		return TI_OK;
 	}
 	break;
 

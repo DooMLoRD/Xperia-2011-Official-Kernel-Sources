@@ -194,9 +194,12 @@ static struct msm_clock msm_clocks[] = {
 		.freq = GPT_HZ,
 		.index = MSM_CLOCK_GPT,
 		.flags =
+#ifdef CONFIG_ARCH_MSM_ARM11
 			MSM_CLOCK_FLAGS_UNSTABLE_COUNT |
 			MSM_CLOCK_FLAGS_ODD_MATCH_WRITE |
-			MSM_CLOCK_FLAGS_DELAYED_WRITE_POST,
+			MSM_CLOCK_FLAGS_DELAYED_WRITE_POST |
+#endif
+			0,
 		.write_delay = 9,
 	},
 	[MSM_CLOCK_DGT] = {
@@ -972,21 +975,6 @@ unsigned long long sched_clock(void)
 	return result; 
 }
 
-static void msm_timer_reset(struct msm_clock *clock)
-{
-	uint32_t timer_val;
-	int retries = 10;
-
-	if (clock && clock->index == MSM_CLOCK_GPT) {
-		do {
-			writel(0, clock->regbase + TIMER_ENABLE);
-			writel(1, clock->regbase + TIMER_CLEAR);
-			timer_val = readl(clock->regbase + TIMER_COUNT_VAL);
-			mdelay(100);
-		} while (retries-- && timer_val);
-	}
-}
-
 static void __init msm_timer_init(void)
 {
 	int i;
@@ -1000,9 +988,6 @@ static void __init msm_timer_init(void)
 		struct msm_clock *clock = &msm_clocks[i];
 		struct clock_event_device *ce = &clock->clockevent;
 		struct clocksource *cs = &clock->clocksource;
-		if (reset_devices)
-			msm_timer_reset(clock);
-
 		writel(0, clock->regbase + TIMER_ENABLE);
 		writel(1, clock->regbase + TIMER_CLEAR);
 		writel(0, clock->regbase + TIMER_COUNT_VAL);

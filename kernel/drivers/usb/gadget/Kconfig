@@ -823,7 +823,6 @@ config USB_G_PRINTER
 config USB_ANDROID
 	boolean "Android Gadget"
 	depends on SWITCH
-	default y
 	help
 	  The Android gadget driver supports multiple USB functions.
 	  The functions can be configured via a board file and may be
@@ -864,6 +863,13 @@ config USB_CSW_HACK
 	help
 	 This csw hack feature is for increasing the performance of the mass
 	 storage
+
+config USB_MARLIN_SCSI_EXTENSIONS
+	boolean "SCSI Command Extenstion for Marlin Device"
+	depends on USB_ANDROID_MASS_STORAGE
+	default n
+	help
+	 The mass storage extension for marlin device.
 
 config USB_ANDROID_RNDIS
 	boolean "Android gadget RNDIS ethernet function"

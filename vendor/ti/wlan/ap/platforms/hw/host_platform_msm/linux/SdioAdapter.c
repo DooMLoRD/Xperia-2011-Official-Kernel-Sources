@@ -252,6 +252,10 @@ int sdioAdapt_ConnectBus (void *        fCbFunc,
 
 int sdioAdapt_DisconnectBus (void)
 {
+	if (pDmaBufAddr) {
+		kfree (pDmaBufAddr);
+		pDmaBufAddr = 0;
+	}
 	return sdioDrv_DisconnectBus();
 }
 

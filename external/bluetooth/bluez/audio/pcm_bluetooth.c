@@ -46,6 +46,13 @@
 
 //#define ENABLE_DEBUG
 
+#if defined(__BIONIC__) && defined(__GNUC__)
+/* Bionic doesn tag pthread_exit as a "return statement"
+ * which causes a compilation error with gcc
+ */
+void pthread_exit(void *value_ptr) __attribute__ ((__noreturn__));
+#endif
+
 #define UINT_SECS_MAX (UINT_MAX / 1000000 - 1)
 
 #define MIN_PERIOD_TIME 1
@@ -139,6 +146,9 @@ struct bluetooth_data {
 	struct bluetooth_a2dp a2dp;			/* A2DP data */
 
 	pthread_t hw_thread;				/* Makes virtual hw pointer move */
+#ifdef __BIONIC__
+	volatile int hw_cancel;				/* Set != 0 to request exit of hw_thread */
+#endif
 	int pipefd[2];					/* Inter thread communication */
 	int stopped;
 	sig_atomic_t reset;				/* Request XRUN handling */
@@ -216,10 +226,23 @@ static void *playback_hw_thread(void *param)
 			data->hw_ptr %= data->io.buffer_size;
 
 			for (n = 0; n < frags; n++) {
+#ifdef __BIONIC__
+				/* write() should be a cancellation point,
+				 * emulate this here */
+				if (data->hw_cancel)
+					pthread_exit(NULL);
+#endif
+
 				/* Notify user that hardware pointer
 				 * has moved * */
+#ifdef __BIONIC__
+				write(data->pipefd[1], &c, 1);
+				if (data->hw_cancel)
+					pthread_exit(NULL);
+#else
 				if (write(data->pipefd[1], &c, 1) < 0)
 					pthread_testcancel();
+#endif
 			}
 
 			/* Reset point of reference to avoid too big values
@@ -248,7 +271,12 @@ iter_sleep:
 		}
 
 		/* Offer opportunity to be canceled by main thread */
+#ifdef __BIONIC__
+		if (data->hw_cancel)
+			pthread_exit(NULL);
+#else
 		pthread_testcancel();
+#endif
 	}
 
 	data->hw_thread = 0;
@@ -301,8 +329,15 @@ static void bluetooth_exit(struct bluetooth_data *data)
 		close(data->stream.fd);
 
 	if (data->hw_thread) {
+#ifdef __BIONIC__
+		data->hw_cancel = 1;
+#else
 		pthread_cancel(data->hw_thread);
+#endif
 		pthread_join(data->hw_thread, 0);
+#ifdef __BIONIC__
+		data->hw_cancel = 0;
+#endif
 	}
 
 	if (a2dp->sbc_initialized)
@@ -348,8 +383,15 @@ static int bluetooth_prepare(snd_pcm_ioplug_t *io)
 	/* As we're gonna receive messages on the server socket, we have to stop the
 	   hw thread that is polling on it, if any */
 	if (data->hw_thread) {
+#ifdef __BIONIC__
+		data->hw_cancel = 1;
+#else
 		pthread_cancel(data->hw_thread);
+#endif
 		pthread_join(data->hw_thread, 0);
+#ifdef __BIONIC__
+		data->hw_cancel = 0;
+#endif
 		data->hw_thread = 0;
 	}
 
@@ -831,10 +873,15 @@ static int bluetooth_playback_poll_revents(snd_pcm_ioplug_t *io,
 	if (io->state != SND_PCM_STATE_PREPARED)
 		ret = read(pfds[0].fd, buf, 1);
 
+	/* Alsa lib does not check for POLLHUP */
+	if (pfds[1].revents & POLLHUP)
+		pfds[1].revents = (pfds[1].revents | POLLERR);
+
 	if (pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL))
 		io->state = SND_PCM_STATE_DISCONNECTED;
 
-	*revents = (pfds[0].revents & POLLIN) ? POLLOUT : 0;
+	revents[0] = (pfds[0].revents & POLLIN) ? POLLOUT : 0;
+	revents[1] = pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL);
 
 	return 0;
 }

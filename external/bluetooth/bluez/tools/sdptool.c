@@ -1611,7 +1611,7 @@ static int add_handsfree_ag(sdp_session_t *session, svc_info_t *si)
 	uint8_t u8 = si->channel ? si->channel : 7;
 	uint16_t u16 = 0x17;
 #ifdef ANDROID
-	u16 = 0x07;
+	u16 = 0x03;
 #endif
 	sdp_data_t *channel, *features;
 	uint8_t netid = si->network ? si->network : 0x01; // ???? profile document

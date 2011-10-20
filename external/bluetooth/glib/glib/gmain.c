@@ -3036,7 +3036,7 @@ static void
 g_main_context_wakeup_unlocked (GMainContext *context)
 {
 #ifdef G_THREADS_ENABLED
-  if (g_thread_supported() && context->poll_waiting)
+  if (context->poll_waiting)
     {
       context->poll_waiting = FALSE;
 #ifndef G_OS_WIN32

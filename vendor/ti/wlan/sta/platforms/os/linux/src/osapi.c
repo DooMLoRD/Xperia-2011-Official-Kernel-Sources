@@ -36,6 +36,8 @@
  * src/osapi.c
  *
  */
+#define __FILE_ID__ FILE_ID_144
+
 #include "tidef.h"
 #include "arch_ti.h"
 
@@ -543,9 +545,13 @@ TI_INT32 os_IndicateEvent (TI_HANDLE OsContext, IPC_EV_DATA* pData)
 		break;
 
 	case IPC_EVENT_LINK_SPEED:
-		drv->tCommon.uLinkSpeed = (*(TI_UINT32*)pData->uBuffer * 10000) / 2;
+	{
+		TI_UINT32 rate = *(TI_UINT32*)pData->uBuffer;
+		rate = rate == NET_RATE_MCS7 ? 130 : rate; // Convert NET_RATE_MCS7 to 65M
+		drv->tCommon.uLinkSpeed = (rate * 10000) / 2;
 		ti_nodprintf(TIWLAN_LOG_INFO, "\n  Link Speed = 0x%08x \n",drv->tCommon.uLinkSpeed);
 		break;
+	}
 	}
 
 	return TI_OK;
@@ -610,6 +616,26 @@ int os_wake_lock_timeout (TI_HANDLE OsContext)
 	}
 	/* printk("%s: %d\n", __func__, ret); */
 	return ret;
+}
+
+/*-----------------------------------------------------------------------------
+Routine Name:  os_wake_lock_deauth
+
+Routine Description: Called to prevent system from suspend for 3 sec on deauth
+
+Arguments:     OsContext - handle to OS context
+
+Return Value:  none
+-----------------------------------------------------------------------------*/
+void os_wake_lock_deauth(TI_HANDLE OsContext)
+{
+	TWlanDrvIfObj *drv = (TWlanDrvIfObj *)OsContext;
+
+	if (drv) {
+#ifdef CONFIG_HAS_WAKELOCK
+		wake_lock_timeout(&drv->wl_deauth, HZ*3);
+#endif
+	}
 }
 
 /*-----------------------------------------------------------------------------

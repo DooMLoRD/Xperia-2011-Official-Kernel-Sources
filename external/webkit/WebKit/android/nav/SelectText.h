@@ -1,5 +1,7 @@
 /*
  * Copyright 2008, The Android Open Source Project
+ * Portions created by Sony Ericsson are Copyright (C) 2011
+ * Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -22,6 +24,11 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+* This file has been modified by SonyEricsson.
+* 2011-05-24:
+*      Reference count m_picture member of SelectText
+*/
 
 #ifndef SELECT_TEXT_H
 #define SELECT_TEXT_H
@@ -42,6 +49,7 @@ class CachedRoot;
 class SelectText : public DrawExtra {
 public:
     SelectText();
+    virtual ~SelectText();
     virtual void draw(SkCanvas* , LayerAndroid* );
     void extendSelection(const SkPicture* , int x, int y);
     const String getSelection();

@@ -4,7 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010 Sony Ericsson Mobile Communications AB
+ *  Copyright (C) 2010-2011 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -383,7 +383,6 @@ struct avdtp_stream {
 
 struct avdtp {
 	int ref;
-	int free_lock;
 
 	uint16_t version;
 
@@ -1081,14 +1080,10 @@ static void connection_lost(struct avdtp *session, int err)
 								err != EACCES)
 		audio_device_cancel_authorization(dev, auth_cb, session);
 
-	session->free_lock = 1;
-
 	finalize_discovery(session, err);
 
 	g_slist_foreach(session->streams, (GFunc) release_stream, session);
 	session->streams = NULL;
-
-	session->free_lock = 0;
 
 	if (session->io) {
 		g_io_channel_shutdown(session->io, FALSE, NULL);
@@ -1140,8 +1135,7 @@ void avdtp_unref(struct avdtp *session)
 
 		if (session->io)
 			set_disconnect_timer(session);
-		else if (!session->free_lock) /* Drop the local ref if we
-						 aren't connected */
+		else if (session->state == AVDTP_SESSION_STATE_DISCONNECTED)
 			session->ref--;
 	}
 
@@ -2595,6 +2589,7 @@ static gboolean avdtp_discover_resp(struct avdtp *session,
 {
 	int sep_count, i;
 	uint8_t getcap_cmd;
+	int sep_inuse_count = 0;
 
 	if (session->version >= 0x0103 && session->server->version >= 0x0103)
 		getcap_cmd = AVDTP_GET_ALL_CAPABILITIES;
@@ -2617,8 +2612,10 @@ static gboolean avdtp_discover_resp(struct avdtp *session,
 
 		sep = find_remote_sep(session->seps, resp->seps[i].seid);
 		if (!sep) {
-			if (resp->seps[i].inuse && !stream)
+			if (resp->seps[i].inuse && !stream) {
+				sep_inuse_count++;
 				continue;
+			}
 			sep = g_new0(struct avdtp_remote_sep, 1);
 			session->seps = g_slist_append(session->seps, sep);
 		}
@@ -2638,6 +2635,11 @@ static gboolean avdtp_discover_resp(struct avdtp *session,
 			break;
 		}
 	}
+
+	/* if all sep are in use(it is not send get capabilities command);
+	 * call finalize discovery for disconnect the session */
+	if(sep_count == sep_inuse_count)
+		finalize_discovery(session, EIO);
 
 	return TRUE;
 }

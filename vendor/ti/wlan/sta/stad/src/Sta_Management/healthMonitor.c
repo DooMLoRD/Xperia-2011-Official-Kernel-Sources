@@ -59,6 +59,7 @@
 #include "DrvMain.h"
 #include "DrvMainModules.h"
 #include "TWDriverInternal.h"
+#include "WlanDrvCommon.h"
 
 
 typedef struct {
@@ -368,6 +369,7 @@ void healthMonitor_proccessFailureEvent (TI_HANDLE hHealthMonitor, TI_BOOL bTwdI
 			drvMain_Recovery (pHealthMonitor->hDrvMain);
 		} else {
 			TRACE0(pHealthMonitor->hReport, REPORT_SEVERITY_CONSOLE, "healthMonitor_proccessFailureEvent: Recovery is disabled in tiwlan.ini, abort recovery process\n");
+			wlanDrvIf_UpdateDriverState(pHealthMonitor->hOs, DRV_STATE_FAILED);
 			WLAN_OS_REPORT(("healthMonitor_proccessFailureEvent: Recovery is disabled in tiwlan.ini, abort recovery process\n"));
 		}
 

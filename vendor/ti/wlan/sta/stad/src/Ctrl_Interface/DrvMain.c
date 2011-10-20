@@ -165,6 +165,7 @@ typedef struct {
 	TActionObject    *pCurrAction;  /* The action that is being processed */
 	EActionType       eLastAction;  /* The last action (start/stop) handled by the driver */
 	TI_HANDLE         hPMTimer;     /* safety timer for suspend */
+	TI_UINT32         uLastStates;   /* The 4 last states visited by this SM */
 	TI_UINT32         uPSFailedCount; /* Number of consecutive PS_FAILED events when trying to suspend */
 } TDrvMain;
 
@@ -726,6 +727,17 @@ TI_STATUS drvMain_Destroy (TI_HANDLE  hDrvMain)
 	return TI_OK;
 }
 
+static void drvMain_ChangeState(TI_HANDLE hDrvMain, ESmState state)
+{
+	/*
+	 * Every state is represented as 8 bits
+	*/
+	TDrvMain *pDrvMain = (TDrvMain *)hDrvMain;
+	pDrvMain->uLastStates >>= 0x8;
+	pDrvMain->uLastStates |= ((state & 0xff) << 0x18);
+	pDrvMain->eSmState = state;
+}
+
 void drvMain_SmeStop (TI_HANDLE hDrvMain)
 {
 	drvMain_SmEvent (hDrvMain, SM_EVENT_DISCONNECTED);
@@ -1093,6 +1105,7 @@ static void drvMain_InitLocals (TDrvMain *pDrvMain)
 	pDrvMain->uNumOfRecoveryAttempts = 0;
 	pDrvMain->eLastAction           = ACTION_TYPE_NONE;
 	pDrvMain->bWasOperational       = TI_FALSE;
+	pDrvMain->uLastStates           = 0;
 	pDrvMain->uPSFailedCount        = 0;
 
 	/* Create and initialize the actions queue */
@@ -1313,6 +1326,15 @@ TI_STATUS drvMain_InsertAction (TI_HANDLE hDrvMain, EActionType eAction)
 
 	TRACE1(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_INFORMATION , "drvMain_InsertAction(): Called. Action = %d\n", eAction);
 
+	/* Can't suspend if recovery is in progress */
+	if (eAction == ACTION_TYPE_SUSPEND && pDrvMain->bRecovery) {
+		TRACE0(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_ERROR,
+			"drvMain_InsertAction(): "
+			"Can't suspend with recovery ongoing!\n");
+		return TI_NOK;
+	}
+
+
 	/* Allocate action structure */
 	pNewAction = os_memoryAlloc (pDrvMain->tStadHandles.hOs, sizeof(TActionObject));
 	if (pNewAction == NULL) {
@@ -1355,8 +1377,8 @@ TI_STATUS drvMain_InsertAction (TI_HANDLE hDrvMain, EActionType eAction)
 
 	/* Free signalling object and action structure */
 	os_SignalObjectFree (pDrvMain->tStadHandles.hOs, pNewAction->pSignalObject);
-	os_memoryFree (pDrvMain->tStadHandles.hOs, pNewAction, sizeof(TActionObject));
 	pNewAction->pSignalObject = NULL;
+	os_memoryFree (pDrvMain->tStadHandles.hOs, pNewAction, sizeof(TActionObject));
 
 	/* Driver is still in operational mode after a suspend action. This means that the
            suspend failed. Tell caller that suspend failed */
@@ -1366,6 +1388,15 @@ TI_STATUS drvMain_InsertAction (TI_HANDLE hDrvMain, EActionType eAction)
 	if (pDrvMain->eSmState == SM_STATE_FAILED) {
 		return TI_NOK;
 	}
+
+	/* If recovery happened while trying to suspend return an error */
+	if (eAction == ACTION_TYPE_SUSPEND && pDrvMain->bRecovery) {
+		TRACE0(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_ERROR,
+			"drvMain_InsertAction(): "
+			"Recovery was triggered during suspend!\n");
+		return TI_NOK;
+	}
+
 	return TI_OK;
 }
 
@@ -1559,7 +1590,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 * Disable further actions, start watchdog timer and request for the ini-file.
 		 */
 		if (eEvent == SM_EVENT_START) {
-			pDrvMain->eSmState = SM_STATE_WAIT_INI_FILE;
+			drvMain_ChangeState(pDrvMain,SM_STATE_WAIT_INI_FILE);
 			context_DisableClient (pDrvMain->tStadHandles.hContext, pDrvMain->uContextId);
 			pDrvMain->tFileInfo.eFileType = FILE_TYPE_INI;
 			eStatus = wlanDrvIf_GetFile (hOs, &pDrvMain->tFileInfo);
@@ -1572,7 +1603,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 *     turn on the device and request for the NVS file.
 		 */
 		if (eEvent == SM_EVENT_INI_FILE_READY) {
-			pDrvMain->eSmState = SM_STATE_WAIT_NVS_FILE;
+			drvMain_ChangeState(pDrvMain,SM_STATE_WAIT_NVS_FILE);
 			drvMain_SetDefaults (hDrvMain, pDrvMain->tFileInfo.pBuffer, pDrvMain->tFileInfo.uLength);
 			hPlatform_DevicePowerOn (pDrvMain->tStadHandles.hOs);
 
@@ -1613,7 +1644,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 			 * Start HW-Init process providing the NVS file.
 			 */
 			if (eEvent == SM_EVENT_NVS_FILE_READY) {
-				pDrvMain->eSmState = SM_STATE_HW_INIT;
+				drvMain_ChangeState(pDrvMain,SM_STATE_HW_INIT);
 				eStatus = drvMain_InitHw (hDrvMain, pDrvMain->tFileInfo.pBuffer, pDrvMain->tFileInfo.uLength);
 			}
 		}
@@ -1625,7 +1656,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 */
 		if (eEvent == SM_EVENT_HW_INIT_COMPLETE) {
 			pDrvMain->tFileInfo.eFileType = FILE_TYPE_FW;
-			pDrvMain->eSmState = SM_STATE_DOWNLOAD_FW_FILE;
+			drvMain_ChangeState(pDrvMain,SM_STATE_DOWNLOAD_FW_FILE);
 			eStatus = wlanDrvIf_GetFile (hOs, &pDrvMain->tFileInfo);
 		}
 		break;
@@ -1633,9 +1664,9 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		if (eEvent == SM_EVENT_FW_FILE_READY) {
 			pDrvMain->tFileInfo.eFileType = FILE_TYPE_FW_NEXT;
 			if (pDrvMain->tFileInfo.bLast == TI_TRUE) {
-				pDrvMain->eSmState = SM_STATE_FW_INIT;
+				drvMain_ChangeState(pDrvMain,SM_STATE_FW_INIT);
 			} else {
-				pDrvMain->eSmState = SM_STATE_WAIT_FW_FILE;
+				drvMain_ChangeState(pDrvMain,SM_STATE_WAIT_FW_FILE);
 			}
 			/*
 			 * We've got the FW image file.
@@ -1646,7 +1677,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		break;
 	case SM_STATE_WAIT_FW_FILE:
 		if (eEvent == SM_EVENT_FW_INIT_COMPLETE) {
-			pDrvMain->eSmState = SM_STATE_DOWNLOAD_FW_FILE;
+			drvMain_ChangeState(pDrvMain,SM_STATE_DOWNLOAD_FW_FILE);
 			eStatus = wlanDrvIf_GetFile (hOs, &pDrvMain->tFileInfo);
 		}
 		break;
@@ -1661,7 +1692,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 *     interrupts, and the interrupts are needed for the configuration process!
 		 */
 		if (eEvent == SM_EVENT_FW_INIT_COMPLETE) {
-			pDrvMain->eSmState = SM_STATE_FW_CONFIG;
+			drvMain_ChangeState(pDrvMain,SM_STATE_FW_CONFIG);
 			if (!pDrvMain->bRecovery) {
 				/*update the state before unblocking the application so command will not be rejected*/
 				wlanDrvIf_UpdateDriverState (hOs, DRV_STATE_RUNNING);
@@ -1687,7 +1718,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 */
 
 		if (eEvent == SM_EVENT_FW_CONFIG_COMPLETE) {
-			pDrvMain->eSmState = SM_STATE_OPERATIONAL;
+			drvMain_ChangeState(pDrvMain,SM_STATE_OPERATIONAL);
 			if (pDrvMain->bRecovery) {
 				pDrvMain->uNumOfRecoveryAttempts = 0;
 				drvMain_RecoveryNotify (pDrvMain);
@@ -1715,14 +1746,14 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		if (eEvent == SM_EVENT_STOP) {
 			context_DisableClient (pDrvMain->tStadHandles.hContext, pDrvMain->uContextId);
 			tmr_UpdateDriverState (pDrvMain->tStadHandles.hTimer, TI_FALSE);
-			pDrvMain->eSmState = SM_STATE_DISCONNECTING;
+			drvMain_ChangeState(pDrvMain,SM_STATE_DISCONNECTING);
 			wlanDrvIf_UpdateDriverState (hOs, DRV_STATE_STOPING);
 			sme_Stop (pDrvMain->tStadHandles.hSme);
 			eStatus = TI_OK;
 		} else if (eEvent == SM_EVENT_RECOVERY) {
 			context_DisableClient (pDrvMain->tStadHandles.hContext, pDrvMain->uContextId);
 			tmr_UpdateDriverState (pDrvMain->tStadHandles.hTimer, TI_FALSE);
-			pDrvMain->eSmState = SM_STATE_STOPPING;
+			drvMain_ChangeState(pDrvMain,SM_STATE_STOPPING);
 			eStatus = drvMain_StopActivities (pDrvMain);
 		} else if (eEvent == SM_EVENT_SUSPEND) {
 			paramInfo_t param;
@@ -1741,7 +1772,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 			TRACE1(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_INFORMATION, "Connection status: %d\n", param.content.smeSmConnectionStatus);
 
 			if (param.content.smeSmConnectionStatus == eDot11Associated) {
-				pDrvMain->eSmState = SM_STATE_SUSPENDING;
+				drvMain_ChangeState(pDrvMain,SM_STATE_SUSPENDING);
 
 				/* start suspension process */
 				if (powerMgr_suspend(pDrvMain->tStadHandles.hPowerMgr) == TI_NOK) {
@@ -1763,7 +1794,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 						hDrvMain,
 						300, /* ms */
 						TI_FALSE);
-				pDrvMain->eSmState = SM_STATE_FULLY_SUSPENDING;
+				drvMain_ChangeState(pDrvMain,SM_STATE_FULLY_SUSPENDING);
 				wlanDrvIf_UpdateDriverState (hOs, DRV_STATE_STOPING);
 				sme_Stop (pDrvMain->tStadHandles.hSme);
 				eStatus = TI_OK;
@@ -1782,7 +1813,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 */
 
 		if (eEvent == SM_EVENT_DISCONNECTED) {
-			pDrvMain->eSmState = SM_STATE_STOPPING;
+			drvMain_ChangeState(pDrvMain,SM_STATE_STOPPING);
 			eStatus = drvMain_StopActivities (pDrvMain);
 		}
 		break;
@@ -1802,11 +1833,11 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 			if (pDrvMain->bRecovery) {
 				hPlatform_DevicePowerOn(
 					pDrvMain->tStadHandles.hOs);
-				pDrvMain->eSmState = SM_STATE_WAIT_NVS_FILE;
+				drvMain_ChangeState(pDrvMain,SM_STATE_WAIT_NVS_FILE);
 				pDrvMain->tFileInfo.eFileType = FILE_TYPE_NVS;
 				eStatus = wlanDrvIf_GetFile (hOs, &pDrvMain->tFileInfo);
 			} else {
-				pDrvMain->eSmState = SM_STATE_STOPPED;
+				drvMain_ChangeState(pDrvMain,SM_STATE_STOPPED);
 				context_SetSuspensionState(pDrvMain->tStadHandles.hContext, TI_FALSE);
 				drvMain_ClearQueuedEvents (pDrvMain);
 				scr_notifyFWReset(pDrvMain->tStadHandles.hSCR);
@@ -1827,7 +1858,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		if (eEvent == SM_EVENT_START) {
 			context_DisableClient (pDrvMain->tStadHandles.hContext, pDrvMain->uContextId);
 			hPlatform_DevicePowerOn (pDrvMain->tStadHandles.hOs);
-			pDrvMain->eSmState = SM_STATE_WAIT_NVS_FILE;
+			drvMain_ChangeState(pDrvMain,SM_STATE_WAIT_NVS_FILE);
 			pDrvMain->tFileInfo.eFileType = FILE_TYPE_NVS;
 			eStatus = wlanDrvIf_GetFile (hOs, &pDrvMain->tFileInfo);
 		} else if (eEvent == SM_EVENT_SUSPEND) {
@@ -1845,7 +1876,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 				context_DisableClient (pDrvMain->tStadHandles.hContext, pDrvMain->uContextId);
 				hPlatform_DevicePowerOn(
 					pDrvMain->tStadHandles.hOs);
-				pDrvMain->eSmState = SM_STATE_WAIT_NVS_FILE;
+				drvMain_ChangeState(pDrvMain,SM_STATE_WAIT_NVS_FILE);
 				pDrvMain->tFileInfo.eFileType = FILE_TYPE_NVS;
 				eStatus = wlanDrvIf_GetFile (hOs, &pDrvMain->tFileInfo);
 			} else {
@@ -1862,7 +1893,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		 * Turn off the device and move to FAILED state.
 		 */
 
-		pDrvMain->eSmState = SM_STATE_FAILED;
+		drvMain_ChangeState(pDrvMain,SM_STATE_FAILED);
 		context_SetSuspensionState(pDrvMain->tStadHandles.hContext, TI_FALSE);
 		txnQ_DisconnectBus (pDrvMain->tStadHandles.hTxnQ);
 		hPlatform_DevicePowerOff (pDrvMain->tStadHandles.hOs);
@@ -1870,11 +1901,12 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		if (!pDrvMain->bRecovery) {
 			os_SignalObjectSet (hOs, pDrvMain->pCurrAction->pSignalObject);
 		} else if (pDrvMain->uNumOfRecoveryAttempts < MAX_NUM_OF_RECOVERY_TRIGGERS) {
-			pDrvMain->eSmState = SM_STATE_STOPPING;
+			pDrvMain->uNumOfRecoveryAttempts++;
+			drvMain_ChangeState(pDrvMain,SM_STATE_STOPPING);
 			eStatus = drvMain_StopActivities (pDrvMain);
 		}
-		WLAN_OS_REPORT(("[WLAN] Exit application\n"));
-		pDrvMain->bRecovery = TI_FALSE;
+		else
+			WLAN_OS_REPORT(("[WLAN] Exit application\n"));
 		break;
 	case SM_STATE_FAILED:
 		/* Nothing to do except waiting for Destroy */
@@ -1885,13 +1917,13 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 			tmr_StopTimer (pDrvMain->hPMTimer);
 			/* suspension has been completed */
 			TRACE0(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_INFORMATION, "Timed out waiting for disconnect on full suspend.\n");
-			pDrvMain->eSmState = SM_STATE_DISCONNECTING;
+			drvMain_ChangeState(pDrvMain,SM_STATE_DISCONNECTING);
 			sme_StopNoWait(pDrvMain->tStadHandles.hSme);
 			eStatus = TI_OK;
 		}
 		if (eEvent == SM_EVENT_DISCONNECTED) {
 			tmr_StopTimer (pDrvMain->hPMTimer);
-			pDrvMain->eSmState = SM_STATE_STOPPING;
+			drvMain_ChangeState(pDrvMain,SM_STATE_STOPPING);
 			eStatus = drvMain_StopActivities (pDrvMain);
 		}
 		break;
@@ -1902,7 +1934,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 			/* suspension has been completed */
 			TRACE0(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_INFORMATION, "Suspension has been completed. enable all events.\n");
 			context_SetSuspensionState(pDrvMain->tStadHandles.hContext, TI_FALSE);
-			pDrvMain->eSmState = SM_STATE_SUSPENDED;
+			drvMain_ChangeState(pDrvMain,SM_STATE_SUSPENDED);
 
 			/* enable FW data events */
 			TWD_SetInitMask(pDrvMain->tStadHandles.hTWD, TI_FALSE);
@@ -1915,32 +1947,37 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		if (eEvent == SM_EVENT_PS_FAILED) {
 			tmr_StopTimer (pDrvMain->hPMTimer);
 
-			/* first - restore original settings */
-			powerMgr_resume(pDrvMain->tStadHandles.hPowerMgr);
-
 			if(pDrvMain->uPSFailedCount >= PS_FAILED_COUNT_MAX) {
-				/* suspension failed twice. we should power off the chip. */
+				/* suspension failed x time in a row. Disconnect and power off the chip. */
+				powerMgr_resume(pDrvMain->tStadHandles.hPowerMgr);
 				TRACE0(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_WARNING, "Entering PS failed. restore settings and power off the chip\n");
-				pDrvMain->eSmState = SM_STATE_DISCONNECTING;
+				drvMain_ChangeState(pDrvMain,SM_STATE_DISCONNECTING);
 				wlanDrvIf_UpdateDriverState (hOs, DRV_STATE_STOPING);
-				sme_StopNoWait (pDrvMain->tStadHandles.hSme);
+				sme_Stop (pDrvMain->tStadHandles.hSme);
 				pDrvMain->uPSFailedCount = 0;
 
 			}
 			else {
 				/* Suspension failed. Go back to operational */
 				TRACE0(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_INFORMATION, "Entering PS failed. Go back to operational\n");
+				os_wake_lock_timeout_enable(hOs);
+				tmr_UpdateDriverState (pDrvMain->tStadHandles.hTimer, TI_TRUE);
+				powerMgr_resume(pDrvMain->tStadHandles.hPowerMgr);
 				context_EnableClient (pDrvMain->tStadHandles.hContext, pDrvMain->uContextId);
 				context_SetSuspensionState(pDrvMain->tStadHandles.hContext, TI_FALSE);
-				tmr_UpdateDriverState (pDrvMain->tStadHandles.hTimer, TI_TRUE);
 				TWD_SetInitMask(pDrvMain->tStadHandles.hTWD, TI_FALSE);
-				pDrvMain->eSmState = SM_STATE_OPERATIONAL;
+				drvMain_ChangeState(pDrvMain,SM_STATE_OPERATIONAL);
 				pDrvMain->eLastAction = ACTION_TYPE_RESUME;
 				os_SignalObjectSet (hOs, pDrvMain->pCurrAction->pSignalObject);
 				pDrvMain->uPSFailedCount++;
 				pDrvMain->bWasOperational = TI_FALSE;
+				os_wake_lock_timeout(hOs);
 			}
 			eStatus = TI_OK;
+		}
+		if(eEvent == SM_EVENT_RECOVERY) {
+			/* Release caller and fail suspend. Recovery will continue as normal */
+			os_SignalObjectSet (hOs, pDrvMain->pCurrAction->pSignalObject);
 		}
 		break;
 
@@ -1952,10 +1989,9 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 
 			pDrvMain->uPSFailedCount = 0;
 
-			powerMgr_resume(pDrvMain->tStadHandles.hPowerMgr);
-
-			pDrvMain->eSmState = SM_STATE_OPERATIONAL;
 			tmr_UpdateDriverState (pDrvMain->tStadHandles.hTimer, TI_TRUE);
+			powerMgr_resume(pDrvMain->tStadHandles.hPowerMgr);
+			drvMain_ChangeState(pDrvMain,SM_STATE_OPERATIONAL);
 
 			/* clear flag */
 			pDrvMain->bWasOperational = TI_FALSE;
@@ -1977,7 +2013,7 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 	        (pDrvMain->eSmState != SM_STATE_FAILED) &&
 	        (pDrvMain->eSmState != SM_STATE_STOPPING_ON_FAIL)) {
 		TRACE3(pDrvMain->tStadHandles.hReport, REPORT_SEVERITY_ERROR , "drvMain_Sm: eEvent=%u at state=%u, status=%d\n", eEvent, pDrvMain->eSmState, eStatus);
-		pDrvMain->eSmState = SM_STATE_STOPPING_ON_FAIL;
+		drvMain_ChangeState(pDrvMain,SM_STATE_STOPPING_ON_FAIL);
 		wlanDrvIf_UpdateDriverState (hOs, DRV_STATE_FAILED);
 
 		/*

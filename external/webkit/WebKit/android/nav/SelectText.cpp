@@ -1,5 +1,7 @@
 /*
  * Copyright 2008, The Android Open Source Project
+ * Portions created by Sony Ericsson are Copyright (C) 2011
+ * Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -22,6 +24,11 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+* This file has been modified by SonyEricsson.
+* 2011-05-24:
+*      Reference count m_picture member of SelectText
+*/
 
 #define LOG_TAG "webviewglue"
 
@@ -1273,6 +1280,11 @@ SelectText::SelectText()
     m_picture = 0;
 }
 
+SelectText::~SelectText()
+{
+    SkSafeUnref(m_picture);
+}
+
 void SelectText::draw(SkCanvas* canvas, LayerAndroid* layer)
 {
     // Gmail makes layers appear dynamically the page scrolls. The picture
@@ -1282,9 +1294,11 @@ void SelectText::draw(SkCanvas* canvas, LayerAndroid* layer)
     if (layer->uniqueId() != -1)
         return;
     // FIXME: layer may not own the original selected picture
+    SkSafeUnref(m_picture);
     m_picture = layer->picture();
     if (!m_picture)
         return;
+    SkSafeRef(m_picture);
     DBG_NAV_LOGD("m_extendSelection=%d m_drawPointer=%d", m_extendSelection, m_drawPointer);
     if (m_extendSelection)
         drawSelectionRegion(canvas);
@@ -1369,7 +1383,9 @@ void SelectText::extendSelection(const SkPicture* picture, int x, int y)
         }
         DBG_NAV_LOGD("selStart clip=(%d,%d,%d,%d)", clipRect.fLeft,
             clipRect.fTop, clipRect.fRight, clipRect.fBottom);
+        SkSafeUnref(m_picture);
         m_picture = picture;
+        SkSafeRef(m_picture);
         FirstCheck center(m_original.fX, m_original.fY, clipRect);
         m_selStart = m_selEnd = findClosest(center, *picture, clipRect, &base);
         m_startBase = m_endBase = base;
@@ -1476,8 +1492,11 @@ void SelectText::moveSelection(const SkPicture* picture, int x, int y)
     SkIRect clipRect = m_visibleRect;
     clipRect.join(m_selStart);
     clipRect.join(m_selEnd);
-    if (!m_extendSelection)
+    if (!m_extendSelection) {
+        SkSafeUnref(m_picture);
         m_picture = picture;
+        SkSafeRef(m_picture);
+    }
     FirstCheck center(x, y, clipRect);
     int base;
     SkIRect found = findClosest(center, *picture, clipRect, &base);

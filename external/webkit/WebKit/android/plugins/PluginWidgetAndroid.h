@@ -163,6 +163,8 @@ struct PluginWidgetAndroid {
      */
     void requestCenterFitZoom();
 
+    bool isVisible() { return m_visible; }
+
 private:
     void computeVisiblePluginRect();
     void scrollToVisiblePluginRect();

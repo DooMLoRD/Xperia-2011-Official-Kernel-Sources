@@ -2,6 +2,7 @@
  * TSIF Driver
  *
  * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2010 Sony Ericsson Mobile Communications AB
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -36,6 +37,9 @@
 #include <linux/tsif_api.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>          /* kfree, kzalloc */
+
+#include <linux/pm_runtime.h>
+#include <linux/slab.h>         /* kfree, kzalloc */
 
 #include <mach/gpio.h>
 #include <mach/dma.h>

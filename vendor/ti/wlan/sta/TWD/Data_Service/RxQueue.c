@@ -61,6 +61,7 @@
 #define SEQ_NUM_MASK 0xFFF
 
 
+#define TID_CLIENT_NONE	MAX_NUM_OF_802_1d_TAGS
 /************************ static structures declaration *****************************/
 
 /* structure describe one entry of save packet information in the packet queue array */
@@ -82,6 +83,9 @@ typedef struct {
 	TI_UINT32	        aTidWinSize;
 	/* expected sequence number (ESN) */
 	TI_UINT16	        aTidExpectedSn;
+
+	TI_UINT16			uStoredPackets;			/* number of packets in aPacketsQueue */
+	TI_UINT32			uMissingPktTimeStamp;	/* timestamp [ms] when detected a missing packet (if still missing BA_SESSION_TIME_TO_SLEEP [ms] later, the queued packets will be passed). 0xffffffff means no missing packets */
 } TRxQueueTidDataBase;
 
 /* structure describe set of data that assist of manage one SA RxQueue arrays */
@@ -89,31 +93,87 @@ typedef struct {
 	TRxQueueTidDataBase tSa1ArrayMng [MAX_NUM_OF_802_1d_TAGS];
 } TRxQueueArraysMng;
 
-typedef struct {
-	TI_BOOL             bPacketMiss;                /* True - Wait for missing packets start timer
-                                                       False - all packets received in order */
-	TI_UINT16           aPacketsStored;             /* Represent the number of packets in Queue, 0 - Queue is empty */
-	TI_UINT8            aFrameTid;                  /* save the TID of the missing packet */
-} TPacketTimeout;
-
-
 /* main RxQueue structure in order to management the packets disordered array. */
 typedef struct {
 	TI_HANDLE           hOs;                        /* OS handler */
 	TI_HANDLE           hReport;                    /* Report handler */
-	TI_HANDLE           hTimer;                     /* Timer Handle */
 	TRxQueueArraysMng   tRxQueueArraysMng;          /* manage each Source Address RxQueue arrays */
 	TPacketReceiveCb    tReceivePacketCB;           /* Receive packets CB address */
 	TI_HANDLE           hReceivePacketCB_handle;    /* Receive packets CB handler */
-	TPacketTimeout      tPacketTimeout;             /* save information about the missing packet */
+
+	TI_HANDLE           hMissingPktTimer;           /* missing packets timer */
+	TI_UINT8	    uMissingPktTimerClient;		/* tid (number) the timer is running for; TID_CLIENT_NONE if not running */
 } TRxQueue;
 
 
 /************************ static function declaration *****************************/
 
 static TI_STATUS RxQueue_PassPacket (TI_HANDLE hRxQueue, TI_STATUS tStatus, const void *pBuffer);
-static void RxQueue_PacketTimeOut (TI_HANDLE hRxQueue, TI_BOOL bTwdInitOccured);
+static void MissingPktTimeout (TI_HANDLE hRxQueue, TI_BOOL bTwdInitOccured);
 
+/**
+ * \brief	Stop the timer guarding the waiting for a missing packet
+ *
+ *			Stops the timer ONLY for the specified TID - other TID's timers will
+ *			still run (if started)
+ *
+ * \param	uTid	index of TID timer to stop
+ */
+static void StopMissingPktTimer(TRxQueue *pRxQueue, TI_UINT8 uTid)
+{
+	TI_UINT8 i;
+	TI_UINT32 uMinRequestTime;
+	TI_UINT8 uNextClient;
+	TI_UINT32 uNowMs;
+	TRxQueueTidDataBase *pTidInfo = &(pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[uTid]);
+
+	/* mark this TID no longer needs the timer */
+	pTidInfo->uMissingPktTimeStamp = 0xffffffff;
+
+	/* if timer was not started for this TID, don't stop it */
+	if ( pRxQueue->uMissingPktTimerClient != uTid ) {
+		return;
+	}
+
+	uMinRequestTime = 0xffffffff;
+	uNextClient = 0;
+	uNowMs = os_timeStampMs(pRxQueue->hOs);
+
+	/* stop timer */
+	tmr_StopTimer(pRxQueue->hMissingPktTimer);
+	pRxQueue->uMissingPktTimerClient = TID_CLIENT_NONE;
+
+	/* find the minimum request time */
+	for (i = 0; i < MAX_NUM_OF_802_1d_TAGS; i++) {
+		if (pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[i].uMissingPktTimeStamp < uMinRequestTime) {
+			uMinRequestTime = pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[i].uMissingPktTimeStamp;
+			uNextClient = i;
+		}
+	}
+
+	/* restart timer if any requests left */
+	if (uMinRequestTime < 0xffffffff) {
+		tmr_StartTimer (pRxQueue->hMissingPktTimer, MissingPktTimeout, pRxQueue, uMinRequestTime + BA_SESSION_TIME_TO_SLEEP - uNowMs, TI_FALSE);
+		pRxQueue->uMissingPktTimerClient = uNextClient;
+	}
+}
+
+/**
+ * \brief	Starts the timer guarding the waiting for a missing packet
+ *
+ * \param	uTid	index of TID timer to start
+ */
+static void StartMissingPktTimer(TRxQueue *pRxQueue, TI_UINT8 uTid)
+{
+	/* request to clear this TID's queue */
+	pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[uTid].uMissingPktTimeStamp = os_timeStampMs(pRxQueue->hOs);
+
+	/* start timer (if not started already) */
+	if ( pRxQueue->uMissingPktTimerClient == TID_CLIENT_NONE ) {
+		tmr_StartTimer (pRxQueue->hMissingPktTimer, MissingPktTimeout, pRxQueue, BA_SESSION_TIME_TO_SLEEP, TI_FALSE);
+		pRxQueue->uMissingPktTimerClient = uTid;
+	}
+}
 
 /**
  * \fn     RxQueue_Create()
@@ -162,9 +222,9 @@ TI_STATUS RxQueue_Destroy (TI_HANDLE hRxQueue)
 	if (hRxQueue) {
 		pRxQueue = (TRxQueue *)hRxQueue;
 
-		if (pRxQueue->hTimer) {
-			tmr_DestroyTimer (pRxQueue->hTimer);
-			pRxQueue->hTimer = NULL;
+		if (pRxQueue->hMissingPktTimer) {
+			tmr_DestroyTimer (pRxQueue->hMissingPktTimer);
+			pRxQueue->hMissingPktTimer = NULL;
 		}
 
 		/* free module object */
@@ -192,10 +252,15 @@ TI_STATUS RxQueue_Destroy (TI_HANDLE hRxQueue)
 TI_STATUS RxQueue_Init (TI_HANDLE hRxQueue, TI_HANDLE hReport, TI_HANDLE hTimerModule)
 {
 	TRxQueue *pRxQueue = (TRxQueue *)hRxQueue;
+	TI_UINT8  uTid;
 
+	pRxQueue->hReport = hReport;
+	pRxQueue->hMissingPktTimer = tmr_CreateTimer (hTimerModule);
+	pRxQueue->uMissingPktTimerClient = TID_CLIENT_NONE;
 
-	pRxQueue->hReport   = hReport;
-	pRxQueue->hTimer = tmr_CreateTimer (hTimerModule);
+	for (uTid = 0; uTid < MAX_NUM_OF_802_1d_TAGS; uTid++) {
+		pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[uTid].uMissingPktTimeStamp = 0xffffffff;
+	}
 
 	return TI_OK;
 }
@@ -271,7 +336,7 @@ void RxQueue_CloseBaSession(TI_HANDLE hRxQueue, TI_UINT8 uFrameTid)
 
 				pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket = NULL;
 
-				pRxQueue->tPacketTimeout.aPacketsStored--;
+				pTidDataBase->uStoredPackets--;
 			}
 
 			pTidDataBase->aWinStartArrayInex ++;
@@ -280,11 +345,8 @@ void RxQueue_CloseBaSession(TI_HANDLE hRxQueue, TI_UINT8 uFrameTid)
 			pTidDataBase->aWinStartArrayInex &= RX_QUEUE_ARRAY_SIZE_BIT_MASK;
 		}
 
-		/* If timer is started - stop it */
-		if (pRxQueue->tPacketTimeout.bPacketMiss) {
-			tmr_StopTimer (pRxQueue->hTimer);
-			pRxQueue->tPacketTimeout.bPacketMiss = TI_FALSE;
-		}
+		/* stop missing packet timer for this TID */
+		StopMissingPktTimer(pRxQueue, uFrameTid);
 	}
 }
 
@@ -491,11 +553,9 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 			   If we wait for more than one packet we should not stop the timer - This is why we are checking after the while loop, if we have
 			   more packets stored, and if we have, we start the timer again.
 			*/
-			if (pRxQueue->tPacketTimeout.bPacketMiss) {
-				tmr_StopTimer (pRxQueue->hTimer);
-				pRxQueue->tPacketTimeout.bPacketMiss = TI_FALSE;
+			if (pTidDataBase->uMissingPktTimeStamp != 0xffffffff) {
+				StopMissingPktTimer(pRxQueue, uFrameTid);
 			}
-
 
 			/* Pass the packet */
 			RxQueue_PassPacket (pRxQueue, TI_OK, pBuffer);
@@ -532,7 +592,7 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 				pTidDataBase->aTidExpectedSn &= 0xfff; /* SN is 12 bits long */
 
 				/* Decrease the packets in queue */
-				pRxQueue->tPacketTimeout.aPacketsStored--;
+				pTidDataBase->uStoredPackets--;
 			}
 
 
@@ -540,11 +600,8 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 			pTidDataBase->aTidExpectedSn &= 0xfff;
 
 			/* If there are still packets stored in the queue - start timer */
-			if (pRxQueue->tPacketTimeout.aPacketsStored) {
-				tmr_StartTimer (pRxQueue->hTimer, RxQueue_PacketTimeOut, pRxQueue, BA_SESSION_TIME_TO_SLEEP, TI_FALSE);
-
-				pRxQueue->tPacketTimeout.bPacketMiss = TI_TRUE;
-				pRxQueue->tPacketTimeout.aFrameTid   = uFrameTid;
+			if (pTidDataBase->uStoredPackets) {
+				StartMissingPktTimer(pRxQueue, uFrameTid);
 			}
 
 			return;
@@ -564,8 +621,8 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 
 		/* Part 2 - Frame Sequence Number between winStart and winEnd ? */
 		if ((BA_SESSION_IS_A_BIGGER_THAN_B (uFrameSn, pTidDataBase->aTidExpectedSn)) &&
-		        /* mean: uFrameSn <= pTidDataBase->aTidExpectedSn + pTidDataBase->aTidWinSize) */
-		        ( ! BA_SESSION_IS_A_BIGGER_THAN_B (uFrameSn,(pTidDataBase->aTidExpectedSn + pTidDataBase->aTidWinSize - 1)))) {
+		                /* mean: uFrameSn <= pTidDataBase->aTidExpectedSn + pTidDataBase->aTidWinSize) */
+		                ( ! BA_SESSION_IS_A_BIGGER_THAN_B (uFrameSn,(pTidDataBase->aTidExpectedSn + pTidDataBase->aTidWinSize - 1)))) {
 			TI_UINT16 uSaveIndex = pTidDataBase->aWinStartArrayInex + (TI_UINT16)((uFrameSn + SEQ_NUM_WRAP - pTidDataBase->aTidExpectedSn) & SEQ_NUM_MASK);
 
 			/* uSaveIndex % RX_QUEUE_ARRAY_SIZE */
@@ -583,15 +640,11 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 				pTidDataBase->aPaketsQueue[uSaveIndex].pPacket  = (void *)pBuffer;
 				pTidDataBase->aPaketsQueue[uSaveIndex].uFrameSn = uFrameSn;
 
-				pRxQueue->tPacketTimeout.aPacketsStored++;
+				pTidDataBase->uStoredPackets++;
 
 
-				/* Start Timer [only if timer is not already started - according to bPacketMiss] */
-				if (pRxQueue->tPacketTimeout.bPacketMiss == TI_FALSE) {
-					tmr_StartTimer (pRxQueue->hTimer, RxQueue_PacketTimeOut, pRxQueue, BA_SESSION_TIME_TO_SLEEP, TI_FALSE);
-					pRxQueue->tPacketTimeout.bPacketMiss = TI_TRUE;
-					pRxQueue->tPacketTimeout.aFrameTid   = uFrameTid;
-				}
+				/* Start Timer */
+				StartMissingPktTimer(pRxQueue, uFrameTid);
 			} else {
 				TRACE1(pRxQueue->hReport, REPORT_SEVERITY_ERROR, "RxQueue_ReceivePacket: frame Sequence has already saved. uFrameSn = %d\n", uFrameSn);
 
@@ -615,10 +668,9 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 			TRACE0(pRxQueue->hReport, REPORT_SEVERITY_INFORMATION, "RxQueue_ReceivePacket: frame Sequence Number higher than winEnd.\n");
 			TRACE2(pRxQueue->hReport, REPORT_SEVERITY_INFORMATION, "RxQueue_ReceivePacket: uNewWinStartSn = 0x%x(%d) STOP TIMER",uNewWinStartSn,uNewWinStartSn);
 
-			/* If timer is on - stop it */
-			if (pRxQueue->tPacketTimeout.bPacketMiss) {
-				tmr_StopTimer (pRxQueue->hTimer);
-				pRxQueue->tPacketTimeout.bPacketMiss = TI_FALSE;
+			/* stop timer */
+			if (pTidDataBase->uMissingPktTimeStamp != 0xffffffff) {
+				StopMissingPktTimer(pRxQueue, uFrameTid);
 			}
 
 			/* Increase the ArrayInex to the next */
@@ -648,7 +700,7 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 
 					pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket = NULL;
 
-					pRxQueue->tPacketTimeout.aPacketsStored--;
+					pTidDataBase->uStoredPackets--;
 				}
 
 				pTidDataBase->aWinStartArrayInex++;
@@ -691,7 +743,7 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 					pTidDataBase->aTidExpectedSn &= 0xFFF;
 
 
-					pRxQueue->tPacketTimeout.aPacketsStored--;
+					pTidDataBase->uStoredPackets--;
 				}
 			}
 
@@ -718,7 +770,7 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 				pTidDataBase->aPaketsQueue[uSaveIndex].pPacket = (void *)pBuffer;
 				pTidDataBase->aPaketsQueue[uSaveIndex].pPacket = (void *)pBuffer;
 
-				pRxQueue->tPacketTimeout.aPacketsStored++;
+				pTidDataBase->uStoredPackets++;
 			}
 
 
@@ -727,10 +779,8 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 			pTidDataBase->aTidExpectedSn &= 0xfff;
 
 			/* If there are still packets stored in the queue - start timer */
-			if (pRxQueue->tPacketTimeout.aPacketsStored) {
-				tmr_StartTimer (pRxQueue->hTimer, RxQueue_PacketTimeOut, pRxQueue, BA_SESSION_TIME_TO_SLEEP, TI_FALSE);
-				pRxQueue->tPacketTimeout.bPacketMiss = TI_TRUE;
-				pRxQueue->tPacketTimeout.aFrameTid   = uFrameTid;
+			if (pTidDataBase->uStoredPackets) {
+				StartMissingPktTimer(pRxQueue, uFrameTid);
 			}
 
 			return;
@@ -806,9 +856,8 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 				uWinStartDelta = uStartingSequenceNumber - pTidDataBase->aTidExpectedSn;
 
 				/* If timer is on - stop it. Later on we may start it again [in case we still have packets stored] */
-				if (pRxQueue->tPacketTimeout.bPacketMiss) {
-					tmr_StopTimer (pRxQueue->hTimer);
-					pRxQueue->tPacketTimeout.bPacketMiss = TI_FALSE;
+				if (pTidDataBase->uMissingPktTimeStamp != 0xffffffff) {
+					StopMissingPktTimer(pRxQueue, uFrameTid);
 				}
 
 				/* Pass all saved queue packets with SN lower than the new win start */
@@ -823,7 +872,7 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 						                    pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket);
 
 						pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket = NULL;
-						pRxQueue->tPacketTimeout.aPacketsStored--;
+						pTidDataBase->uStoredPackets--;
 					}
 
 					pTidDataBase->aWinStartArrayInex++;
@@ -833,10 +882,8 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 				}
 
 				/* If there are still packets stored - start the timer */
-				if (pRxQueue->tPacketTimeout.aPacketsStored) {
-					tmr_StartTimer (pRxQueue->hTimer, RxQueue_PacketTimeOut, pRxQueue, BA_SESSION_TIME_TO_SLEEP, TI_FALSE);
-					pRxQueue->tPacketTimeout.bPacketMiss = TI_TRUE;
-					pRxQueue->tPacketTimeout.aFrameTid = uFrameTid;
+				if (pTidDataBase->uStoredPackets) {
+					StartMissingPktTimer(pRxQueue, uFrameTid);
 				}
 
 
@@ -963,9 +1010,56 @@ void RxQueue_ReceivePacket (TI_HANDLE hRxQueue, const void * pBuffer)
 	return;
 }
 
+/**
+ * \brief	pass all the packets in a TID's queue
+ *
+ * \param	uTid	index of TID queue to clear
+ */
+static void SendQueuedPackets(TI_HANDLE hRxQueue, TI_UINT8 uTid)
+{
+	TRxQueue            *pRxQueue   = (TRxQueue *)hRxQueue;
+	TRxQueueTidDataBase *pTidDataBase;
+	TI_UINT32            uPacketsChecked = 0;
+
+	/* Set the SA Tid pointer */
+	pTidDataBase = &(pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[uTid]);
+
+	/* Find the first stored packet */
+	while ( (uPacketsChecked < RX_QUEUE_ARRAY_SIZE) && /* avoid infinite loop */
+	                (pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket == NULL) ) {
+		pTidDataBase->aWinStartArrayInex++;
+
+		/* aWinStartArrayInex % RX_QUEUE_ARRAY_SIZE */
+		pTidDataBase->aWinStartArrayInex &= RX_QUEUE_ARRAY_SIZE_BIT_MASK;
+
+		pTidDataBase->aTidExpectedSn++;
+		pTidDataBase->aTidExpectedSn &= 0xFFF;
+
+		uPacketsChecked++;
+	}
+
+	/* Send all packets in order */
+	while ((pTidDataBase->uStoredPackets > 0) && (pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket != NULL)) {
+		RxQueue_PassPacket (pRxQueue,
+		                    pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].tStatus,
+		                    pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket);
+
+		pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket = NULL;
+
+		pTidDataBase->aWinStartArrayInex++;
+
+		/* aWinStartArrayInex % RX_QUEUE_ARRAY_SIZE */
+		pTidDataBase->aWinStartArrayInex &= RX_QUEUE_ARRAY_SIZE_BIT_MASK;
+
+		pTidDataBase->aTidExpectedSn++;
+		pTidDataBase->aTidExpectedSn &= 0xFFF;
+
+		pTidDataBase->uStoredPackets--;
+	}
+}
 
 /*
-Function Name : RxQueue_PacketTimeOut
+Function Name : MissingPktTimeout
 
 Description   : This function sends all consecutive old packets stored in a specific TID queue to the upper layer.
 
@@ -978,55 +1072,41 @@ Parameters    : hRxQueue        - A handle to the RxQueue structure.
 
 Returned Value: void
 */
-static void RxQueue_PacketTimeOut (TI_HANDLE hRxQueue, TI_BOOL bTwdInitOccured)
+static void MissingPktTimeout (TI_HANDLE hRxQueue, TI_BOOL bTwdInitOccured)
 {
-	TRxQueue            *pRxQueue   = (TRxQueue *)hRxQueue;
-	TRxQueueTidDataBase *pTidDataBase;
+	TRxQueue *pRxQueue   = (TRxQueue *)hRxQueue;
+	TI_UINT8  uTid;
+	TI_UINT32 uNowMs = os_timeStampMs(pRxQueue->hOs);
+	TI_UINT32 uMinRequestTime = 0xffffffff; /* the next request-time to be served */
+	TI_UINT8  uTidClient = TID_CLIENT_NONE;
 
-	pRxQueue->tPacketTimeout.bPacketMiss = TI_FALSE;
+	pRxQueue->uMissingPktTimerClient = TID_CLIENT_NONE;
 
-	/* Set the SA Tid pointer */
-	pTidDataBase = &(pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[pRxQueue->tPacketTimeout.aFrameTid]);
+	for (uTid = 0; uTid < MAX_NUM_OF_802_1d_TAGS; uTid++) {
+		TRxQueueTidDataBase *pTidInfo = &(pRxQueue->tRxQueueArraysMng.tSa1ArrayMng[uTid]);
 
-
-	if (pRxQueue->tPacketTimeout.aPacketsStored) {
-
-		/* Find the first stored packet */
-		while (pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket == NULL) {
-			pTidDataBase->aWinStartArrayInex++;
-
-			/* aWinStartArrayInex % RX_QUEUE_ARRAY_SIZE */
-			pTidDataBase->aWinStartArrayInex &= RX_QUEUE_ARRAY_SIZE_BIT_MASK;
-
-			pTidDataBase->aTidExpectedSn++;
-			pTidDataBase->aTidExpectedSn &= 0xFFF;
+		/* skip if no request was made to clear this queue */
+		if ( (pTidInfo->uMissingPktTimeStamp == 0xffffffff) ||
+		                (pTidInfo->uStoredPackets == 0) ) {
+			continue;
 		}
 
-
-		/* Send all packets in order */
-		while ((pRxQueue->tPacketTimeout.aPacketsStored > 0) && (pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket != NULL)) {
-
-			RxQueue_PassPacket (pRxQueue,
-			                    pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].tStatus,
-			                    pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket);
-
-			pTidDataBase->aPaketsQueue[pTidDataBase->aWinStartArrayInex].pPacket = NULL;
-
-			pTidDataBase->aWinStartArrayInex++;
-
-			/* aWinStartArrayInex % RX_QUEUE_ARRAY_SIZE */
-			pTidDataBase->aWinStartArrayInex &= RX_QUEUE_ARRAY_SIZE_BIT_MASK;
-
-			pTidDataBase->aTidExpectedSn++;
-			pTidDataBase->aTidExpectedSn &= 0xFFF;
-
-			pRxQueue->tPacketTimeout.aPacketsStored--;
-
+		/* if this tid expired, clear its queue */
+		if ( uNowMs - pTidInfo->uMissingPktTimeStamp >= BA_SESSION_TIME_TO_SLEEP ) {
+			SendQueuedPackets(pRxQueue, uTid);
+			pTidInfo->uMissingPktTimeStamp = 0xffffffff;
+		} else {
+			/* keep uMinRequestTime as minimum */
+			if (pTidInfo->uMissingPktTimeStamp < uMinRequestTime) {
+				uMinRequestTime = pTidInfo->uMissingPktTimeStamp;
+				uTidClient = uTid;
+			}
 		}
 	}
 
-	if (pRxQueue->tPacketTimeout.aPacketsStored) {
-		tmr_StartTimer (pRxQueue->hTimer, RxQueue_PacketTimeOut, pRxQueue, BA_SESSION_TIME_TO_SLEEP, TI_FALSE);
-		pRxQueue->tPacketTimeout.bPacketMiss = TI_TRUE;
+	/* if any TID needs clearing, restart timer */
+	if (uMinRequestTime < 0xffffffff) {
+		tmr_StartTimer (pRxQueue->hMissingPktTimer, MissingPktTimeout, pRxQueue, uMinRequestTime + BA_SESSION_TIME_TO_SLEEP - uNowMs, TI_FALSE);
+		pRxQueue->uMissingPktTimerClient = uTidClient;
 	}
 }

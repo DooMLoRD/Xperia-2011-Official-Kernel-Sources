@@ -1354,8 +1354,8 @@ TI_STATUS drvMain_InsertAction (TI_HANDLE hDrvMain, EActionType eAction)
 
 	/* Free signalling object and action structure */
 	os_SignalObjectFree (pDrvMain->tStadHandles.hOs, pNewAction->pSignalObject);
-	os_memoryFree (pDrvMain->tStadHandles.hOs, pNewAction, sizeof(TActionObject));
 	pNewAction->pSignalObject = NULL;
+	os_memoryFree (pDrvMain->tStadHandles.hOs, pNewAction, sizeof(TActionObject));
 
 	if (pDrvMain->eSmState == SM_STATE_FAILED) {
 		return TI_NOK;
@@ -1814,15 +1814,15 @@ static void drvMain_Sm (TI_HANDLE hDrvMain, ESmEvent eEvent)
 		pDrvMain->eSmState = SM_STATE_FAILED;
 		txnQ_DisconnectBus (pDrvMain->tStadHandles.hTxnQ);
 		hPlatform_DevicePowerOff ();
-		WLAN_OS_REPORT(("[WLAN] Exit application\n"));
 		if (!pDrvMain->bRecovery) {
 			os_SignalObjectSet (hOs, pDrvMain->pCurrAction->pSignalObject);
 		} else if (pDrvMain->uNumOfRecoveryAttempts < MAX_NUM_OF_RECOVERY_TRIGGERS) {
+			pDrvMain->uNumOfRecoveryAttempts++;
 			pDrvMain->eSmState = SM_STATE_STOPPING;
 			eStatus = drvMain_StopActivities (pDrvMain);
 		}
-		WLAN_OS_REPORT(("[WLAN] Exit application\n"));
-		pDrvMain->bRecovery = TI_FALSE;
+		else
+			WLAN_OS_REPORT(("[WLAN] Exit application\n"));
 		break;
 	case SM_STATE_FAILED:
 		/* Nothing to do except waiting for Destroy */

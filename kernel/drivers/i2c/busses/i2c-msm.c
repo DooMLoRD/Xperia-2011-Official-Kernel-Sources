@@ -30,6 +30,7 @@
 #include <linux/timer.h>
 #include <linux/remote_spinlock.h>
 #include <linux/pm_qos_params.h>
+#include <linux/wakelock.h>
 #include <mach/gpio.h>
 
 
@@ -86,6 +87,7 @@ struct msm_i2c_dev {
 	remote_mutex_t               r_lock;
 	int                          suspended;
 	struct mutex                 mlock;
+	struct wake_lock             wakelock;
 	struct msm_i2c_platform_data *pdata;
 	struct timer_list            pwr_timer;
 	int                          clk_state;
@@ -376,6 +378,7 @@ msm_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	int check_busy = 1;
 
 	del_timer_sync(&dev->pwr_timer);
+	wake_lock(&dev->wakelock);
 	mutex_lock(&dev->mlock);
 	if (dev->suspended) {
 		mutex_unlock(&dev->mlock);
@@ -546,6 +549,7 @@ wait_for_int:
 					PM_QOS_DEFAULT_VALUE);
 	mod_timer(&dev->pwr_timer, (jiffies + 3*HZ));
 	mutex_unlock(&dev->mlock);
+	wake_unlock(&dev->wakelock);
 	return ret;
 }
 
@@ -637,6 +641,8 @@ msm_i2c_probe(struct platform_device *pdev)
 	dev->one_bit_t = USEC_PER_SEC/pdata->clk_freq;
 	spin_lock_init(&dev->lock);
 	platform_set_drvdata(pdev, dev);
+
+	wake_lock_init(&dev->wakelock, WAKE_LOCK_SUSPEND, "msm-i2c");
 
 	clk_enable(clk);
 
@@ -731,6 +737,7 @@ msm_i2c_remove(struct platform_device *pdev)
 	dev->suspended = 1;
 	mutex_unlock(&dev->mlock);
 	mutex_destroy(&dev->mlock);
+	wake_lock_destroy(&dev->wakelock);
 	del_timer_sync(&dev->pwr_timer);
 	if (dev->clk_state != 0)
 		msm_i2c_pwr_mgmt(dev, 0);

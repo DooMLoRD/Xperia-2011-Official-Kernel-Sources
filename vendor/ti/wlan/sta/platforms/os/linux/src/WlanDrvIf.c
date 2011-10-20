@@ -50,6 +50,7 @@
  *  \see    WlanDrvIf.h, Wext.c
  */
 
+#define __FILE_ID__ FILE_ID_138
 
 #include <net/sock.h>
 #include <linux/etherdevice.h>
@@ -131,7 +132,6 @@ int wlanDrvIf_Resume(void)
 	atomic_set(&is_suspended, 0);
 	wake_up(&resume_wait);
 	drvMain_InsertAction (pDrvStaticHandle->tCommon.hDrvMain, ACTION_TYPE_RESUME);
-	wake_lock_timeout(&pDrvStaticHandle->wl_rxwake, HZ/2);
 	return 0;
 }
 
@@ -260,7 +260,8 @@ void wlanDrvIf_FreeTxPacket (TI_HANDLE hOs, TTxCtrlBlk *pPktCtrlBlk, TI_STATUS e
 static int wlanDrvIf_XmitDummy (struct sk_buff *skb, struct net_device *dev)
 {
 	/* Just return error. The driver is not running (network stack frees the packet) */
-	printk(KERN_WARNING "TIWLAN: Driver cannot xmit packet now\n");
+	if(printk_ratelimit())
+		printk(KERN_WARNING "TIWLAN: Driver cannot xmit packet now\n");
 	return -ENODEV;
 }
 
@@ -912,6 +913,7 @@ static int wlanDrvIf_Create (void)
 #ifdef CONFIG_HAS_WAKELOCK
 	wake_lock_init(&drv->wl_wifi, WAKE_LOCK_SUSPEND, "wifi_wake");
 	wake_lock_init(&drv->wl_rxwake, WAKE_LOCK_SUSPEND, "wifi_rx_wake");
+	wake_lock_init(&drv->wl_deauth, WAKE_LOCK_SUSPEND, "wifi_deauth_wake");
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,23)
@@ -998,6 +1000,7 @@ drv_create_end_2:
 #ifdef CONFIG_HAS_WAKELOCK
 	wake_lock_destroy(&drv->wl_wifi);
 	wake_lock_destroy(&drv->wl_rxwake);
+	wake_lock_destroy(&drv->wl_deauth);
 #endif
 	if (drv->tiwlan_wq)
 		destroy_workqueue(drv->tiwlan_wq);
@@ -1067,6 +1070,7 @@ static void wlanDrvIf_Destroy (TWlanDrvIfObj *drv)
 #ifdef CONFIG_HAS_WAKELOCK
 	wake_lock_destroy(&drv->wl_wifi);
 	wake_lock_destroy(&drv->wl_rxwake);
+	wake_lock_destroy(&drv->wl_deauth);
 #endif
 
 	/*

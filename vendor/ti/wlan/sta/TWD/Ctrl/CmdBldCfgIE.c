@@ -684,7 +684,37 @@ TI_STATUS cmdBld_CfgIeBcnBrcOptions (TI_HANDLE hCmdBld, TPowerMgmtConfig *pPMCon
 	return cmdQueue_SendCommand (pCmdBld->hCmdQueue, CMD_CONFIGURE, pCfg, sizeof(*pCfg), fCb, hCb, NULL);
 }
 
+/****************************************************************************
+ *                      cmdBld_CfgIeMulticastMACFixup()
+ ****************************************************************************
+ * DESCRIPTION: Configure the FW to enable or disable MAC multicast fixup
+ *              feature.
+ *              When receiving an ethernet unicast or broadcast
+ *              frame containing a multicast IP, change it to an ethernet
+ *              multicast so that the filter handles it properly.
+ *
+ * INPUTS:
+ *
+ * OUTPUT:  None
+ *
+ * RETURNS: TI_OK or TI_NOK
+ ****************************************************************************/
+TI_STATUS cmdBld_CfgIeMulticastMACFixup (TI_HANDLE hCmdBld, TI_UINT8 enableFixup, void *fCb, TI_HANDLE hCb)
+{
+	TCmdBld *pCmdBld = (TCmdBld *)hCmdBld;
+	ACXMulticastMACFixup_t ACXMulticastMACFixup;
+	ACXMulticastMACFixup_t *pCfg = &ACXMulticastMACFixup;
 
+	pCfg->multicastMACfixupEnable = enableFixup;
+
+	TRACE1(pCmdBld->hReport, REPORT_SEVERITY_INFORMATION, "cmdBld_CfgIeMulticastMACFixup: enableFixup=0x%x\n", enableFixup);
+
+	/* Set information element header */
+	pCfg->EleHdr.id = ACX_MULTICAST_MAC_RX_FIXUP;
+	pCfg->EleHdr.len = sizeof(*pCfg) - sizeof(EleHdrStruct);
+
+	return cmdQueue_SendCommand (pCmdBld->hCmdQueue, CMD_CONFIGURE, pCfg, sizeof(*pCfg), fCb, hCb, NULL);
+}
 /****************************************************************************
  *                      cmdBld_CfgIeFeatureConfig()
                                     ACXBeaconAndBroadcastOptions_t* pWlanElm_BcnBrcOptions,

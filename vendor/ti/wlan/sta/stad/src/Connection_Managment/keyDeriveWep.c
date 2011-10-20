@@ -53,6 +53,8 @@
 #include "keyDeriveWep.h"
 
 #include "mainKeysSm.h"
+#include "mainSecSm.h"
+#include "admCtrl.h"
 
 /**
 *
@@ -105,6 +107,7 @@ TI_STATUS keyDeriveWep_derive(struct _keyDerive_t *pKeyDerive, encodedKeyMateria
 {
 	TI_STATUS status;
 	TSecurityKeys	key;
+	struct _admCtrl_t *admCtrl = NULL;
 
 	if (pEncodedKey==NULL) {
 		return TI_NOK;
@@ -115,6 +118,23 @@ TI_STATUS keyDeriveWep_derive(struct _keyDerive_t *pKeyDerive, encodedKeyMateria
 	        (pEncodedKey->keyLen != DERIVE_WEP_KEY_LEN_232)) {
 		TRACE1(pKeyDerive->hReport, REPORT_SEVERITY_ERROR, "DeriveWep_derive: ERROR: it is not WEP key lenghth (len=%d) !!!\n", pEncodedKey->keyLen);
 		return TI_NOK;
+	}
+
+	// If using TSN Set the WEP key as a mapped key to the BCast address */
+	if(pKeyDerive->pMainKeys->pParent &&
+	   pKeyDerive->pMainKeys->pParent->pParent) {
+		admCtrl = pKeyDerive->pMainKeys->pParent->pParent->pAdmCtrl;
+	}
+
+	if(admCtrl && (
+	   admCtrl->unicastSuite == TWD_CIPHER_AES_CCMP ||
+	   admCtrl->unicastSuite == TWD_CIPHER_TKIP)) {
+		key.macAddress[0] = 0xff;
+		key.macAddress[1] = 0xff;
+		key.macAddress[2] = 0xff;
+		key.macAddress[3] = 0xff;
+		key.macAddress[4] = 0xff;
+		key.macAddress[5] = 0xff;
 	}
 
 	key.keyType = KEY_WEP;

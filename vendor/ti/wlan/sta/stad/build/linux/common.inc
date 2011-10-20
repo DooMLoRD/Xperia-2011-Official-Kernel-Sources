@@ -53,7 +53,11 @@ INTR ?= y
 #
 DEBUG ?= y
 KERNEL_DEBUGGER ?= n
-STRIP ?= y
+ifeq ($(TARGET_BUILD_VARIANT), user)
+	STRIP ?= y
+else
+	STRIP ?= n
+endif
 BMTRACE ?= n
 #
 # Enable or disable OS and init messages

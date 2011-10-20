@@ -1,5 +1,6 @@
 /*
  * Copyright 2006, The Android Open Source Project
+ * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,6 +28,20 @@
 * 2010-09-26:
 *     Check that Node object is still valid after
 *     forceLayout in method setSizeScreenWidthAndScale.
+* 2011-05-12:
+* Manually hide and show plugin surfaces at pause and resume of the browser.
+* Otherwise the WindowManager and the plugin can have different information
+* about the state of the plugin.
+* 2011-05-23:
+* Adding null check in method getContext() to avoid crash. Weak reference might refer
+* to an already garbage collected object
+* 2011-05-23:
+* Adding null check in method contentDraw() to avoid crash. Weak reference might refer
+* to an already garbage collected object
+* 2011-05-24:
+* Take gButtonMutex when adding a SkPicture to PictureSet that might cause
+* a SkPicture draw. Needed in order to ensure that WebCoreThread and UI-thread
+* isn't recording and playback from the same SkPicture object.
 */
 #define LOG_TAG "webcoreglue"
 
@@ -625,7 +640,9 @@ void WebViewCore::recordPictureSet(PictureSet* content)
         SkPicture* picture = rebuildPicture(inval);
         DBG_SET_LOGD("{%d,%d,w=%d,h=%d}", inval.fLeft,
             inval.fTop, inval.width(), inval.height());
+        gButtonMutex.lock();
         content->add(m_addInval, picture, 0, false);
+        gButtonMutex.unlock();
         picture->safeUnref();
     }
     // Remove any pictures already in the set that are obscured by the new one,
@@ -869,7 +886,10 @@ void WebViewCore::rebuildPictureSet(PictureSet* pictureSet)
         const SkIRect& inval = pictureSet->bounds(index);
         DBG_SET_LOGD("pictSet=%p [%d] {%d,%d,w=%d,h=%d}", pictureSet, index,
             inval.fLeft, inval.fTop, inval.width(), inval.height());
-        pictureSet->setPicture(index, rebuildPicture(inval));
+        SkPicture* pic = rebuildPicture(inval);
+        gButtonMutex.lock();
+        pictureSet->setPicture(index, pic);
+        gButtonMutex.unlock();
     }
     pictureSet->validate(__FUNCTION__);
 }
@@ -984,7 +1004,11 @@ void WebViewCore::setUIRootLayer(const LayerAndroid* layer)
 void WebViewCore::contentDraw()
 {
     JNIEnv* env = JSC::Bindings::getJNIEnv();
-    env->CallVoidMethod(m_javaGlue->object(env).get(), m_javaGlue->m_contentDraw);
+    AutoJObject obj = m_javaGlue->object(env);
+
+    if (!obj.get())
+        return;
+    env->CallVoidMethod(obj.get(), m_javaGlue->m_contentDraw);
     checkException(env);
 }
 
@@ -1585,6 +1609,19 @@ void WebViewCore::sendPluginEvent(const ANPEvent& evt)
      */
     for (int x = 0; x < m_plugins.count(); x++) {
         m_plugins[x]->sendEvent(evt);
+
+        // Ensure that plugins are removed/added to the view hierarchy
+        // when the browser is paused/resumed. Otherwise, at browser startup,
+        // the WindowManager has incorrect information about the plugin state.
+        if (evt.data.lifecycle.action == kPause_ANPLifecycleAction) {
+            if (!m_plugins[x]->isVisible()) {
+                m_plugins[x]->pluginView()->hide();
+            }
+        } else if (evt.data.lifecycle.action == kResume_ANPLifecycleAction) {
+            if (!m_plugins[x]->pluginView()->isVisible()) {
+                m_plugins[x]->pluginView()->show();
+            }
+        }
     }
 }
 
@@ -2520,6 +2557,9 @@ jobject WebViewCore::getContext()
 {
     JNIEnv* env = JSC::Bindings::getJNIEnv();
     AutoJObject obj = m_javaGlue->object(env);
+
+    if (!obj.get())
+        return 0;
 
     jobject result = env->CallObjectMethod(obj.get(), m_javaGlue->m_getContext);
     checkException(env);

@@ -253,6 +253,26 @@ TI_STATUS cmdBld_CfgBcnBrcOptions (TI_HANDLE hCmdBld, TPowerMgmtConfig *pPMConfi
 
 
 /****************************************************************************
+ *                      cmdBld_CfgMulticastMACFixup()
+ ****************************************************************************
+ * DESCRIPTION: Configure the FW to enable or disable MAC multicast fixup
+ *              feature.
+ *              When receiving an ethernet unicast or broadcast
+ *              frame containing a multicast IP, change it to an ethernet
+ *              multicast so that the filter handles it properly.
+ *
+ * INPUTS: None
+ *
+ * OUTPUT:  None
+ *
+ * RETURNS: TI_OK or TI_NOK
+ ****************************************************************************/
+TI_STATUS cmdBld_CfgMulticastMACFixup (TI_HANDLE hCmdBld, TI_UINT8 enableFixup, void *fCb, TI_HANDLE hCb)
+{
+	return cmdBld_CfgIeMulticastMACFixup (hCmdBld, enableFixup, fCb, hCb);
+}
+
+/****************************************************************************
  *                      cmdBld_CfgWakeUpCondition()
  ****************************************************************************
  * DESCRIPTION: Configure the wlan hardware

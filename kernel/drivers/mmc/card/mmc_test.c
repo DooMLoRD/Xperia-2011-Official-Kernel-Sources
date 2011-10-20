@@ -110,8 +110,11 @@ static int mmc_test_wait_busy(struct mmc_test_card *test)
 		cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
 
 		ret = mmc_wait_for_cmd(test->card->host, &cmd, 0);
-		if (ret)
+		if (ret){
+			printk(KERN_ERR "%s: error %d requesting status\n",
+				mmc_hostname(test->card->host), ret);
 			break;
+		}
 
 		if (!busy && !(cmd.resp[0] & R1_READY_FOR_DATA)) {
 			busy = 1;
@@ -119,7 +122,14 @@ static int mmc_test_wait_busy(struct mmc_test_card *test)
 				"wait for busy state to end.\n",
 				mmc_hostname(test->card->host));
 		}
-	} while (!(cmd.resp[0] & R1_READY_FOR_DATA));
+	/*
+	 * Some cards mishandle the status bits,
+	 * so make sure to check both the busy
+	 * indication and the card state.
+	 */
+	} while (!(cmd.resp[0] & R1_READY_FOR_DATA) ||
+		(R1_CURRENT_STATE(cmd.resp[0]) == 7));
+
 
 	return ret;
 }

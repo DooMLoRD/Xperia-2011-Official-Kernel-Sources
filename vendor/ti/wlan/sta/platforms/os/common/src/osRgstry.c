@@ -32,6 +32,7 @@
  */
 
 
+#define __FILE_ID__ FILE_ID_141
 #if defined(_WINDOWS)
 #include <ndis.h>
 #elif defined( __LINUX__ )

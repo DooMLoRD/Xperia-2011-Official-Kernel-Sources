@@ -62,6 +62,10 @@ typedef void (*os_free)(void *);
 struct os_mem_block {
 	struct list_head blk_list;
 	os_free f_free;
+	__u32 allocFile;
+	__u32 allocLine;
+	__u32 deallocFile;
+	__u32 deallocLine;
 	__u32 size;
 	__u32 signature;
 };
@@ -90,10 +94,14 @@ NOTES:         	With the call to vmalloc it is assumed that this function will
 				sleep the caller while waiting for memory to become available.
 
 *****************************************************************************************/
+
+
 void*
-os_memoryAlloc(
+_os_memoryAlloc(
     TI_HANDLE OsContext,
-    TI_UINT32 Size
+    TI_UINT32 Size,
+    TI_UINT32 FileNbr,
+    TI_UINT32 LineNbr
 )
 {
 	struct os_mem_block *blk;
@@ -101,7 +109,7 @@ os_memoryAlloc(
 	gfp_t flags = (in_atomic()) ? GFP_ATOMIC : GFP_KERNEL;
 
 #ifdef TI_MEM_ALLOC_TRACE
-	os_printf("MTT:%s:%d ::os_memoryAlloc(0x%p, %lu) : %lu\n",__FUNCTION__, __LINE__,OsContext,Size,total_size);
+	os_printf("MTT:%s:%d ::os_memoryAlloc(0x%p, %lu) : %lu\n",FileNbr, LineNbr ,OsContext,Size,total_size);
 #endif
 	/*
 	Memory optimization issue. Allocate up to 2 pages (8k) from the SLAB
@@ -117,7 +125,7 @@ os_memoryAlloc(
 	{
 		blk = kmalloc(total_size, flags);
 		if (!blk) {
-			printk("%s: NULL\n",__func__);
+			printk(KERN_ERR "%s: NULL from kmalloc\n",__func__);
 			return NULL;
 		}
 		blk->f_free = (os_free)kfree;
@@ -126,12 +134,12 @@ os_memoryAlloc(
 		     the interrupt, otherwise fail
 		*/
 		if (in_interrupt()) {
-			printk("%s: NULL\n",__func__);
+			printk(KERN_ERR "%s: in_interrupt(), returning NULL\n",__func__);
 			return NULL;
 		}
 		blk = vmalloc(total_size);
 		if (!blk) {
-			printk("%s: NULL\n",__func__);
+			printk(KERN_ERR "%s: NULL from vmalloc\n",__func__);
 			return NULL;
 		}
 		blk->f_free = (os_free)vfree;
@@ -142,6 +150,8 @@ os_memoryAlloc(
 	/*list_add(&blk->blk_list, &drv->mem_blocks);*/
 	blk->size = Size;
 	blk->signature = MEM_BLOCK_START;
+	blk->allocFile = FileNbr;
+	blk->allocLine = LineNbr;
 	*(__u32 *)((unsigned char *)blk + total_size - sizeof(__u32)) = MEM_BLOCK_END;
 	return (void *)((char *)blk + sizeof(struct os_mem_block));
 }
@@ -161,10 +171,12 @@ RETURN:			None
 NOTES:
 *****************************************************************************************/
 void*
-os_memoryCAlloc(
+_os_memoryCAlloc(
     TI_HANDLE OsContext,
     TI_UINT32 Number,
-    TI_UINT32 Size
+    TI_UINT32 Size,
+    TI_UINT32 FileNbr,
+    TI_UINT32 LineNbr
 )
 {
 	void* pAllocatedMem;
@@ -175,7 +187,7 @@ os_memoryCAlloc(
 #endif
 	MemSize = Number * Size;
 
-	pAllocatedMem = os_memoryAlloc(OsContext, MemSize);
+	pAllocatedMem = _os_memoryAlloc(OsContext, MemSize, FileNbr, LineNbr);
 
 	if (!pAllocatedMem)
 		return NULL;
@@ -205,17 +217,20 @@ RETURN:			None
 
 NOTES:
 *****************************************************************************************/
+
 void
-os_memoryFree(
+_os_memoryFree(
     TI_HANDLE OsContext,
     void* pMemPtr,
-    TI_UINT32 Size
+    TI_UINT32 Size,
+    TI_UINT32 FileNbr,
+    TI_UINT32 LineNbr
 )
 {
 	struct os_mem_block *blk;
 
 	if (!pMemPtr) {
-		printk("%s: NULL\n",__func__);
+		printk(KERN_WARNING "%s: NULL\n",__func__);
 		return;
 	}
 	blk = (struct os_mem_block *)((char *)pMemPtr - sizeof(struct os_mem_block));
@@ -224,18 +239,18 @@ os_memoryFree(
 	os_printf("MTT:%s:%d ::os_memoryFree(0x%p, 0x%p, %lu) : %d\n",__FUNCTION__,__LINE__,OsContext,pMemPtr,Size,-Size);
 #endif
 	if (blk->signature != MEM_BLOCK_START) {
-		printk("\n\n%s: memory block signature is incorrect - 0x%x\n\n\n",
-		       __FUNCTION__, blk->signature);
+		printk(KERN_ERR "\n\n%s: memory block signature is incorrect - 0x%x %d %d %d %d \n\n\n",
+		       __FUNCTION__, blk->signature, blk->allocFile, blk->allocLine, blk->deallocFile, blk->deallocLine);
 		return;
 	}
 	*(char *)(&blk->signature) = '~';
+	blk->deallocFile = FileNbr;
+	blk->deallocLine = LineNbr;
 	if (*(__u32 *)((unsigned char *)blk + blk->size + sizeof(struct os_mem_block))
 	        != MEM_BLOCK_END) {
-		printk("\n\n%s: memory block corruption. Size=%u\n\n\n",
-		       __FUNCTION__, blk->size);
+		printk(KERN_ERR "\n\n%s: memory block corruption. Size=%u %d %d %d %d\n\n\n",
+		       __FUNCTION__, blk->size, blk->allocFile, blk->allocLine, blk->deallocFile, blk->deallocLine);
 	}
-
-	os_profile (OsContext, 5, blk->size + sizeof(struct os_mem_block) + sizeof(__u32));
 
 	blk->f_free(blk);
 }
@@ -264,7 +279,7 @@ os_memorySet(
 )
 {
 	if (!pMemPtr) {
-		printk("%s: NULL\n",__func__);
+		printk(KERN_WARNING "%s: NULL\n",__func__);
 		return;
 	}
 	memset(pMemPtr,Value,Length);
@@ -301,12 +316,12 @@ os_memoryAlloc4HwDma(
 	if (Size < 2 * OS_PAGE_SIZE) {
 		blk = kmalloc(total_size, flags | GFP_DMA);
 		if (!blk) {
-			printk("%s: NULL\n",__func__);
+			printk(KERN_ERR "%s: NULL\n",__func__);
 			return NULL;
 		}
 		blk->f_free = (os_free)kfree;
 	} else {
-		printk("\n\n%s: memory cant be allocated-Size = %d\n\n\n",
+		printk(KERN_ERR "\n\n%s: memory cant be allocated-Size = %d\n\n\n",
 		       __FUNCTION__, Size);
 		return NULL;
 	}
@@ -345,20 +360,20 @@ os_memory4HwDmaFree(
 	struct os_mem_block *blk;
 
 	if (!pMem_ptr) {
-		printk("%s: NULL\n",__func__);
+		printk(KERN_ERR "%s: NULL\n",__func__);
 		return;
 	}
 	blk = (struct os_mem_block *)((char *)pMem_ptr - sizeof(struct os_mem_block));
 
 	if (blk->signature != MEM_BLOCK_START) {
-		printk("\n\n%s: memory block signature is incorrect - 0x%x\n\n\n",
+		printk(KERN_ERR "\n\n%s: memory block signature is incorrect - 0x%x\n\n\n",
 		       __FUNCTION__, blk->signature);
 		return;
 	}
 	*(char *)(&blk->signature) = '~';
 	if (*(__u32 *)((unsigned char *)blk + blk->size + sizeof(struct os_mem_block))
 	        != MEM_BLOCK_END) {
-		printk("\n\n%s: memory block corruption. Size=%u\n\n\n",
+		printk(KERN_ERR "\n\n%s: memory block corruption. Size=%u\n\n\n",
 		       __FUNCTION__, blk->size);
 	}
 
@@ -386,7 +401,7 @@ os_memoryZero(
 )
 {
 	if (!pMemPtr) {
-		printk("%s: NULL\n",__func__);
+		printk(KERN_ERR "%s: NULL\n",__func__);
 		return;
 	}
 	memset(pMemPtr,0,Length);

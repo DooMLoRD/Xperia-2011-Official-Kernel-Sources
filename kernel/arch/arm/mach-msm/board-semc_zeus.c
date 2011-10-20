@@ -138,6 +138,8 @@
 #define MSM_RAM_CONSOLE_SIZE    (128 * SZ_1K)
 #endif
 
+#define USB_VREG_MV		3500	/* usb voltage regulator mV */
+
 /* GPIO hardware device identification */
 enum board_hwid {
 	BOARD_HWID_UNK,
@@ -183,7 +185,7 @@ static int vreg_helper_on(const char *pzName, unsigned mv)
 		return rc;
 	}
 
-	printk(KERN_ERR "Enabled VREG \"%s\" at %u mV\n", pzName, mv);
+	printk(KERN_INFO "Enabled VREG \"%s\" at %u mV\n", pzName, mv);
 	return rc;
 }
 
@@ -205,7 +207,7 @@ static void vreg_helper_off(const char *pzName)
 		return;
 	}
 
-	printk(KERN_ERR "Disabled VREG \"%s\"\n", pzName);
+	printk(KERN_INFO "Disabled VREG \"%s\"\n", pzName);
 }
 
 static int pm8058_gpios_init(void)
@@ -1411,19 +1413,19 @@ static struct as3676_platform_led as3676_pdata_leds[] = {
 		.name = "red",
 		.sinks = BIT(AS3676_SINK_41),
 		.flags = AS3676_FLAG_RGB | AS3676_FLAG_BLINK,
-		.max_current = 4000,
+		.max_current = 3000,
 	},
 	{
 		.name = "green",
 		.sinks = BIT(AS3676_SINK_42),
 		.flags = AS3676_FLAG_RGB | AS3676_FLAG_BLINK,
-		.max_current = 4000,
+		.max_current = 3000,
 	},
 	{
 		.name = "blue",
 		.sinks = BIT(AS3676_SINK_43),
 		.flags = AS3676_FLAG_RGB | AS3676_FLAG_BLINK,
-		.max_current = 4000,
+		.max_current = 3000,
 	},
 };
 
@@ -1518,6 +1520,13 @@ static struct gp2a_platform_data gp2a_platform_data = {
 	.gpio_shutdown = gp2a_gpio_teardown,
 };
 
+static struct cypress_callback *cy_callback;
+
+static void cy_register_cb(struct cypress_callback *cy)
+{
+	cy_callback = cy;
+}
+
 static struct cypress_touch_platform_data cypress_touch_data = {
 	.x_min		= 0,
 	.x_max		= 479,
@@ -1529,7 +1538,14 @@ static struct cypress_touch_platform_data cypress_touch_data = {
 	.reset_polarity	= 1,
 	.irq_polarity	= IRQF_TRIGGER_FALLING,
 	.no_fw_update = 0,
+	.register_cb	= cy_register_cb,
 };
+
+void charger_connected(int on)
+{
+	if (cy_callback && cy_callback->cb)
+		cy_callback->cb(cy_callback, on);
+}
 
 static void cypress_touch_gpio_init(void)
 {
@@ -1627,7 +1643,9 @@ static struct max17040_platform_data max17040_platform_data = {
 		.temp_co_hot = 1400,
 		.temp_co_cold = 9725,
 		.temp_div = 1000,
-	}
+	},
+	.chg_max_temp = 550,
+	.chg_min_temp = 50,
 };
 
 static struct i2c_board_info msm_i2c_board_info[] = {
@@ -1832,7 +1850,7 @@ static int msm_hsusb_ldo_init(int init)
 		vreg_3p3 = vreg_get(NULL, "usb");
 		if (IS_ERR(vreg_3p3))
 			return PTR_ERR(vreg_3p3);
-		vreg_set_level(vreg_3p3, 3500);
+		vreg_set_level(vreg_3p3, USB_VREG_MV);
 	} else
 		vreg_put(vreg_3p3);
 
@@ -1859,13 +1877,15 @@ static int msm_hsusb_ldo_enable(int enable)
 
 static int msm_hsusb_ldo_set_voltage(int mV)
 {
-	static int cur_voltage = 3500;
+	static int cur_voltage = USB_VREG_MV;
 
 	if (!vreg_3p3 || IS_ERR(vreg_3p3))
 		return -ENODEV;
 
 	if (cur_voltage == mV)
 		return 0;
+
+	charger_connected(USB_VREG_MV == mV);
 
 	cur_voltage = mV;
 
@@ -2013,7 +2033,7 @@ static int kgsl_cpufreq_vote(struct msm_cpufreq_voter *v)
 }
 
 static struct kgsl_cpufreq_voter kgsl_cpufreq_voter = {
-	.idle = 0,
+	.idle = 1,
 	.voter = {
 		.vote = kgsl_cpufreq_vote,
 	},

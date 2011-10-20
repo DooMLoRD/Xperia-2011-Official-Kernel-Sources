@@ -74,6 +74,7 @@ typedef enum {
 	ACX_EVENT_MBOX_MASK         = 0x0026,
 	ACX_CONN_MONIT_PARAMS       = 0x002D,
 	ACX_CONS_TX_FAILURE         = 0x002F,
+	ACX_MULTICAST_MAC_RX_FIXUP  = 0x0030,
 	ACX_BCN_DTIM_OPTIONS        = 0x0031,
 	ACX_SG_ENABLE               = 0x0032,
 	ACX_SG_CFG                  = 0x0033,
@@ -1472,7 +1473,37 @@ typedef struct {
 	uint8  padding[2];       /* alignment to 32bits boundry   */
 } ACXBeaconAndBroadcastOptions_t;
 
+/******************************************************************************
 
+    Name:   ACX_MAC_MULTICAST_RX_FIXUP
+    Type:   Configuration
+    Access: Write Only
+    Length:
+
+******************************************************************************/
+typedef enum
+{
+     FIXUP_MULTICAST_DISABLED 		= 0,
+     FIXUP_MULTICAST_IN_FW_LEVEL	= BIT_0,
+     FIXUP_MULTICAST_IN_HW_LEVEL	= BIT_1,
+     FIXUP_MULTICAST_MAX_SIZE		= MAX_POSITIVE8
+}MulticastMACFixup_enum;
+
+#ifdef HOST_COMPILE
+typedef uint8 MulticastMACFixup_e;
+#else
+typedef MulticastMACFixup_enum MulticastMACFixup_e;
+#endif
+
+typedef struct
+{
+	INFO_ELE_HDR
+
+	MulticastMACFixup_e multicastMACfixupEnable;  /* defines whether to fix unicast MAC address RX
+							 when host is in suspend */
+	uint8 padding[3];
+
+} ACXMulticastMACFixup_t;
 /******************************************************************************
 
     Name:   ACX_SG_ENABLE

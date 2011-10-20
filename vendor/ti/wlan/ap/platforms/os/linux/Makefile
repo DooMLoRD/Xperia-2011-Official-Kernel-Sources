@@ -43,6 +43,8 @@ TEST ?= n
 
 ETH_SUPPORT ?= n
 
+#Enable debugging for easier symbol fetching
+DEBUG ?= y
 ##
 ##
 ## File lists and locations

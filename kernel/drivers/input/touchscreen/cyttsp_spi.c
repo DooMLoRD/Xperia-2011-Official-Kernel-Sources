@@ -39,10 +39,12 @@
 #define CY_SPI_RD_OP      0x01
 #define CY_SPI_CMD_BYTES  4
 #define CY_SPI_SYNC_BYTES 2
+#define CY_SPI_SYNC_BYTE  2
 #define CY_SPI_SYNC_ACK1  0x62 /* from protocol v.2 */
 #define CY_SPI_SYNC_ACK2  0x9D /* from protocol v.2 */
 #define CY_SPI_SYNC_NACK  0x69
-#define CY_SPI_DATA_SIZE  64
+#define CY_SPI_MAX_PACKET 128
+#define CY_SPI_DATA_SIZE  (CY_SPI_MAX_PACKET - CY_SPI_CMD_BYTES)
 #define CY_SPI_DATA_BUF_SIZE (CY_SPI_CMD_BYTES + CY_SPI_DATA_SIZE)
 #define CY_SPI_BITS_PER_WORD 8
 
@@ -53,32 +55,6 @@ struct cyttsp_spi {
 	u8 wr_buf[CY_SPI_DATA_BUF_SIZE];
 	u8 rd_buf[CY_SPI_DATA_BUF_SIZE];
 };
-
-static void spi_complete(void *arg)
-{
-	complete(arg);
-}
-
-static int spi_sync_tmo(struct spi_device *spi, struct spi_message *message)
-{
-	DECLARE_COMPLETION_ONSTACK(done);
-	int status;
-	DBG(printk(KERN_INFO"%s: Enter\n", __func__);)
-
-	message->complete = spi_complete;
-	message->context = &done;
-	status = spi_async(spi, message);
-	if (status == 0) {
-		int ret = wait_for_completion_interruptible_timeout(&done, HZ);
-		if (!ret) {
-			printk(KERN_ERR "%s: timeout\n", __func__);
-			status = -EIO;
-		} else
-			status = message->status;
-	}
-	message->context = NULL;
-	return status;
-}
 
 static int cyttsp_spi_xfer_(u8 op, struct cyttsp_spi *ts_spi,
 			    u8 reg, u8 *buf, int length)
@@ -127,9 +103,9 @@ static int cyttsp_spi_xfer_(u8 op, struct cyttsp_spi *ts_spi,
 
 	spi_message_init(&msg);
 	spi_message_add_tail(&xfer, &msg);
-	retval = spi_sync_tmo(ts_spi->spi_client, &msg);
+	retval = spi_sync(ts_spi->spi_client, &msg);
 	if (retval < 0) {
-		printk(KERN_ERR "%s: spi_sync_tmo() error %d\n",
+		printk(KERN_ERR "%s: spi_sync() error %d\n",
 			__func__, retval);
 		retval = 0;
 	}
@@ -139,7 +115,8 @@ static int cyttsp_spi_xfer_(u8 op, struct cyttsp_spi *ts_spi,
 			printk(KERN_INFO "%s: rd[%d]:0x%02x\n",
 				__func__, i, rd_buf[i]);)
 
-		for (i = 0; i < (length + CY_SPI_CMD_BYTES - 1); i++) {
+		for (i = 0; i < (CY_SPI_DATA_BUF_SIZE -
+			(length + CY_SPI_SYNC_BYTES - 1)); i++) {
 			if ((rd_buf[i] != CY_SPI_SYNC_ACK1) ||
 				(rd_buf[i + 1] != CY_SPI_SYNC_ACK2)) {
 				continue;
@@ -151,7 +128,13 @@ static int cyttsp_spi_xfer_(u8 op, struct cyttsp_spi *ts_spi,
 			}
 		}
 		DBG(printk(KERN_INFO "%s: byte sync error\n", __func__);)
-		retval = 1;
+		retval = -EAGAIN;
+	} else {
+		if ((rd_buf[CY_SPI_SYNC_BYTE] == CY_SPI_SYNC_ACK1) &&
+			(rd_buf[CY_SPI_SYNC_BYTE+1] == CY_SPI_SYNC_ACK2))
+			retval = 0;
+		else
+			retval = -EAGAIN;
 	}
 	return retval;
 }
@@ -160,21 +143,16 @@ static int cyttsp_spi_xfer(u8 op, struct cyttsp_spi *ts,
 			    u8 reg, u8 *buf, int length)
 {
 	int tries;
-	int retval;
+	int rc;
 	DBG(printk(KERN_INFO "%s: Enter\n", __func__);)
 
-	if (op == CY_SPI_RD_OP) {
-		for (tries = CY_NUM_RETRY; tries; tries--) {
-			retval = cyttsp_spi_xfer_(op, ts, reg, buf, length);
-			if (retval == 0)
-				break;
-			else
-				msleep(10);
-		}
-	} else {
-		retval = cyttsp_spi_xfer_(op, ts, reg, buf, length);
+	for (tries = 0; tries < CY_NUM_RETRY; tries++) {
+		rc = cyttsp_spi_xfer_(op, ts, reg, buf, length);
+		if (!rc || rc != -EAGAIN)
+			break;
 	}
-	return retval;
+
+	return rc;
 }
 
 static s32 ttsp_spi_read_block_data(void *handle, u8 addr,
@@ -189,12 +167,6 @@ static s32 ttsp_spi_read_block_data(void *handle, u8 addr,
 	if (retval < 0)
 		printk(KERN_ERR "%s: ttsp_spi_read_block_data failed\n",
 			__func__);
-
-	/* Do not print the above error if the data sync bytes were not found.
-	   This is a normal condition for the bootloader loader startup and need
-	   to retry until data sync bytes are found. */
-	if (retval > 0)
-		retval = -1;	/* now signal fail; so retry can be done */
 
 	return retval;
 }
@@ -212,10 +184,7 @@ static s32 ttsp_spi_write_block_data(void *handle, u8 addr,
 		printk(KERN_ERR "%s: ttsp_spi_write_block_data failed\n",
 			__func__);
 
-	if (retval == -EIO)
-		return 0;
-	else
-		return retval;
+	return retval;
 }
 
 static s32 ttsp_spi_tch_ext(void *handle, void *values)
@@ -255,6 +224,7 @@ static int __devinit cyttsp_spi_probe(struct spi_device *spi)
 		retval = -ENOMEM;
 		goto error_alloc_data_failed;
 	}
+
 	ts_spi->spi_client = spi;
 	dev_set_drvdata(&spi->dev, ts_spi);
 	ts_spi->ops.write = ttsp_spi_write_block_data;

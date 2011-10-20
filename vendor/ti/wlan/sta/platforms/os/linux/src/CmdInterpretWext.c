@@ -32,6 +32,7 @@
  */
 
 
+#define __FILE_ID__ FILE_ID_142
 #include "tidef.h"
 #include "WlanDrvIf.h"
 #include "tiwlnif.h"
@@ -1587,6 +1588,9 @@ event_end:
 	case IPC_EVENT_DISASSOCIATED:
 		wrqu.ap_addr.sa_family = ARPHRD_ETHER;
 		os_memorySet (pCmdInterpret->hOs,wrqu.ap_addr.sa_data, 0, ETH_ALEN);
+
+		/* Take the deauth wake lock to give userspace time to reconnect again. */
+		os_wake_lock_deauth(pCmdInterpret->hOs);
 
 		wireless_send_event(NETDEV(pCmdInterpret->hOs), SIOCGIWAP, &wrqu, NULL);
 

@@ -547,6 +547,7 @@ static ETxnStatus fwEvent_CallHandlers (TfwEvent *pFwEvent)
 		/* Fw watchdog timeout has occured */
 		eStatus = TWD_WdExpireEvent (pFwEvent->hTWD);
 		UPDATE_PENDING_HANDLERS_NUMBER(eStatus)
+		return TXN_STATUS_COMPLETE;
 	}
 
 	if (pFwEvent->uEventVector & ACX_INTR_INIT_COMPLETE) {

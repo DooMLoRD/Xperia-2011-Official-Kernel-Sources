@@ -105,11 +105,13 @@
 
 #ifdef DEBUG
 #define MUTEX_LOCK(x) do {						\
-	pr_debug("%s: Locking mutex in %s\n", BQ24185_NAME, __func__);	\
+	struct bq24185_data *_b = container_of(x, struct bq24185_data, lock);\
+	dev_dbg(&_b->clientp->dev, "Locking mutex in %s\n", __func__);	\
 	mutex_lock(x);							\
 } while (0)
 #define MUTEX_UNLOCK(x) do {						\
-	pr_debug("%s: Unlocking mutex in %s\n", BQ24185_NAME, __func__);\
+	struct bq24185_data *_b = container_of(x, struct bq24185_data, lock);\
+	dev_dbg(&_b->clientp->dev, "Unlocking mutex in %s\n", __func__);\
 	mutex_unlock(x);						\
 } while (0)
 #else
@@ -228,11 +230,10 @@ static ssize_t store_power_charger(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..2] where:\n0: Turn off charger\n"
-		       "1: Turn on charger in non USB compatible mode\n"
-		       "2: Turn on charger in USB compatible mode\n",
-		       BQ24185_NAME);
+		dev_err(pdev, "Wrong input to sysfs. "
+			"Expect [0..2] where:\n0: Turn off charger\n"
+			"1: Turn on charger in non USB compatible mode\n"
+			"2: Turn on charger in USB compatible mode\n");
 		rc = -EINVAL;
 	}
 
@@ -252,9 +253,9 @@ static ssize_t store_opa(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..1] where:\n0: Charger mode\n"
-		       "1: Boost mode\n", BQ24185_NAME);
+		dev_err(pdev, "Wrong input to sysfs. "
+			"Expect [0..1] where:\n0: Charger mode\n"
+			"1: Boost mode\n");
 		rc = -EINVAL;
 	}
 
@@ -275,8 +276,8 @@ static ssize_t store_chg_volt(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..%u] mV\n", BQ24185_NAME, USHORT_MAX);
+		dev_err(pdev, "Wrong input to sysfs. "
+			"Expect [0..%u] mV\n", USHORT_MAX);
 		rc = -EINVAL;
 	}
 
@@ -296,8 +297,8 @@ static ssize_t store_chg_curr(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..%u] mA\n", BQ24185_NAME, USHORT_MAX);
+		dev_err(pdev, "Wrong input to sysfs. "
+			"Expect [0..%u] mA\n", USHORT_MAX);
 		rc = -EINVAL;
 	}
 
@@ -317,8 +318,8 @@ static ssize_t store_chg_curr_term(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..%u] mA\n", BQ24185_NAME, USHORT_MAX);
+		dev_err(pdev, "Wrong input to sysfs. Expect [0..%u] mA\n",
+			USHORT_MAX);
 		rc = -EINVAL;
 	}
 
@@ -338,8 +339,8 @@ static ssize_t store_input_curr_lim(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..%u] mA\n", BQ24185_NAME, USHORT_MAX);
+		dev_err(pdev, "Wrong input to sysfs. Expect [0..%u] mA\n",
+			USHORT_MAX);
 		rc = -EINVAL;
 	}
 
@@ -360,8 +361,8 @@ static ssize_t store_safety_timer(struct device *pdev,
 		if (ret < 0)
 			rc = ret;
 	} else {
-		pr_err("%s: Wrong input to sysfs. "
-		       "Expect [0..%u] minutes\n", BQ24185_NAME, USHORT_MAX);
+		dev_err(pdev, "Wrong input to sysfs. Expect [0..%u] minutes\n",
+			USHORT_MAX);
 		rc = -EINVAL;
 	}
 
@@ -389,7 +390,7 @@ static int debug_create_attrs(struct device *dev)
 	return 0;
 
 debug_create_attrs_failed:
-	pr_err("%s: Failed creating semc battery attrs.\n", BQ24185_NAME);
+	dev_err(dev, "Failed creating semc battery attrs.\n");
 	while (i--)
 		device_remove_file(dev, &debug_attrs[i]);
 
@@ -414,13 +415,15 @@ static void bq24185_dump_registers(struct bq24185_data *bd)
 	for (i = 0; i < 9; i++) {
 		data[i] = i2c_smbus_read_byte_data(bd->clientp, i);
 		if (data[i] < 0)
-			pr_err("%s: Failed dumping reg %u\n", BQ24185_NAME, i);
+			dev_err(&bd->clientp->dev, "Failed dumping reg %u\n",
+				i);
 	}
 
-	pr_debug("%s: Regdump\n\t0: 0x%.2x, 1: 0x%.2x, 2: 0x%.2x, 3: 0x%.2x, "
-		 "4: 0x%.2x, 5: 0x%.2x, 6: 0x%.2x, 7: 0x%.2x, 8: 0x%.2x\n",
-		 BQ24185_NAME, data[0], data[1], data[2], data[3], data[4],
-		 data[5], data[6], data[7], data[8]);
+	dev_dbg(&bd->clientp->dev, "Regdump\n\t0: 0x%.2x, 1: 0x%.2x, 2: 0x%.2x,"
+		" 3: 0x%.2x, 4: 0x%.2x, 5: 0x%.2x, 6: 0x%.2x, 7: 0x%.2x, "
+		"8: 0x%.2x\n",
+		data[0], data[1], data[2], data[3], data[4],
+		data[5], data[6], data[7], data[8]);
 }
 #endif
 
@@ -433,7 +436,7 @@ static int bq24185_enable_charger(struct bq24185_data *bd)
 	}
 	MUTEX_UNLOCK(&bd->lock);
 
-	pr_info("%s: Enabling charger\n", BQ24185_NAME);
+	dev_info(&bd->clientp->dev, "Enabling charger\n");
 
 	return i2c_smbus_write_byte_data(bd->clientp, REG_CONTROL,
 		 SET_BIT(REG_CONTROL_CE_BIT, 0,
@@ -449,7 +452,7 @@ static int bq24185_disable_charger(struct bq24185_data *bd)
 	}
 	MUTEX_UNLOCK(&bd->lock);
 
-	pr_info("%s: Disabling charger\n", BQ24185_NAME);
+	dev_info(&bd->clientp->dev, "Disabling charger\n");
 
 	return i2c_smbus_write_byte_data(bd->clientp, REG_CONTROL,
 		 SET_BIT(REG_CONTROL_CE_BIT, 1,
@@ -461,16 +464,16 @@ static int bq24185_reset_charger(struct bq24185_data *bd)
 	s32 data = i2c_smbus_read_byte_data(bd->clientp, REG_TERMINATION);
 
 	if (data < 0) {
-		pr_err("%s: Failed resetting charger (getting reg)\n",
-		       BQ24185_NAME);
+		dev_err(&bd->clientp->dev,
+			"Failed resetting charger (getting reg)\n");
 		return (int)data;
 	}
 
 	data = SET_BIT(REG_TERMINATION_RESET_BIT, 1, data);
 	data = i2c_smbus_write_byte_data(bd->clientp, REG_TERMINATION, data);
 	if (data < 0)
-		pr_err("%s: Failed resetting charger (setting reg)\n",
-		       BQ24185_NAME);
+		dev_err(&bd->clientp->dev,
+			"Failed resetting charger (setting reg)\n");
 
 	return (int)data;
 }
@@ -488,8 +491,8 @@ static int bq24185_check_status(struct bq24185_data *bd)
 
 	status = i2c_smbus_read_byte_data(bd->clientp, REG_STATUS);
 	if (status < 0) {
-		pr_err("%s: Failed checking status. Errno = %d\n",
-		       BQ24185_NAME, status);
+		dev_err(&bd->clientp->dev,
+			"Failed checking status. Errno = %d\n", status);
 		return (int)status;
 	}
 
@@ -501,16 +504,16 @@ static int bq24185_check_status(struct bq24185_data *bd)
 	if ((CHARGER_BOOST_MODE == bd->mode) &&
 		(CHARGER_BOOST_MODE !=
 		CHK_BIT(REG_STATUS_BOOST_BIT, status))) {
-		pr_debug("%s: Detect vbus_drop\n", BQ24185_NAME);
+		dev_dbg(&bd->clientp->dev, "Detect vbus_drop\n");
 		if (bd->control && bd->control->notify_vbus_drop)
 			bd->control->notify_vbus_drop();
 	}
 	bd->mode = CHK_BIT(REG_STATUS_BOOST_BIT, status);
 	MUTEX_UNLOCK(&bd->lock);
 
-	pr_debug("--[ Status of %s ]--\n", BQ24185_NAME);
-	pr_debug(" Status/Control:\n   PSEL=%s\n   EN_STAT=%s\n"
-		 " STAT=%s\n   BOOST=%s\n   FAULT=%s\n",
+	dev_dbg(&bd->clientp->dev, "--[ Status of %s ]--\n", BQ24185_NAME);
+	dev_dbg(&bd->clientp->dev, " Status/Control:\n   PSEL=%s\n"
+		"   EN_STAT=%s\n   STAT=%s\n   BOOST=%s\n   FAULT=%s\n",
 		 status & (1 << 7) ? "high" : "low",
 		 status & (1 << 6) ? "Enabled" : "Disabled",
 		 pzstat[bd->cached_status.stat],
@@ -561,7 +564,7 @@ static irqreturn_t bq24185_thread_irq(int irq, void *data)
 	struct bq24185_data *bd = data;
 	struct bq24185_status_data old_status = bd->cached_status;
 
-	pr_debug("%s: Receiving threaded interrupt\n", BQ24185_NAME);
+	dev_dbg(&bd->clientp->dev, "Receiving threaded interrupt\n");
 	/* Delay the interrupt handling since STATx in register '0' is not
 	 * always updated when receiving this.
 	 * 300 ms according to TI.
@@ -660,9 +663,16 @@ static void bq24185_reset_watchdog_worker(struct work_struct *work)
 	s32 data = i2c_smbus_read_byte_data(bd->clientp, REG_STATUS);
 
 	if (data >= 0) {
+		s32 rc;
 		data = SET_BIT(REG_STATUS_TMR_RST_BIT, 1, data);
-		if (i2c_smbus_write_byte_data(bd->clientp, REG_STATUS, data))
-			pr_err("%s: Watchdog reset failed\n", BQ24185_NAME);
+		rc = i2c_smbus_write_byte_data(bd->clientp, REG_STATUS, data);
+		if (rc < 0)
+			dev_err(&bd->clientp->dev,
+				"Watchdog reset failed (write data), rc = %d\n",
+				rc);
+	} else {
+		dev_err(&bd->clientp->dev,
+			"Watchdog reset failed (read data), rc = %d\n", data);
 	}
 
 	/* bq24185_check_status(bd); */
@@ -700,7 +710,7 @@ static void bq24185_set_init_values(struct bq24185_data *bd)
 {
 	s32 data;
 
-	pr_info("%s: Set init values\n", BQ24185_NAME);
+	dev_info(&bd->clientp->dev, "Set init values\n");
 
 	/* Enable status interrupts */
 	data = i2c_smbus_read_byte_data(bd->clientp, REG_STATUS);
@@ -723,7 +733,7 @@ static void bq24185_set_init_values(struct bq24185_data *bd)
 				data);
 	else
 		data = SET_MASK(REG_DPM_VINDPM_MASK,
-				DATA_MASK(REG_DPM_VINDPM_MASK, VINDPM_4470MV),
+				DATA_MASK(REG_DPM_VINDPM_MASK, VINDPM_4390MV),
 				data);
 
 	(void)i2c_smbus_write_byte_data(bd->clientp, REG_DPM, data);
@@ -738,8 +748,8 @@ int bq24185_turn_on_charger(u8 usb_compliant)
 		return -EAGAIN;
 	bd = container_of(psy, struct bq24185_data, bat_ps);
 
-	pr_info("%s: Turning on charger. USB-%s mode\n", BQ24185_NAME,
-		usb_compliant ? "Host" : "Dedicated");
+	dev_info(&bd->clientp->dev, "Turning on charger. USB-%s mode\n",
+		 usb_compliant ? "Host" : "Dedicated");
 
 	/* Need to start watchdog reset otherwise HW will reset itself.
 	 * If boot has triggered charging the watchdog resetter is already
@@ -768,7 +778,7 @@ int bq24185_turn_off_charger(void)
 		return -EAGAIN;
 	bd = container_of(psy, struct bq24185_data, bat_ps);
 
-	pr_info("%s: Turning off charger\n", BQ24185_NAME);
+	dev_info(&bd->clientp->dev, "Turning off charger\n");
 
 	bq24185_stop_watchdog_reset(bd);
 	bq24185_hz_enable(bd);
@@ -804,7 +814,7 @@ int bq24185_set_opa_mode(enum bq24185_opa_mode mode)
 		bq24185_stop_watchdog_reset(bd);
 		bq24185_hz_enable(bd);
 		data = SET_BIT(REG_BOOST_OPA_MODE_BIT, 0, data);
-		pr_info("%s: Disabling boost mode\n", BQ24185_NAME);
+		dev_info(&bd->clientp->dev, "Disabling boost mode\n");
 		return i2c_smbus_write_byte_data(bd->clientp, REG_BOOST, data);
 	case CHARGER_BOOST_MODE:
 		if (CHK_BIT(REG_BOOST_OPA_MODE_BIT, data))
@@ -815,10 +825,10 @@ int bq24185_set_opa_mode(enum bq24185_opa_mode mode)
 		bq24185_hz_disable(bd);
 		bq24185_start_watchdog_reset(bd);
 		data = SET_BIT(REG_BOOST_OPA_MODE_BIT, 1, data);
-		pr_info("%s: Enabling boost mode\n", BQ24185_NAME);
+		dev_info(&bd->clientp->dev, "Enabling boost mode\n");
 		return i2c_smbus_write_byte_data(bd->clientp, REG_BOOST, data);
 	default:
-		pr_err("%s: Invalid charger mode\n", BQ24185_NAME);
+		dev_err(&bd->clientp->dev, "Invalid charger mode\n");
 	}
 
 	return -EINVAL;
@@ -871,8 +881,8 @@ int bq24185_set_charger_voltage(u16 mv)
 
 	voreg = (min_t(u16, mv, MAX_CHARGE_VOLTAGE) - MIN_CHARGE_VOLTAGE) /
 		CHARGE_VOLTAGE_STEP;
-	pr_info("%s: Setting charger voltage to %u mV\n", BQ24185_NAME,
-		MIN_CHARGE_VOLTAGE + voreg * CHARGE_VOLTAGE_STEP);
+	dev_info(&bd->clientp->dev, "Setting charger voltage to %u mV\n",
+		 MIN_CHARGE_VOLTAGE + voreg * CHARGE_VOLTAGE_STEP);
 	data = i2c_smbus_read_byte_data(bd->clientp, REG_BR_VOLTAGE);
 	if (CHK_MASK(REG_BR_VOLTAGE_MASK, data) !=
 	    DATA_MASK(REG_BR_VOLTAGE_MASK, voreg)) {
@@ -921,8 +931,9 @@ int bq24185_set_charger_current(u16 ma)
 	data = i2c_smbus_read_byte_data(bd->clientp, REG_DPM);
 
 	if (ma < MIN_CHARGE_CURRENT(bd->rsens)) {
-		pr_info("%s: Setting charger current to %u mA\n",
-			BQ24185_NAME, LOW_CHARGE_CURRENT(bd->rsens));
+		dev_info(&bd->clientp->dev,
+			 "Setting charger current to %u mA\n",
+			 LOW_CHARGE_CURRENT(bd->rsens));
 		if (!CHK_BIT(REG_DPM_LOW_CHG_BIT, data)) {
 			data = SET_BIT(REG_DPM_LOW_CHG_BIT, 1, data);
 			(void)i2c_smbus_write_byte_data(bd->clientp, REG_DPM,
@@ -932,9 +943,10 @@ int bq24185_set_charger_current(u16 ma)
 		u8 vichrg = (min_t(u16, ma, MAX_CHARGE_CURRENT(bd->rsens)) -
 			     MIN_CHARGE_CURRENT(bd->rsens)) /
 			CHARGE_CURRENT_STEP(bd->rsens);
-		pr_info("%s: Setting charger current to %u mA\n",
-			BQ24185_NAME, MIN_CHARGE_CURRENT(bd->rsens) +
-			vichrg * CHARGE_CURRENT_STEP(bd->rsens));
+		dev_info(&bd->clientp->dev,
+			 "Setting charger current to %u mA\n",
+			 MIN_CHARGE_CURRENT(bd->rsens) +
+			 vichrg * CHARGE_CURRENT_STEP(bd->rsens));
 
 		if (CHK_BIT(REG_DPM_LOW_CHG_BIT, data)) {
 			data = SET_BIT(REG_DPM_LOW_CHG_BIT, 0, data);
@@ -982,8 +994,8 @@ int bq24185_set_charger_termination_current(u16 ma)
 	if (ma < MIN_CHARGE_TERM_CURRENT(bd->rsens)) {
 		if (CHK_BIT(REG_CONTROL_TE_BIT, data)) {
 			data = SET_BIT(REG_CONTROL_TE_BIT, 0, data);
-			pr_info("%s: Disable charge current termination\n",
-				BQ24185_NAME);
+			dev_info(&bd->clientp->dev,
+				 "Disable charge current termination\n");
 			(void)i2c_smbus_write_byte_data(bd->clientp,
 							REG_CONTROL, data);
 		}
@@ -992,8 +1004,8 @@ int bq24185_set_charger_termination_current(u16 ma)
 
 	if (!CHK_BIT(REG_CONTROL_TE_BIT, data)) {
 		data = SET_BIT(REG_CONTROL_TE_BIT, 1, data);
-		pr_info("%s: Enable charge current termination\n",
-			BQ24185_NAME);
+		dev_info(&bd->clientp->dev,
+			 "Enable charge current termination\n");
 		(void)i2c_smbus_write_byte_data(bd->clientp, REG_CONTROL, data);
 	}
 
@@ -1009,8 +1021,8 @@ int bq24185_set_charger_termination_current(u16 ma)
 
 	data = SET_MASK(REG_TERMINATION_VITERM_MASK,
 			DATA_MASK(REG_TERMINATION_VITERM_MASK, viterm), data);
-	pr_info("%s: Charge current termination set to %u mA\n", BQ24185_NAME,
-		25 + viterm * 25);
+	dev_info(&bd->clientp->dev, "Charge current termination set to %u mA\n",
+		 25 + viterm * 25);
 	return i2c_smbus_write_byte_data(bd->clientp, REG_TERMINATION, data);
 }
 EXPORT_SYMBOL_GPL(bq24185_set_charger_termination_current);
@@ -1057,8 +1069,8 @@ int bq24185_set_charger_safety_timer(u16 minutes)
 	    DATA_MASK(REG_NTC_TMR_MASK, safety_timer))
 		return 0;
 
-	pr_info("%s: Set safety timer to %s\n", BQ24185_NAME,
-		hwtime[safety_timer]);
+	dev_info(&bd->clientp->dev, "Set safety timer to %s\n",
+		 hwtime[safety_timer]);
 
 	data = SET_MASK(REG_NTC_TMR_MASK,
 			DATA_MASK(REG_NTC_TMR_MASK, safety_timer),
@@ -1102,8 +1114,8 @@ int bq24185_set_input_current_limit(u16 ma)
 	else
 		iin_lim = IIN_LIM_800MA;
 
-	pr_info("%s: Setting input charger current to %s\n",
-		BQ24185_NAME, hwlim[iin_lim]);
+	dev_info(&bd->clientp->dev, "Setting input charger current to %s\n",
+		 hwlim[iin_lim]);
 
 	data = i2c_smbus_read_byte_data(bd->clientp, REG_CONTROL);
 	if (CHK_MASK(REG_CONTROL_IIN_LIM_MASK, data) !=
@@ -1201,21 +1213,20 @@ static int bq24185_probe(struct i2c_client *client,
 
 	/* Make sure we have at least i2c functionality on the bus */
 	if (!i2c_check_functionality(adapter, I2C_FUNC_I2C)) {
-		pr_err("%s: No i2c functionality available\n", BQ24185_NAME);
+		dev_err(&client->dev, "No i2c functionality available\n");
 		return -EIO;
 	}
 
 	buf = i2c_smbus_read_byte_data(client, REG_VENDOR);
 	if (buf <= 0) {
-		pr_err("%s: Failed read vendor info\n", BQ24185_NAME);
+		dev_err(&client->dev, "Failed read vendor info\n");
 		return -EIO;
 	}
 
 	if (((buf & REG_VENDOR_CODE_MASK) >> 5) == REG_VENDOR_CODE) {
-		pr_info("%s: Found BQ24185, rev 0x%.2x\n", BQ24185_NAME,
-			buf & 7);
+		dev_info(&client->dev, "Found BQ24185, rev 0x%.2x\n", buf & 7);
 	} else {
-		pr_err("%s: Invalid vendor code\n", BQ24185_NAME);
+		dev_err(&client->dev, "Invalid vendor code\n");
 		return -ENODEV;
 	}
 
@@ -1227,28 +1238,28 @@ static int bq24185_probe(struct i2c_client *client,
 		buf = i2c_smbus_write_byte_data(client, REG_SAFETY_LIM,
 						pdata->mbrv | pdata->mccsv);
 		if (buf < 0) {
-			pr_err("%s: Failed setting safety limit register\n",
-			       BQ24185_NAME);
+			dev_err(&client->dev,
+				"Failed setting safety limit register\n");
 			return (int)buf;
 		}
 
 		buf = i2c_smbus_read_byte_data(client, REG_SAFETY_LIM);
 		if (buf < 0) {
-			pr_err("%s: Failed reading safety limit register\n",
-			       BQ24185_NAME);
+			dev_err(&client->dev,
+				"Failed reading safety limit register\n");
 			return (int)buf;
 		}
 
 		if (buf != (pdata->mbrv | pdata->mccsv)) {
 			if (pdata->support_boot_charging) {
-				pr_warning("%s: *** Safety limit could not be "
-					   "set!\n Please check boot accessing "
-					   "charger (want 0x%x, got 0x%x) ***",
-					   BQ24185_NAME,
-					   pdata->mbrv | pdata->mccsv, buf);
+				dev_warn(&client->dev,
+					 "*** Safety limit could not be "
+					 "set!\nPlease check boot accessing "
+					 "charger (want 0x%x, got 0x%x) ***",
+					 pdata->mbrv | pdata->mccsv, buf);
 			} else {
-				pr_err("%s, Safety limit could not be set!\n",
-				       BQ24185_NAME);
+				dev_err(&client->dev,
+					"Safety limit could not be set!\n");
 				return -EPERM;
 			}
 		}
@@ -1282,7 +1293,7 @@ static int bq24185_probe(struct i2c_client *client,
 
 	if (!bd->rsens) {
 		kfree(bd);
-		pr_err("%s: Invalid sense resistance!\n", BQ24185_NAME);
+		dev_err(&client->dev, "Invalid sense resistance!\n");
 		return -EINVAL;
 	}
 
@@ -1292,7 +1303,7 @@ static int bq24185_probe(struct i2c_client *client,
 
 	bd->wq = create_singlethread_workqueue("bq24185worker");
 	if (!bd->wq) {
-		pr_err("%s: Failed creating workqueue\n", BQ24185_NAME);
+		dev_err(&client->dev, "Failed creating workqueue\n");
 		rc = -ENOMEM;
 		goto probe_exit_free;
 	}
@@ -1301,8 +1312,8 @@ static int bq24185_probe(struct i2c_client *client,
 
 	rc = power_supply_register(&client->dev, &bd->bat_ps);
 	if (rc) {
-		pr_err("%s: Failed registering to power_supply class\n",
-		       BQ24185_NAME);
+		dev_err(&client->dev,
+			"Failed registering to power_supply class\n");
 		goto probe_exit_work_queue;
 	}
 
@@ -1313,12 +1324,12 @@ static int bq24185_probe(struct i2c_client *client,
 
 	if (pdata && pdata->support_boot_charging &&
 	    STAT_CHARGE_IN_PROGRESS == bd->cached_status.stat) {
-		pr_info("%s: Charging started by boot\n", BQ24185_NAME);
+		dev_info(&client->dev, "Charging started by boot\n");
 		bd->boot_initiated_charging = 1;
 		/* Kick the watchdog to not lose the boot setting */
 		bq24185_start_watchdog_reset(bd);
 	} else {
-		pr_info("%s: Not initialized by boot\n", BQ24185_NAME);
+		dev_info(&client->dev, "Not initialized by boot\n");
 		rc = bq24185_reset_charger(bd);
 		if (rc)
 			goto probe_exit_unregister;
@@ -1330,7 +1341,7 @@ static int bq24185_probe(struct i2c_client *client,
 				  IRQF_DISABLED | IRQF_ONESHOT,
 				  "bq24185interrupt", bd);
 	if (rc) {
-		pr_err("%s: Failed requesting IRQ\n", BQ24185_NAME);
+		dev_err(&client->dev, "Failed requesting IRQ\n");
 		goto probe_exit_unregister;
 	}
 
@@ -1338,14 +1349,14 @@ static int bq24185_probe(struct i2c_client *client,
 
 	rc = enable_irq_wake(client->irq);
 	if (rc)
-		pr_err("%s: Failed to enable wakeup on IRQ request\n",
-		BQ24185_NAME);
+		dev_err(&client->dev,
+			"Failed to enable wakeup on IRQ request\n");
 	else
 		bd->irq_wake_enabled = 1;
 
 #ifdef DEBUG_FS
 	if (debug_create_attrs(bd->bat_ps.dev))
-		pr_info("%s: Debug support failed\n", BQ24185_NAME);
+		dev_info(&client->dev, "Debug support failed\n");
 #endif
 
 	atomic_set(&bq24185_init_ok, 1);

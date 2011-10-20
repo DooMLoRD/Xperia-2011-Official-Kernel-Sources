@@ -226,7 +226,7 @@ ifeq "$(HOST_PLATFORM)" "zoom1"
 TARGET = apps.tar
 endif
 ifeq "$(HOST_PLATFORM)" "msm"
-TARGET = apps
+TARGET = apps.tar
 endif
 ifeq "$(HOST_PLATFORM)" "*UNDEFINED*"
 TARGET = help

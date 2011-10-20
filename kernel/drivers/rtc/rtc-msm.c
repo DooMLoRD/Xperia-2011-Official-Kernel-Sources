@@ -267,7 +267,7 @@ msmrtc_timeremote_set_time(struct device *dev, struct rtc_time *tm)
 	if (tm_req.tm_year < 1900)
 		tm_req.tm_year += 1900;
 
-	if ((tm_req.tm_year < 1980) || (tm_req.tm_year > 2037))
+	if (tm_req.tm_year < 1980)
 		return -EINVAL;
 
 	pr_debug("%s: %.2u/%.2u/%.4u %.2u:%.2u:%.2u (%.2u)\n",
@@ -305,7 +305,7 @@ msmrtc_timeremote_read_time(struct device *dev, struct rtc_time *tm)
 		return rc;
 	}
 
-	if ((tm->tm_year < 80) || (tm->tm_year > 137)) {
+	if (tm->tm_year < 80) {
 		int rc;
 
 		tm->tm_year = 80;
@@ -367,7 +367,7 @@ msmrtc_timeremote_set_time_secure(struct device *dev, struct rtc_time *tm)
 	if (tm_req.tm_year < 1900)
 		tm_req.tm_year += 1900;
 
-	if ((tm_req.tm_year < 1980) || (tm_req.tm_year > 2037))
+	if (tm_req.tm_year < 1980)
 		return -EINVAL;
 
 	pr_debug("%s: %.2u/%.2u/%.4u %.2u:%.2u:%.2u (%.2u)\n",
@@ -407,7 +407,7 @@ msmrtc_timeremote_read_time_secure(struct device *dev, struct rtc_time *tm)
 		return rc;
 	}
 
-	if ((tm->tm_year < 80) || (tm->tm_year > 137)) {
+	if (tm->tm_year < 80) {
 		int rc;
 
 		tm->tm_year = 80;
@@ -418,10 +418,10 @@ msmrtc_timeremote_read_time_secure(struct device *dev, struct rtc_time *tm)
 		tm->tm_sec = 0;
 		tm->tm_wday = 2;
 
-		rc = msmrtc_timeremote_set_time(dev, tm);
+		rc = msmrtc_timeremote_set_time_secure(dev, tm);
 		if (rc < 0) {
 			pr_err("%s: Failed to set default "
-				"time and date.\n", __func__);
+				"secure time and date.\n", __func__);
 			return rc;
 		}
 	}

@@ -1258,9 +1258,11 @@ msmsdcc_platform_sdiowakeup_irq(int irq, void *dev_id)
 	pr_info("%s: SDIO Wake up IRQ : %d\n", __func__, irq);
 	spin_lock(&host->lock);
 	if (!host->sdio_irq_disabled) {
-		wake_lock(&host->sdio_wlock);
 		disable_irq_nosync(irq);
-		disable_irq_wake(irq);
+		if (host->mmc->pm_flags & MMC_PM_WAKE_SDIO_IRQ) {
+			wake_lock(&host->sdio_wlock);
+			disable_irq_wake(irq);
+		}
 		host->sdio_irq_disabled = 1;
 	}
 	spin_unlock(&host->lock);
@@ -1388,6 +1390,7 @@ msmsdcc_probe(struct platform_device *pdev)
 	struct mmc_platform_data *plat = pdev->dev.platform_data;
 	struct msmsdcc_host *host;
 	struct mmc_host *mmc;
+	unsigned long flags;
 	struct resource *irqres = NULL;
 	struct resource *memres = NULL;
 	struct resource *dmares = NULL;
@@ -1524,7 +1527,7 @@ msmsdcc_probe(struct platform_device *pdev)
 	mmc->max_phys_segs = NR_SG;
 	mmc->max_hw_segs = NR_SG;
 	mmc->max_blk_size = 4096;	/* MCI_DATA_CTL BLOCKSIZE up to 4096 */
-	mmc->max_blk_count = 65536;
+	mmc->max_blk_count = 65535;
 
 	mmc->max_req_size = 33554432;	/* MCI_DATA_LENGTH is 25 bits */
 	mmc->max_seg_size = mmc->max_req_size;
@@ -1572,7 +1575,12 @@ msmsdcc_probe(struct platform_device *pdev)
 			goto pio_irq_free;
 		} else {
 			mmc->pm_caps |= MMC_PM_WAKE_SDIO_IRQ;
-			disable_irq(plat->sdiowakeup_irq);
+			spin_lock_irqsave(&host->lock, flags);
+			if (!host->sdio_irq_disabled) {
+				disable_irq_nosync(plat->sdiowakeup_irq);
+				host->sdio_irq_disabled = 1;
+			}
+			spin_unlock_irqrestore(&host->lock, flags);
 		}
 	}
 
@@ -1708,11 +1716,11 @@ msmsdcc_probe(struct platform_device *pdev)
 		free_irq(plat->status_irq, host);
  sdiowakeup_irq_free:
 	wake_lock_destroy(&host->sdio_suspend_wlock);
-	if (plat->sdiowakeup_irq) {
-		wake_lock_destroy(&host->sdio_wlock);
+	if (plat->sdiowakeup_irq)
 		free_irq(plat->sdiowakeup_irq, host);
-	}
  pio_irq_free:
+	if (plat->sdiowakeup_irq)
+		wake_lock_destroy(&host->sdio_wlock);
 	free_irq(irqres->start, host);
  irq_free:
 	free_irq(irqres->start, host);

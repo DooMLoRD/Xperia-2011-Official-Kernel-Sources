@@ -1,6 +1,7 @@
 /*
  * Copyright 2009, The Android Open Source Project
  * Copyright (C) 2006, 2007 Apple Inc. All rights reserved.
+ * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,6 +24,12 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * This file has been modified by SonyEricsson.
+ * 2011-05-23:
+ *     Returning an error code in method getValueStatic
+ *     when attempt to get the application context fails.
+*/
 
 #define LOG_TAG "WebCore"
 
@@ -345,6 +352,14 @@ void PluginView::handleKeyboardEvent(KeyboardEvent* event)
     evt.data.key.modifiers = make_modifiers(pke->shiftKey(), pke->altKey());
     evt.data.key.unichar = pke->unichar();
 
+    // Prevent adobe flash plug-in to enter its alt modifier state if there's
+    // no character attached to the event. The adobe flash plug-in has only
+    // support for one keyboard layout.
+    if (evt.data.key.modifiers == kAlt_ANPKeyModifier && !evt.data.key.unichar) {
+        event->setDefaultHandled();
+        return;
+    }
+
     if (m_window->sendEvent(evt)) {
         event->setDefaultHandled();
     } else if (m_window->inFullScreen()){
@@ -380,7 +395,10 @@ NPError PluginView::getValueStatic(NPNVariable variable, void* value)
         case kJavaContext_ANPGetValue: {
             jobject* retObject = static_cast<jobject*>(value);
             *retObject = android::WebViewCore::getApplicationContext();
-            return NPERR_NO_ERROR;
+            if (*retObject)
+                return NPERR_NO_ERROR;
+            else
+                return NPERR_GENERIC_ERROR;
         }
         default:
             ; // do nothing

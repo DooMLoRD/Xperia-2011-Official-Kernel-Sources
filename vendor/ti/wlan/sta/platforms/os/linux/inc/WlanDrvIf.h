@@ -119,6 +119,7 @@ typedef struct {
 #ifdef CONFIG_HAS_WAKELOCK
 	struct wake_lock         wl_wifi;   /* Wifi wakelock */
 	struct wake_lock         wl_rxwake; /* Wifi rx wakelock */
+	struct wake_lock         wl_deauth; /* Wifi deauth wakelock */
 #endif
 	NDIS_HANDLE              ConfigHandle;/* Temp - For Windows compatibility */
 

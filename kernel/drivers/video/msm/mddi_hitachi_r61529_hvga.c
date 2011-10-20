@@ -25,6 +25,9 @@
 /* DISPLAY ID value */
 #define MDDI_HITACHI_CELL_ID 0xFA
 
+/* DISPLAY DRIVERIC ID value */
+#define MDDI_HITACHI_DISPLAY_DRIVER_IC_ID 0x01
+
 /* Frame time, used for delays */
 #define MDDI_FRAME_TIME 13
 
@@ -34,15 +37,15 @@
 enum lcd_registers {
 	LCD_REG_COLUMN_ADDRESS = 0x2a,
 	LCD_REG_PAGE_ADDRESS = 0x2b,
-	LCD_REG_DRIVER_IC_ID = 0xA1, /* TODO: check: temp SW sample */
-	LCD_REG_CELL_ID = 0xDA,
-	LCD_REG_MODULE_ID = 0xDB,
-	LCD_REG_REVISION_ID = 0xDC
+	LCD_REG_DRIVER_IC_ID = 0xA1,
+	LCD_REG_MODULE_ID = 0xA8,
+	LCD_REG_REVISION_ID = 0xA8
 };
 
 enum mddi_hitachi_lcd_state {
 	LCD_STATE_OFF,
 	LCD_STATE_POWER_ON,
+	LCD_STATE_DISPLAY_OFF,
 	LCD_STATE_ON,
 	LCD_STATE_SLEEP
 };
@@ -54,6 +57,13 @@ struct coords {
 	u16 y2;
 };
 
+struct panel_ids {
+	u32 driver_ic_id;
+	u32 module_id;
+	u32 revision_id;
+};
+
+
 struct hitachi_record {
 	struct hitachi_hvga_platform_data *pdata;
 	struct mutex mddi_mutex;
@@ -61,13 +71,22 @@ struct hitachi_record {
 	enum mddi_hitachi_lcd_state lcd_state;
 	struct coords last_window;
 	struct platform_device *pdev;
+	struct panel_ids pid;
 };
 
-#define DBC_CONTROL_SIZE  5
+#define DBC_CONTROL_SIZE  20
+/* 10% average setting*/
 static u32 dbc_control_on_data[DBC_CONTROL_SIZE] = {
-	0xF0020201, 0x04C0C0F0, 0x1990901F, 0x00A36235, 0x00000000};
+		0x00000001, 0x00000003, 0x00000003, 0x000000FF, 0X000000FF,
+		0x000000ED, 0x000000ED, 0x00000002, 0x00000018, 0X00000010,
+		0x00000010, 0x00000037, 0x0000005A, 0x00000087, 0X000000BE,
+		0x000000FF, 0x00000000, 0x00000000, 0x00000000, 0X00000000};
+
 static u32 dbc_control_off_data[DBC_CONTROL_SIZE] = {
-	0xFF020200, 0x04EBEBFF, 0x1F90901F, 0x00AA6B3D, 0x00000000};
+		0x00000000, 0x00000002, 0x00000002, 0x000000FF, 0X000000FF,
+		0x000000EB, 0x000000EB, 0x00000004, 0x0000001F, 0X00000090,
+		0x00000090, 0x0000001F, 0x0000003D, 0x0000006B, 0X000000AA,
+		0x00000000, 0x00000000, 0x00000000, 0x00000000, 0X00000000};
 
 #ifdef MDDI_HITACHI_DISPLAY_INITIAL
 #define GAMMA_SETTING_SIZE 6
@@ -90,8 +109,9 @@ static void hitachi_lcd_dbc_on(struct hitachi_record *rd)
 				DBC_CONTROL_SIZE, TRUE, NULL, MDDI_HOST_PRIM);
 
 		/* Backlight control2 set */
-		mddi_host_register_write16(0xB9, 0x0802FF00, 0, 0, 0, 1,
-			TRUE, NULL, MDDI_HOST_PRIM);
+		mddi_host_register_write16(0xB9, 0x00000000, 0x000000FF,
+				0x00000001, 0x00000008, 4,
+				TRUE, NULL, MDDI_HOST_PRIM);
 
 		/* Manufacture Command Access Protect */
 		mddi_queue_register_write(0xB0, 0x03, TRUE, 0);
@@ -109,12 +129,24 @@ static void hitachi_lcd_dbc_off(struct hitachi_record *rd)
 				DBC_CONTROL_SIZE, TRUE, NULL, MDDI_HOST_PRIM);
 
 		/* Backlight control2 set */
-		mddi_host_register_write16(0xB9, 0x0802FF00, 0, 0, 0, 1, TRUE,
-							NULL, MDDI_HOST_PRIM);
+		mddi_host_register_write16(0xB9, 0x00000000, 0x000000FF,
+				0x00000002, 0x00000008, 4,
+				TRUE, NULL, MDDI_HOST_PRIM);
 
 		/* Manufacture Command Access Protect */
 		mddi_queue_register_write(0xB0, 0x03, TRUE, 0);
 	}
+}
+
+static void hitachi_lcd_window_address_set(enum lcd_registers reg,
+						u16 start, u16 stop)
+{
+	uint32 para;
+
+	para = start;
+	para = (para << 16) | (start + stop);
+	para = swab32(para);
+	mddi_queue_register_write(reg, para, TRUE, 0);
 }
 
 #ifdef MDDI_HITACHI_DISPLAY_INITIAL
@@ -200,6 +232,14 @@ static void hitachi_lcd_driver_init(struct platform_device *pdev)
 }
 #endif
 
+static void hitachi_lcd_window_adjust(uint16 x1, uint16 x2,
+					uint16 y1, uint16 y2)
+{
+	hitachi_lcd_window_address_set(LCD_REG_COLUMN_ADDRESS, x1, x2);
+	hitachi_lcd_window_address_set(LCD_REG_PAGE_ADDRESS, y1, y2);
+	mddi_queue_register_write(0x3C, 0x00, TRUE, 0);
+}
+
 static void hitachi_lcd_exit_sleep(struct hitachi_record *rd)
 {
 	/*Address Mode Set */
@@ -284,7 +324,7 @@ static struct hitachi_record *get_hitachi_record_from_mfd(
 	return platform_get_drvdata(mfd->panel_pdev);
 }
 
-static int mddi_hitachi_lcd_on(struct platform_device *pdev)
+static int mddi_hitachi_ic_on_panel_off(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct hitachi_record *rd;
@@ -309,9 +349,9 @@ static int mddi_hitachi_lcd_on(struct platform_device *pdev)
 			hitachi_lcd_driver_init(pdev);
 #endif
 			hitachi_lcd_dbc_on(rd);
-			hitachi_lcd_display_on();
-			rd->lcd_state = LCD_STATE_ON;
+			rd->lcd_state = LCD_STATE_DISPLAY_OFF;
 			break;
+
 		case LCD_STATE_SLEEP:
 			hitachi_lcd_exit_deepstandby(rd);
 			hitachi_lcd_exit_sleep(rd);
@@ -319,11 +359,7 @@ static int mddi_hitachi_lcd_on(struct platform_device *pdev)
 			hitachi_lcd_driver_init(pdev);
 #endif
 			hitachi_lcd_dbc_on(rd);
-			hitachi_lcd_display_on();
-			rd->lcd_state = LCD_STATE_ON;
-			break;
-
-		case LCD_STATE_ON:
+			rd->lcd_state = LCD_STATE_DISPLAY_OFF;
 			break;
 
 		default:
@@ -335,8 +371,56 @@ error:
 	return ret;
 }
 
+static int mddi_hitachi_ic_on_panel_on(struct platform_device *pdev)
+{
+	int ret = 0;
+	struct hitachi_record *rd;
 
-static int mddi_hitachi_lcd_off(struct platform_device *pdev)
+	rd = get_hitachi_record_from_mfd(pdev);
+	if (!rd) {
+		ret = -ENODEV;
+		goto error;
+	}
+
+	mutex_lock(&rd->mddi_mutex);
+	if (rd->power_ctrl) {
+		switch (rd->lcd_state) {
+		case LCD_STATE_POWER_ON:
+			hitachi_lcd_exit_sleep(rd);
+#ifdef MDDI_HITACHI_DISPLAY_INITIAL
+			hitachi_lcd_driver_init(pdev);
+#endif
+			hitachi_lcd_dbc_on(rd);
+			hitachi_lcd_display_on();
+			rd->lcd_state = LCD_STATE_ON;
+			break;
+
+		case LCD_STATE_SLEEP:
+			hitachi_lcd_exit_deepstandby(rd);
+			hitachi_lcd_exit_sleep(rd);
+#ifdef MDDI_HITACHI_DISPLAY_INITIAL
+			hitachi_lcd_driver_init(pdev);
+#endif
+			hitachi_lcd_dbc_on(rd);
+			hitachi_lcd_display_on();
+			rd->lcd_state = LCD_STATE_ON;
+			break;
+
+		case LCD_STATE_DISPLAY_OFF:
+			hitachi_lcd_display_on();
+			rd->lcd_state = LCD_STATE_ON;
+			break;
+
+		default:
+			break;
+		}
+	}
+	mutex_unlock(&rd->mddi_mutex);
+error:
+	return ret;
+}
+
+static int mddi_hitachi_ic_off_panel_off(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct hitachi_record *rd;
@@ -366,6 +450,13 @@ static int mddi_hitachi_lcd_off(struct platform_device *pdev)
 		case LCD_STATE_SLEEP:
 			hitachi_power_off(rd);
 			rd->lcd_state = LCD_STATE_OFF;
+			break;
+
+		case LCD_STATE_DISPLAY_OFF:
+			hitachi_lcd_dbc_off(rd);
+			hitachi_lcd_enter_sleep();
+			hitachi_lcd_enter_deepstandby();
+			rd->lcd_state = LCD_STATE_SLEEP;
 			break;
 
 		case LCD_STATE_OFF:
@@ -404,26 +495,45 @@ static void lcd_attribute_register(struct platform_device *pdev)
 static int check_panel_ids(struct hitachi_record *rd)
 {
 	int ret = 0;
-	u32 readID = 0;
 
 	mutex_lock(&rd->mddi_mutex);
 
-	/* Temporaryly for EP build because currently interface
-	   can't support HITACHI 0xA1 read. EP build will read 0 in 0xDA,
-	   which for now will be considered to be a Hitachi display */
-	ret = mddi_host_register_read(0xDA, &readID, 1, MDDI_HOST_PRIM);
+	ret = mddi_host_register_read(LCD_REG_DRIVER_IC_ID,
+					&rd->pid.driver_ic_id,
+					1, MDDI_HOST_PRIM);
 	if (ret < 0) {
 		pr_err("mddi_hitachi_hvga: Failed to read Display ID\n");
 		ret = -ENODEV;
 		goto error;
 	}
-	if ((readID & 0xFF) != 0) {
+	if ((rd->pid.driver_ic_id & 0xFF) !=
+			MDDI_HITACHI_DISPLAY_DRIVER_IC_ID) {
 		pr_err("mddi_hitachi_hvga: Detected a non-Hitachi display\n");
 		ret = -ENODEV;
 		goto error;
 	}
-	printk(KERN_INFO "mddi_hitachi_hvga: Found Hitachi HVGA display,"
-						" 0xDA = 0x%x\n", readID);
+
+	ret = mddi_host_register_read(LCD_REG_MODULE_ID,
+					&rd->pid.module_id,
+					1, MDDI_HOST_PRIM);
+	if (ret < 0)
+		pr_err("mddi_hitachi_hvga: Failed to read LCD_REG_MODULE_ID\n");
+
+	ret = mddi_host_register_read(LCD_REG_REVISION_ID,
+					&rd->pid.revision_id,
+					1, MDDI_HOST_PRIM);
+	if (ret < 0)
+		pr_err("mddi_hitachi_hvga: "
+				"Failed to read LCD_REG_REVISION_ID\n");
+
+	pr_info("Found display with module ID = 0x%x, "
+			"revision ID = 0x%x, driver IC ID = 0x%x, "
+			"driver ID = 0x%x\n",
+			rd->pid.module_id & 0xFF,
+			rd->pid.revision_id & 0xFF,
+			rd->pid.driver_ic_id & 0xFF,
+			MDDI_DRIVER_VERSION);
+
 error:
 	mutex_unlock(&rd->mddi_mutex);
 	return ret;
@@ -463,14 +573,19 @@ static int mddi_hitachi_lcd_probe(struct platform_device *pdev)
 		rd->pdata->panel_data->panel_info.mddi.vdopkt =
 						MDDI_DEFAULT_PRIM_PIX_ATTR;
 		rd->pdata->panel_data->panel_info.lcd.vsync_enable = TRUE;
-		rd->pdata->panel_data->panel_info.lcd.refx100 = 8500;
+		rd->pdata->panel_data->panel_info.lcd.refx100 = 6500;
 		rd->pdata->panel_data->panel_info.lcd.v_back_porch = 8;
 		rd->pdata->panel_data->panel_info.lcd.v_front_porch = 8;
 		rd->pdata->panel_data->panel_info.lcd.v_pulse_width = 0;
 		rd->pdata->panel_data->panel_info.lcd.hw_vsync_mode = TRUE;
 		rd->pdata->panel_data->panel_info.lcd.vsync_notifier_period = 0;
-		rd->pdata->panel_data->on  = mddi_hitachi_lcd_on;
-		rd->pdata->panel_data->off = mddi_hitachi_lcd_off;
+		rd->pdata->panel_data->on  = mddi_hitachi_ic_on_panel_off;
+		rd->pdata->panel_data->controller_on_panel_on =
+						mddi_hitachi_ic_on_panel_on;
+		rd->pdata->panel_data->off = mddi_hitachi_ic_off_panel_off;
+		rd->pdata->panel_data->window_adjust =
+						hitachi_lcd_window_adjust;
+		rd->pdata->panel_data->power_on_panel_at_pan = 0;
 		pdev->dev.platform_data = rd->pdata->panel_data;
 
 		/* adds mfd on driver_data */

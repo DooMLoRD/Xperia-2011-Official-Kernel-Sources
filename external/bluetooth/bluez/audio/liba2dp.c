@@ -4,6 +4,7 @@
  *
  *  Copyright (C) 2006-2007  Nokia Corporation
  *  Copyright (C) 2004-2008  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  *
  *  This library is free software; you can redistribute it and/or
@@ -272,8 +273,11 @@ static int bluetooth_start(struct bluetooth_data *data)
 
 error:
 	/* close bluetooth connection to force reinit and reconfiguration */
-	if (data->state == A2DP_STATE_STARTING)
+	if (data->state == A2DP_STATE_STARTING) {
 		bluetooth_close(data);
+		/* notify client that thread is ready for next command */
+		pthread_cond_signal(&data->client_wait);
+        }
 	return err;
 }
 
@@ -928,8 +932,11 @@ static int bluetooth_configure(struct bluetooth_data *data)
 
 error:
 
-	if (data->state == A2DP_STATE_CONFIGURING)
+	if (data->state == A2DP_STATE_CONFIGURING) {
 		bluetooth_close(data);
+		/* notify client that thread is ready for next command */
+		pthread_cond_signal(&data->client_wait);
+        }
 	return err;
 }
 
@@ -1083,6 +1090,8 @@ static void* a2dp_thread(void *d)
 
 			case A2DP_CMD_INIT:
 				/* already called bluetooth_init() */
+				/* notify client that thread is ready for next command */
+				pthread_cond_signal(&data->client_wait);
 			default:
 				break;
 		}

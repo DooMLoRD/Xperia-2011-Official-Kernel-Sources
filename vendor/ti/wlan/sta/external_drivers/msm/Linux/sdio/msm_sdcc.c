@@ -1304,19 +1304,9 @@ int msmsdcc_suspend(struct platform_device *dev, pm_message_t state)
 
 	if (mmc) {
 		struct msmsdcc_host *host = mmc_priv(mmc);
-		void __iomem *base = host->base;
-		uint32_t status;
-		unsigned long timeleft = jiffies + msecs_to_jiffies(100);
 
 		if (host->stat_irq)
 			disable_irq(host->stat_irq);
-
-		do {
-			status = readl(base + MMCISTATUS);
-			if (!(status & (MCI_TXFIFOEMPTY | MCI_RXFIFOEMPTY)))
-				break;
-			cpu_relax();
-		} while (time_is_after_jiffies(timeleft));
 
 		if (mmc->card && mmc->card->type != MMC_TYPE_SDIO)
 			rc = mmc_suspend_host(mmc, state);

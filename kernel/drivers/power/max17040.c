@@ -58,6 +58,7 @@ struct max17040_data {
 	struct max17040_platform_data *pdata;
 	int curr_temp;
 	int exp_model;
+	int tech;
 };
 
 static void max17040_get_vcell(struct max17040_data *data)
@@ -323,6 +324,8 @@ static void max17040_worker(struct work_struct *work)
 
 	struct max17040_data *this;
 	struct delayed_work *dwork;
+	int delay;
+
 	dwork = container_of(work, struct delayed_work, work);
 	this = container_of(dwork, struct max17040_data, work);
 
@@ -330,7 +333,11 @@ static void max17040_worker(struct work_struct *work)
 
 	dev_info(&this->clientp->dev, "batt:%3d%%, %d mV\n", this->curr_soc,
 	       this->curr_mv);
-	queue_delayed_work(this->wq, &this->work, HZ*60);
+
+	/* increase sample rate when closing in on 0 soc */
+	delay = HZ * (this->curr_soc < 5 ? 5 : 60);
+
+	queue_delayed_work(this->wq, &this->work, delay);
 }
 
 static int max17040_get_supplier_data(struct device *dev, void *data)
@@ -350,11 +357,35 @@ static int max17040_get_supplier_data(struct device *dev, void *data)
 			this->curr_temp = ret.intval;
 
 			max17040_update_rcomp(this);
-			break;
 		}
+
+		if (!pst->get_property(pst, POWER_SUPPLY_PROP_TECHNOLOGY, &ret))
+			this->tech = ret.intval;
 	}
 
 	return 0;
+}
+
+static int max17040_is_chg(struct max17040_data *data)
+{
+	if (!data->pdata)
+		return 0;
+
+	return (data->curr_temp > data->pdata->chg_min_temp &&
+			data->curr_temp	<= data->pdata->chg_max_temp &&
+			data->tech != POWER_SUPPLY_TECHNOLOGY_UNKNOWN);
+}
+
+static int max17040_get_status(struct max17040_data *data)
+{
+	if (power_supply_am_i_supplied(&data->bat_ps)) {
+		if (max17040_is_chg(data))
+			return POWER_SUPPLY_STATUS_CHARGING;
+		else
+			return POWER_SUPPLY_STATUS_NOT_CHARGING;
+	} else {
+		return POWER_SUPPLY_STATUS_DISCHARGING;
+	}
 }
 
 static int max17040_bat_get_property(struct power_supply *bat_ps,
@@ -376,10 +407,7 @@ static int max17040_bat_get_property(struct power_supply *bat_ps,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		if (power_supply_am_i_supplied(bat_ps))
-			val->intval = POWER_SUPPLY_STATUS_CHARGING;
-		else
-			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		val->intval = max17040_get_status(this);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		max17040_get_vcell(this);

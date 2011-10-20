@@ -214,6 +214,7 @@ struct mdp_dma_data {
 	boolean waiting;
 	struct semaphore ov_sem;
 	struct semaphore mutex;
+	struct semaphore pending_pipe_sem;
 	struct completion comp;
 };
 

@@ -8,7 +8,9 @@ struct semc_battery_platform_data {
 	size_t num_supplicants;
 	u8 use_fuelgauge;
 
-	void (*set_battery_health)(int health);
+#ifndef CONFIG_SEMC_BATTERY_SHOW_HEALTH
+	int (*set_battery_health)(int health);
+#endif
 };
 
 #endif /* _SEMC_BATTERY_DATA_H_ */

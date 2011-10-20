@@ -69,9 +69,10 @@
 #define BET_DISABLE 0
 #define BET_ENABLE  1
 #define DEFAULT_SUSPENSION_POWER_MODE              (POWER_MODE_LONG_DOZE)
-#define DEFAULT_SUSPENSION_DTIM_INTERVAL           (4)
+#define DEFAULT_SUSPENSION_DTIM_INTERVAL           (3)
 #define DEFAULT_SUSPENSION_BEACON_FILTER_STATE     (1)
 
+#define AVOID_KEEPALIVE_RECONFIGURATION /* workaround for connection loss */
 
 /*****************************************************************************
  **         Private Function prototypes                                      **
@@ -322,9 +323,12 @@ TI_STATUS PowerMgr_SetDefaults (TI_HANDLE hPowerMgr, PowerMgrInitParams_t* pPowe
 	pPowerMgr->suspensionValues.keepAliveConfig.enaDisFlag = TI_TRUE;
 	for (index = 0; index < KEEP_ALIVE_MAX_USER_MESSAGES; index++) {
 		pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.index = index;
-		pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.enaDisFlag = TI_FALSE;
+		if (index == 0) /* we need only one config enabled */
+			pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.enaDisFlag = TI_TRUE;
+		else
+			pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.enaDisFlag = TI_FALSE;
 		pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.interval = 1000;
-		pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.trigType = KEEP_ALIVE_TRIG_TYPE_NO_TX;
+		pPowerMgr->suspensionValues.keepAliveConfig.templates[index].keepAliveParams.trigType = KEEP_ALIVE_TRIG_TYPE_PERIOD_ONLY;
 	}
 
 	/*
@@ -774,13 +778,17 @@ TI_STATUS powerMgr_suspend(TI_HANDLE thePowerMgrHandle)
 	TI_BOOL bEnterPS = TI_FALSE;
         TI_STATUS status = TI_OK;
 	paramInfo_t param;
+#ifndef AVOID_KEEPALIVE_RECONFIGURATION
 	int i;
+#endif
 
 	powerSuspensionValues_t *pSavedSettings = &pPowerMgr->lastSavedSuspensionValues;
 	powerSuspensionValues_t *pSuspensionSettings = &pPowerMgr->suspensionValues;
 	const PowerMgr_PowerMode_e newPowerMode = pSuspensionSettings->powerMode;
 
 	TRACE0(pPowerMgr->hReport, REPORT_SEVERITY_INFORMATION, "Entering suspend\n");
+
+	TWD_CfgEnableMulticastMACFixup(pPowerMgr->hTWD, FIXUP_MULTICAST_IN_FW_LEVEL);
 
 	/* save current configuration */
 	param.paramType = SITE_MGR_BEACON_FILTER_DESIRED_STATE_PARAM;
@@ -833,6 +841,7 @@ TI_STATUS powerMgr_suspend(TI_HANDLE thePowerMgrHandle)
 	param.content.siteMgrDesiredBeaconFilterState = pSuspensionSettings->desiredBeaconFilterState;
 	siteMgr_setParam(pPowerMgr->hSiteMgr, &param);
 
+#ifndef AVOID_KEEPALIVE_RECONFIGURATION
 	/* set keep alive templates */
 	if (pSuspensionSettings->keepAliveConfig.enaDisFlag != pSavedSettings->keepAliveConfig.enaDisFlag) {
 		param.paramType = POWER_MGR_KEEP_ALIVE_ENA_DIS;
@@ -845,6 +854,7 @@ TI_STATUS powerMgr_suspend(TI_HANDLE thePowerMgrHandle)
 		param.content.pPowerMgrKeepAliveTemplate = &pSuspensionSettings->keepAliveConfig.templates[i];
 		powerMgr_setParam(thePowerMgrHandle, &param);
 	}
+#endif
 
 	/* set PM mode */
 	pPowerMgr->desiredPowerModeProfile = newPowerMode;
@@ -879,7 +889,9 @@ TI_STATUS powerMgr_resume(TI_HANDLE thePowerMgrHandle)
 	paramInfo_t param;
 	PowerMgr_PowerMode_e newPowerMode;
 	powerSuspensionValues_t *pSavedSettings = &pPowerMgr->lastSavedSuspensionValues;
+#ifndef AVOID_KEEPALIVE_RECONFIGURATION
 	int i;
+#endif
 
 	/* set old parameters */
 	TRACE3(pPowerMgr->hReport, REPORT_SEVERITY_INFORMATION, "Setting old PM settings: beacon_filter_state=%d, powermode=%d, dtim=%d\n",
@@ -887,11 +899,14 @@ TI_STATUS powerMgr_resume(TI_HANDLE thePowerMgrHandle)
 	       pSavedSettings->powerMode,
 	       pSavedSettings->dtimListenInterval);
 
+	TWD_CfgEnableMulticastMACFixup(pPowerMgr->hTWD, FIXUP_MULTICAST_DISABLED);
+
 	/* set beacon filtering */
 	param.paramType = SITE_MGR_BEACON_FILTER_DESIRED_STATE_PARAM;
 	param.content.siteMgrDesiredBeaconFilterState = pSavedSettings->desiredBeaconFilterState;
 	siteMgr_setParam(pPowerMgr->hSiteMgr, &param);
 
+#ifndef AVOID_KEEPALIVE_RECONFIGURATION
 	/* set keep-alive templates */
 	TRACE0(pPowerMgr->hReport, REPORT_SEVERITY_INFORMATION, "Restoring Keep-Alive templates\n");
 	if (pPowerMgr->suspensionValues.keepAliveConfig.enaDisFlag != pSavedSettings->keepAliveConfig.enaDisFlag) {
@@ -905,6 +920,7 @@ TI_STATUS powerMgr_resume(TI_HANDLE thePowerMgrHandle)
 		param.content.pPowerMgrKeepAliveTemplate = &pSavedSettings->keepAliveConfig.templates[i];
 		powerMgr_setParam(thePowerMgrHandle, &param);
 	}
+#endif
 
 	/* set DTIM listen interval */
 	pPowerMgr->dtimListenInterval = pSavedSettings->dtimListenInterval;
@@ -1536,7 +1552,7 @@ static void PowerMgr_SuspendCompletedCB(TI_HANDLE hPowerMgr,TI_UINT8 PSMode,TI_U
 
 	case ENTER_POWER_SAVE_SUCCESS:
 	case EXIT_POWER_SAVE_SUCCESS:
-		powerMgrNOP(hPowerMgr);
+		drvMain_PowerMgrSuspended(pPowerMgr->hDrvMain, TI_TRUE);
 		break;
 
 	default:

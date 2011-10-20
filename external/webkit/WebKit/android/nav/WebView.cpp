@@ -557,7 +557,7 @@ CachedRoot* getFrameCache(FrameCachePermission allowNewer)
     }
     m_viewImpl->gFrameCacheMutex.lock();
     delete m_frameCacheUI;
-    delete m_navPictureUI;
+    SkSafeUnref(m_navPictureUI);
     m_viewImpl->m_updatedFrameCache = false;
     m_frameCacheUI = m_viewImpl->m_frameCacheKit;
     m_navPictureUI = m_viewImpl->m_navPictureKit;

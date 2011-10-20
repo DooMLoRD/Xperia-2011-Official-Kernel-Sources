@@ -49,6 +49,7 @@
  */
 
 #include "tidef.h"
+#include "report.h"
 #include "TI_IPC_Api.h"
 
 #ifdef __cplusplus
@@ -190,7 +191,9 @@ extern "C" {
 	 *
 	 * \sa
 	 */
-	void *os_memoryAlloc (TI_HANDLE OsContext,TI_UINT32 Size);
+	#define os_memoryAlloc(A,B)  _os_memoryAlloc(A, B, __FILE_ID__, __LINE__)
+	void *_os_memoryAlloc (TI_HANDLE OsContext,TI_UINT32 Sizei, TI_UINT32 FileNbr,
+				TI_UINT32 LineNbr);
 
 	/** \brief  OS Memory CAllocation
 	 *
@@ -208,7 +211,9 @@ extern "C" {
 	 *
 	 * \sa
 	 */
-	void *os_memoryCAlloc (TI_HANDLE OsContext, TI_UINT32 Number, TI_UINT32 Size);
+	#define os_memoryCAlloc(A,B, C) _os_memoryCAlloc(A, B, C, __FILE_ID__, __LINE__)
+	void *_os_memoryCAlloc (TI_HANDLE OsContext, TI_UINT32 Number, TI_UINT32 Size,
+				TI_UINT32 FileNbr, TI_UINT32 LineNbr);
 
 	/** \brief  OS Memory Set
 	 *
@@ -266,7 +271,9 @@ extern "C" {
 	 *
 	 * \sa
 	 */
-	void os_memoryFree (TI_HANDLE OsContext, void *pMemPtr, TI_UINT32 Size);
+	#define os_memoryFree(A,B,C) _os_memoryFree(A, B, C, __FILE_ID__, __LINE__)
+	void _os_memoryFree (TI_HANDLE OsContext, void *pMemPtr, TI_UINT32 Size, TI_UINT32 FileNbr,
+				TI_UINT32 LineNbr);
 
 	/** \brief  OS Memory Compare
 	 *
@@ -533,6 +540,7 @@ extern "C" {
 	int os_wake_unlock (TI_HANDLE OsContext);
 	int os_wake_lock_timeout (TI_HANDLE OsContext);
 	int os_wake_lock_timeout_enable (TI_HANDLE OsContext);
+	void os_wake_lock_deauth (TI_HANDLE OsContext);
 
 #define os_profile(hos,fn,par)
 

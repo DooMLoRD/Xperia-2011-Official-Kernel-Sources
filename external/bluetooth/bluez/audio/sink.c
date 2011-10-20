@@ -5,7 +5,6 @@
  *  Copyright (C) 2006-2007  Nokia Corporation
  *  Copyright (C) 2004-2009  Marcel Holtmann <marcel@holtmann.org>
  *  Copyright (C) 2009-2010  Motorola Inc.
- *  Copyright (C) 2010 Sony Ericsson Mobile Communications AB
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -625,8 +624,6 @@ static DBusMessage *sink_disconnect(DBusConnection *conn,
 	if (sink->connect || sink->disconnect)
 		return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
 						"%s", strerror(EBUSY));
-
-	avdtp_set_device_disconnect(sink->session, TRUE);
 
 	if (sink->stream_state < AVDTP_STATE_OPEN) {
 		DBusMessage *reply = dbus_message_new_method_return(msg);

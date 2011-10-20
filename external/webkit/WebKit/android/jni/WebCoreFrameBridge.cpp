@@ -1,6 +1,9 @@
 /*
  * Copyright 2006, The Android Open Source Project
  *
+ * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
+ * All Rights Reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -22,6 +25,9 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+ /*
+  * This file has been modified by Sony Ericsson on 2011-04-05.
+  */
 
 #define LOG_TAG "webcoreglue"
 
@@ -186,8 +192,7 @@ struct WebFrame::JavaBrowserFrame
     jmethodID   mRequestFocus;
     jmethodID   mGetRawResFilename;
     jmethodID   mDensity;
-    jmethodID   mGetFileSize;
-    jmethodID   mGetFile;
+    jmethodID   mCreatePostData;
     AutoJObject frame(JNIEnv* env) {
         return getRealObject(env, mObj);
     }
@@ -210,7 +215,7 @@ WebFrame::WebFrame(JNIEnv* env, jobject obj, jobject historyList, WebCore::Page*
     mJavaFrame->mObj = env->NewWeakGlobalRef(obj);
     mJavaFrame->mHistoryList = env->NewWeakGlobalRef(historyList);
     mJavaFrame->mStartLoadingResource = env->GetMethodID(clazz, "startLoadingResource",
-            "(ILjava/lang/String;Ljava/lang/String;Ljava/util/HashMap;[BJIZZZLjava/lang/String;Ljava/lang/String;)Landroid/webkit/LoadListener;");
+            "(ILjava/lang/String;Ljava/lang/String;Ljava/util/HashMap;Landroid/webkit/PostData;JIZZZLjava/lang/String;Ljava/lang/String;)Landroid/webkit/LoadListener;");
     mJavaFrame->mLoadStarted = env->GetMethodID(clazz, "loadStarted",
             "(Ljava/lang/String;Landroid/graphics/Bitmap;IZ)V");
     mJavaFrame->mTransitionToCommitted = env->GetMethodID(clazz, "transitionToCommitted",
@@ -244,8 +249,7 @@ WebFrame::WebFrame(JNIEnv* env, jobject obj, jobject historyList, WebCore::Page*
     mJavaFrame->mGetRawResFilename = env->GetMethodID(clazz, "getRawResFilename",
             "(I)Ljava/lang/String;");
     mJavaFrame->mDensity = env->GetMethodID(clazz, "density","()F");
-    mJavaFrame->mGetFileSize = env->GetMethodID(clazz, "getFileSize", "(Ljava/lang/String;)I");
-    mJavaFrame->mGetFile = env->GetMethodID(clazz, "getFile", "(Ljava/lang/String;[BII)I");
+    mJavaFrame->mCreatePostData = env->GetMethodID(clazz, "createPostData", "()Landroid/webkit/PostData;");
 
     LOG_ASSERT(mJavaFrame->mStartLoadingResource, "Could not find method startLoadingResource");
     LOG_ASSERT(mJavaFrame->mLoadStarted, "Could not find method loadStarted");
@@ -265,8 +269,7 @@ WebFrame::WebFrame(JNIEnv* env, jobject obj, jobject historyList, WebCore::Page*
     LOG_ASSERT(mJavaFrame->mRequestFocus, "Could not find method requestFocus");
     LOG_ASSERT(mJavaFrame->mGetRawResFilename, "Could not find method getRawResFilename");
     LOG_ASSERT(mJavaFrame->mDensity, "Could not find method density");
-    LOG_ASSERT(mJavaFrame->mGetFileSize, "Could not find method getFileSize");
-    LOG_ASSERT(mJavaFrame->mGetFile, "Could not find method getFile");
+    LOG_ASSERT(mJavaFrame->mCreatePostData, "Could not find method createPostData");
 
     mUserAgent = WebCore::String();
     mUserInitiatedClick = false;
@@ -333,33 +336,6 @@ static jstring uriFromUriFileName(JNIEnv* env, const WebCore::String& name)
     return env->NewString(fileName.characters(), fileName.length());
 }
 
-// This class stores the URI and the size of each file for upload.  The URI is
-// stored so we do not have to create it again.  The size is stored so we can
-// compare the actual size of the file with the stated size.  If the actual size
-// is larger, we will not copy it, since we will not have enough space in our
-// buffer.
-class FileInfo {
-public:
-    FileInfo(JNIEnv* env, const WebCore::String& name) {
-        m_uri = uriFromUriFileName(env, name);
-        checkException(env);
-        m_size = 0;
-        m_env = env;
-    }
-    ~FileInfo() {
-        m_env->DeleteLocalRef(m_uri);
-    }
-    int getSize() { return m_size; }
-    jstring getUri() { return m_uri; }
-    void setSize(int size) { m_size = size; }
-private:
-    // This is only a pointer to the JNIEnv* returned by
-    // JSC::Bindings::getJNIEnv().  Used to delete the jstring when finished.
-    JNIEnv* m_env;
-    jstring m_uri;
-    int m_size;
-};
-
 PassRefPtr<WebCore::ResourceLoaderAndroid>
 WebFrame::startLoadingResource(WebCore::ResourceHandle* loader,
                                   const WebCore::ResourceRequest& request,
@@ -394,9 +370,9 @@ WebFrame::startLoadingResource(WebCore::ResourceHandle* loader,
     jstring jMethodStr = NULL;
     if (!method.isEmpty())
         jMethodStr = env->NewString(method.characters(), method.length());
-    jbyteArray jPostDataStr = NULL;
     WebCore::FormData* formdata = request.httpBody();
     AutoJObject obj = mJavaFrame->frame(env);
+    jobject jPostData = NULL;
     if (formdata) {
         // We can use the formdata->flatten() but it will result in two 
         // memcpys, first through loading up the vector with the form data
@@ -407,52 +383,50 @@ WebFrame::startLoadingResource(WebCore::ResourceHandle* loader,
                 formdata->elements();
 
         // Sizing pass
-        int size = 0;
+        bool postDataFound = false;
         size_t n = elements.size();
-        FileInfo** fileinfos = new FileInfo*[n];
         for (size_t i = 0; i < n; ++i) {
-            fileinfos[i] = 0;
             const WebCore::FormDataElement& e = elements[i];
-            if (e.m_type == WebCore::FormDataElement::data) {
-                size += e.m_data.size();
-            } else if (e.m_type == WebCore::FormDataElement::encodedFile) {
-                fileinfos[i] = new FileInfo(env, e.m_filename);
-                int delta = env->CallIntMethod(obj.get(),
-                    mJavaFrame->mGetFileSize, fileinfos[i]->getUri());
-                checkException(env);
-                fileinfos[i]->setSize(delta);
-                size += delta;
+            if (e.m_type == WebCore::FormDataElement::encodedFile ||
+                    (e.m_type == WebCore::FormDataElement::data && e.m_data.size() > 0)) {
+                postDataFound = true;
+                break;
             }
         }
 
         // Only create the byte array if there is POST data to pass up.
         // The Java code is expecting null if there is no data.
-        if (size > 0) {
+        if (postDataFound) {
+            jclass    postDataClass = env->FindClass("android/webkit/PostData");
+            jmethodID appendData = env->GetMethodID(postDataClass, "appendData", "([B)V");
+            jmethodID appendFile = env->GetMethodID(postDataClass, "appendFile", "(Ljava/lang/String;)V");
+
+            jPostData = env->CallObjectMethod(obj.get(), mJavaFrame->mCreatePostData);
+
             // Copy the actual form data.
-            jPostDataStr = env->NewByteArray(size);
-            if (jPostDataStr) {
-                // Write  the form data to the java array.
-                jbyte* bytes = env->GetByteArrayElements(jPostDataStr, NULL);
-                int offset = 0;
+            if (jPostData) {
                 for (size_t i = 0; i < n; ++i) {
                     const WebCore::FormDataElement& e = elements[i];
                     if (e.m_type == WebCore::FormDataElement::data) {
-                        int delta = e.m_data.size();
-                        memcpy(bytes + offset, e.m_data.data(), delta);
-                        offset += delta;
-                    } else if (e.m_type
-                            == WebCore::FormDataElement::encodedFile) {
-                        int delta = env->CallIntMethod(obj.get(),
-                            mJavaFrame->mGetFile, fileinfos[i]->getUri(),
-                            jPostDataStr, offset, fileinfos[i]->getSize());
-                        checkException(env);
-                        offset += delta;
+                        jbyteArray data = env->NewByteArray(e.m_data.size());
+                        if (data == NULL) {
+                            // We've run out of memory continue without the post data.
+                            jPostData = NULL;
+                            break;
+                        }
+                        jbyte* bytes = env->GetByteArrayElements(data, NULL);
+                        memcpy(bytes, e.m_data.data(), e.m_data.size());
+                        env->ReleaseByteArrayElements(data, bytes, 0);
+                        env->CallVoidMethod(jPostData, appendData, data);
+                        env->DeleteLocalRef(data);
+                    } else if (e.m_type == WebCore::FormDataElement::encodedFile) {
+                        jstring uri = uriFromUriFileName(env, e.m_filename);
+                        env->CallVoidMethod(jPostData, appendFile, uri);
+                        env->DeleteLocalRef(uri);
                     }
                 }
-                env->ReleaseByteArrayElements(jPostDataStr, bytes, 0);
             }
         }
-        delete[] fileinfos;
     }
 
     jobject jHeaderMap = createJavaMapFromHTTPHeaders(env, headers);
@@ -485,13 +459,13 @@ WebFrame::startLoadingResource(WebCore::ResourceHandle* loader,
     jobject jLoadListener =
         env->CallObjectMethod(obj.get(), mJavaFrame->mStartLoadingResource,
                 (int)loader, jUrlStr, jMethodStr, jHeaderMap,
-                jPostDataStr, formdata ? formdata->identifier(): 0,
+                jPostData, formdata ? formdata->identifier(): 0,
                 cacheMode, mainResource, request.getUserGesture(),
                 synchronous, jUsernameString, jPasswordString);
 
     env->DeleteLocalRef(jUrlStr);
     env->DeleteLocalRef(jMethodStr);
-    env->DeleteLocalRef(jPostDataStr);
+    env->DeleteLocalRef(jPostData);
     env->DeleteLocalRef(jHeaderMap);
     env->DeleteLocalRef(jUsernameString);
     env->DeleteLocalRef(jPasswordString);

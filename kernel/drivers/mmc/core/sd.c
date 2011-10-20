@@ -560,7 +560,11 @@ static void mmc_sd_detect(struct mmc_host *host)
 {
 	int err = 0;
 #ifdef CONFIG_MMC_PARANOID_SD_INIT
+#ifndef CONFIG_MMC_SD_DETECT_CHATTERING
         int retries = 5;
+#else
+        int retries = 100;
+#endif
 #endif
 
 	BUG_ON(!host);
@@ -576,7 +580,11 @@ static void mmc_sd_detect(struct mmc_host *host)
 		err = mmc_send_status(host->card, NULL);
 		if (err) {
 			retries--;
+#ifndef CONFIG_MMC_SD_DETECT_CHATTERING
 			udelay(5);
+#else
+			mdelay(1);
+#endif
 			continue;
 		}
 		break;

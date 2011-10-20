@@ -114,5 +114,18 @@ typedef struct {
 } TLoaderFilesData;
 
 
+/** \brief WLAN Driver I/F Update Driver State
+ *
+ * \param  hOs          - OS module object handle
+ * \param  eDriverState - New Driver State
+ * \return void
+ *
+ * \par Description
+ * This function Update the driver state (Idle | Running | Stopped |Failed):
+ *
+ * \sa
+ */
+void wlanDrvIf_UpdateDriverState (TI_HANDLE hOs, EDriverSteadyState eDriverState);
+
 
 #endif /* __WLAN_DRV_COMMON_H__ */

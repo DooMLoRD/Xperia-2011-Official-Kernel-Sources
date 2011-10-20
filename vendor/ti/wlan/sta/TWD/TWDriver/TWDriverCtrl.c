@@ -481,6 +481,14 @@ TI_STATUS TWD_CfgBcnBrcOptions (TI_HANDLE hTWD, TPowerMgmtConfig *pPowerMgmtConf
 
 	return cmdBld_CfgBcnBrcOptions (pTWD->hCmdBld, pPowerMgmtConfig, NULL, NULL);
 }
+TI_STATUS TWD_CfgEnableMulticastMACFixup (TI_HANDLE hTWD, TI_UINT8 enableFixup)
+{
+	TTwd *pTWD = (TTwd *)hTWD;
+
+	TRACE0(pTWD->hReport, REPORT_SEVERITY_INFORMATION , "TWD_CfgEnableBroadcasts: called\n");
+
+	return cmdBld_CfgMulticastMACFixup (pTWD->hCmdBld, enableFixup, NULL, NULL);
+}
 
 TFwInfo * TWD_GetFWInfo (TI_HANDLE hTWD)
 {

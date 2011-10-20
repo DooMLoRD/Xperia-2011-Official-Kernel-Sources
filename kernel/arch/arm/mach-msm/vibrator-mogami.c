@@ -144,7 +144,7 @@ static void vibrator_enable(struct timed_output_dev *dev, int value)
 	if (value == 0) {
 		vibe_state = TASK_FORCE_STOP;
 	} else {
-		long_vibe_time = (value > 15000 ? 15000 : value);
+		long_vibe_time = value;
 		vibe_state = TASK_KICK_START;
 		pr_debug("%s: Value=%d\n", __func__, value);
 	}
@@ -203,8 +203,7 @@ void __init msm_init_pmic_vibrator(void)
 	vibe_timer.function = vibrator_timer_func;
 
 	timed_output_dev_register(&pmic_vibrator);
-	printk(KERN_INFO "Vibrator: enable voltage %d(mV)\n",
-		PM_VIBRATOR_LEVEL);
+	printk(KERN_INFO "Vibrator: enable voltage %d(mV)\n", PM_VIBRATOR_LEVEL);
 }
 
 MODULE_DESCRIPTION("timed output pmic vibrator device");

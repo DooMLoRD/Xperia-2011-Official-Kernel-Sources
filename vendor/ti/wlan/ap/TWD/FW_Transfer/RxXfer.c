@@ -491,6 +491,12 @@ static TI_STATUS rxXfer_Handle(TI_HANDLE hRxXfer)
 			uBuffSize     = RX_DESC_GET_LENGTH(uRxDesc) << 2;
 			eRxPacketType = (PacketClassTag_e)RX_DESC_GET_PACKET_CLASS_TAG (uRxDesc);
 
+			/* Protect from an RX-descriptor with too big size in case RX descriptor contains garbage */
+			if(uBuffSize > pRxXfer->uMaxAggregLen) {
+				WLAN_OS_REPORT(("RX descriptor has a buffer size too large for DMA buffer."));
+				return TI_NOK;
+			}
+
 			/* If new packet exceeds max aggregation length, set flag to send previous packets (postpone it to next loop) */
 			if ((uTotalAggregLen + uBuffSize) > pRxXfer->uMaxAggregLen) {
 				bIssueTxn = TI_TRUE;

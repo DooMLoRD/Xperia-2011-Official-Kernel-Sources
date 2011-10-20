@@ -186,6 +186,7 @@ struct usb_info {
 	struct workqueue_struct *wq;
 	struct delayed_work chg_det;
 	struct delayed_work chg_stop;
+
 #ifdef CONFIG_SUPPORT_ALIEN_USB_CHARGER
 	/*
 	* Since some 3rd-party wall chargers don't follow the specification they
@@ -200,8 +201,10 @@ struct usb_info {
 	struct delayed_work chg_type_work;
 	struct work_struct chg_type_stop_delayed_work;
 #endif /* CONFIG_SUPPORT_ALIEN_USB_CHARGER */
+
 	struct msm_hsusb_gadget_platform_data *pdata;
 	struct work_struct phy_status_check;
+
 
 	struct work_struct work;
 	unsigned phy_status;
@@ -242,9 +245,7 @@ static void usb_reset(struct usb_info *ui);
 static unsigned ulpi_read(struct usb_info *ui, unsigned reg)
 {
 	unsigned ret, timeout = 100000;
-	unsigned long flags;
 
-	spin_lock_irqsave(&ui->lock, flags);
 
 	/* initiate read operation */
 	writel(ULPI_RUN | ULPI_READ | ULPI_ADDR(reg),
@@ -257,21 +258,16 @@ static unsigned ulpi_read(struct usb_info *ui, unsigned reg)
 	if (timeout == 0) {
 		printk(KERN_ERR "ulpi_read: timeout %08x\n",
 			readl(USB_ULPI_VIEWPORT));
-		spin_unlock_irqrestore(&ui->lock, flags);
 		return 0xffffffff;
 	}
 	ret = ULPI_DATA_READ(readl(USB_ULPI_VIEWPORT));
 
-	spin_unlock_irqrestore(&ui->lock, flags);
 
 	return ret;
 }
 static int ulpi_write(struct usb_info *ui, unsigned val, unsigned reg)
 {
 	unsigned timeout = 10000;
-	unsigned long flags;
-
-	spin_lock_irqsave(&ui->lock, flags);
 
 	/* initiate write operation */
 	writel(ULPI_RUN | ULPI_WRITE |
@@ -284,10 +280,8 @@ static int ulpi_write(struct usb_info *ui, unsigned val, unsigned reg)
 
 	if (timeout == 0) {
 		dev_err(&ui->pdev->dev, "ulpi_write: timeout\n");
-		spin_unlock_irqrestore(&ui->lock, flags);
 		return -1;
 	}
-	spin_unlock_irqrestore(&ui->lock, flags);
 
 	return 0;
 }
@@ -396,12 +390,14 @@ static int usb_get_max_power(struct usb_info *ui)
 
 static int usb_phy_stuck_check(struct usb_info *ui)
 {
+	unsigned long flags;
 	/*
 	 * write some value (0xAA) into scratch reg (0x16) and read it back,
 	 * If the read value is same as written value, means PHY is normal
 	 * otherwise, PHY seems to have stuck.
 	 */
 
+	spin_lock_irqsave(&ui->lock, flags);
 	if (ulpi_write(ui, 0xAA, 0x16) == -1) {
 		dev_dbg(&ui->pdev->dev,
 			"%s(): ulpi write timeout\n", __func__);
@@ -412,6 +408,7 @@ static int usb_phy_stuck_check(struct usb_info *ui)
 			"%s(): read value is incorrect\n", __func__);
 		return -EIO;
 	}
+	spin_unlock_irqrestore(&ui->lock, flags);
 	return 0;
 }
 
@@ -1266,6 +1263,56 @@ static irqreturn_t usb_interrupt(int irq, void *data)
 	if (!atomic_read(&ui->running))
 		return IRQ_HANDLED;
 
+	if (n & STS_URI) {
+		dev_info(&ui->pdev->dev, "reset\n");
+		spin_lock_irqsave(&ui->lock, flags);
+		ui->gadget.speed = USB_SPEED_UNKNOWN;
+		spin_unlock_irqrestore(&ui->lock, flags);
+#ifdef CONFIG_USB_OTG
+		/* notify otg to clear A_BIDL_ADIS timer */
+		if (ui->gadget.is_a_peripheral)
+			otg_set_suspend(ui->xceiv, 0);
+		spin_lock_irqsave(&ui->lock, flags);
+		/* Host request is persistent across reset */
+		ui->gadget.b_hnp_enable = 0;
+		ui->hnp_avail = 0;
+		spin_unlock_irqrestore(&ui->lock, flags);
+#endif
+		msm_hsusb_set_state(USB_STATE_DEFAULT);
+		atomic_set(&ui->remote_wakeup, 0);
+		if (!ui->gadget.is_a_peripheral)
+			queue_delayed_work(ui->wq, &ui->chg_stop, 0);
+
+		writel(readl(USB_ENDPTSETUPSTAT), USB_ENDPTSETUPSTAT);
+		writel(readl(USB_ENDPTCOMPLETE), USB_ENDPTCOMPLETE);
+		writel(0xffffffff, USB_ENDPTFLUSH);
+		writel(0, USB_ENDPTCTRL(1));
+
+		wake_lock(&ui->wlock);
+		if (atomic_read(&ui->configured)) {
+			/* marking us offline will cause ept queue attempts
+			** to fail
+			*/
+			atomic_set(&ui->configured, 0);
+			/* Defer sending offline uevent to userspace */
+			atomic_set(&ui->offline_pending, 1);
+
+			flush_all_endpoints(ui);
+
+			/* XXX: we can't seem to detect going offline,
+			 * XXX:  so deconfigure on reset for the time being
+			 */
+			if (ui->driver) {
+				dev_dbg(&ui->pdev->dev,
+					"usb: notify offline\n");
+				ui->driver->disconnect(&ui->gadget);
+			}
+		}
+		/* Start phy stuck timer */
+		if (ui->pdata && ui->pdata->is_phy_status_timer_on)
+			mod_timer(&phy_status_timer, PHY_STATUS_CHECK_DELAY);
+	}
+
 	if (n & STS_PCI) {
 #ifdef CONFIG_SUPPORT_ALIEN_USB_CHARGER
 		struct msm_otg *otg = to_msm_otg(ui->xceiv);
@@ -1344,56 +1391,6 @@ static irqreturn_t usb_interrupt(int irq, void *data)
 #endif
 	}
 
-	if (n & STS_URI) {
-		dev_info(&ui->pdev->dev, "reset\n");
-		spin_lock_irqsave(&ui->lock, flags);
-		ui->gadget.speed = USB_SPEED_UNKNOWN;
-		spin_unlock_irqrestore(&ui->lock, flags);
-#ifdef CONFIG_USB_OTG
-		/* notify otg to clear A_BIDL_ADIS timer */
-		if (ui->gadget.is_a_peripheral)
-			otg_set_suspend(ui->xceiv, 0);
-		spin_lock_irqsave(&ui->lock, flags);
-		/* Host request is persistent across reset */
-		ui->gadget.b_hnp_enable = 0;
-		ui->hnp_avail = 0;
-		spin_unlock_irqrestore(&ui->lock, flags);
-#endif
-		msm_hsusb_set_state(USB_STATE_DEFAULT);
-		atomic_set(&ui->remote_wakeup, 0);
-		if (!ui->gadget.is_a_peripheral)
-			queue_delayed_work(ui->wq, &ui->chg_stop, 0);
-
-		writel(readl(USB_ENDPTSETUPSTAT), USB_ENDPTSETUPSTAT);
-		writel(readl(USB_ENDPTCOMPLETE), USB_ENDPTCOMPLETE);
-		writel(0xffffffff, USB_ENDPTFLUSH);
-		writel(0, USB_ENDPTCTRL(1));
-
-		wake_lock(&ui->wlock);
-		if (atomic_read(&ui->configured)) {
-			/* marking us offline will cause ept queue attempts
-			** to fail
-			*/
-			atomic_set(&ui->configured, 0);
-			/* Defer sending offline uevent to userspace */
-			atomic_set(&ui->offline_pending, 1);
-
-			flush_all_endpoints(ui);
-
-			/* XXX: we can't seem to detect going offline,
-			 * XXX:  so deconfigure on reset for the time being
-			 */
-			if (ui->driver) {
-				dev_dbg(&ui->pdev->dev,
-					"usb: notify offline\n");
-				ui->driver->disconnect(&ui->gadget);
-			}
-		}
-		/* Start phy stuck timer */
-		if (ui->pdata && ui->pdata->is_phy_status_timer_on)
-			mod_timer(&phy_status_timer, PHY_STATUS_CHECK_DELAY);
-	}
-
 	if (n & STS_SLI) {
 		dev_info(&ui->pdev->dev, "suspend\n");
 
@@ -1454,16 +1451,16 @@ static void usb_prepare(struct usb_info *ui)
 	INIT_DELAYED_WORK(&ui->chg_det, usb_chg_detect);
 	INIT_DELAYED_WORK(&ui->chg_stop, usb_chg_stop);
 	INIT_DELAYED_WORK(&ui->rw_work, usb_do_remote_wakeup);
-	if (ui->pdata && ui->pdata->is_phy_status_timer_on)
-		INIT_WORK(&ui->phy_status_check, usb_phy_stuck_recover);
 
 #ifdef CONFIG_SUPPORT_ALIEN_USB_CHARGER
 	INIT_DELAYED_WORK(&ui->chg_type_work, usb_check_chg_type_work);
 	INIT_WORK(&ui->chg_type_stop_delayed_work,
 		  usb_stop_delayed_chg_type_work_start_immediate_work);
 #endif /* CONFIG_SUPPORT_ALIEN_USB_CHARGER */
+
 	if (ui->pdata && ui->pdata->is_phy_status_timer_on)
 		INIT_WORK(&ui->phy_status_check, usb_phy_stuck_recover);
+
 }
 
 static void usb_reset(struct usb_info *ui)
@@ -2451,7 +2448,7 @@ static ssize_t show_usb_chg_type(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR(wakeup, S_IWUSR, 0, usb_remote_wakeup);
-static DEVICE_ATTR(usb_state, S_IRUSR, show_usb_state, 0);
+static DEVICE_ATTR(usb_state, S_IRUGO, show_usb_state, 0);
 static DEVICE_ATTR(usb_speed, S_IRUSR, show_usb_speed, 0);
 static DEVICE_ATTR(chg_type, S_IRUSR, show_usb_chg_type, 0);
 static DEVICE_ATTR(chg_current, S_IWUSR | S_IRUSR,

@@ -88,7 +88,6 @@
 #include <linux/delay.h>
 
 #define BMA250_NAME                      "bma250"
-#define BMA250_DEVICE_NAME               "/dev/bma250"
 #define BMA250_VENDORID                  0x0001
 
 MODULE_LICENSE("GPL v2");
@@ -178,6 +177,16 @@ const struct registers use_chip_default = {
 	.int_pin2         = -1,
 };
 
+#define INTERRUPT_RESOLUTION   (0)
+#define TIMER_RESOLUTION       (1)
+#define INVALID   (0xFFFFFFFF)
+
+struct bma250_cnf {
+	unsigned int rate;
+	unsigned int range;
+	unsigned int resolution;
+};
+
 /*
  * Data returned from accelerometer.
  * Temp is in units of 0.5 degrees C
@@ -193,12 +202,18 @@ struct driver_data {
 	struct input_dev            *ip_dev;
 	struct i2c_client           *ic_dev;
 	unsigned char                shift;
+	struct delayed_work          work_data;
+	unsigned long                delay_jiffies;
 	struct list_head             next_dd;
 	struct dentry               *dbfs_root;
 	struct dentry               *dbfs_regs;
 	struct bma250_platform_data *pdata;
+	struct bma250_cnf            new_cnf;
+	struct bma250_cnf            cur_cnf;
+	bool                         power;
 };
 
+static struct mutex               bma250_power_lock;
 static struct mutex               bma250_dd_lock;
 static struct list_head           dd_list;
 
@@ -254,7 +269,7 @@ int bma250_ic_write(struct i2c_client *ic_dev, u8 reg, u8 val)
 
 /* 10bit to 16 bit will give a 6 bit offset, shift
    it down to represent 256 lsb/g for alla ranges */
-u8 bma250_resolution(u8 range)
+static inline u8 bma250_range2shift(u8 range)
 {
 	switch (range) {
 	case BMA250_RANGE_16G:
@@ -263,16 +278,316 @@ u8 bma250_resolution(u8 range)
 	case BMA250_RANGE_8G:
 		return 4;
 		break;
-	default:
 	case BMA250_RANGE_4G:
 		return 5;
 		break;
+	default:
 	case BMA250_RANGE_2G:
 		return 6;
 		break;
 	}
 }
 
+static inline int bma250_reset_interrupt(struct driver_data *dd)
+{
+	int rc = 0;
+	u8 val;
+
+	if (dd->cur_cnf.resolution == INTERRUPT_RESOLUTION) {
+		rc = bma250_ic_read(dd->ic_dev, BMA250_INT_CTRL_REG, &val, 1);
+		if (rc)
+			goto interrupt_error;
+
+		rc = bma250_ic_write(dd->ic_dev, BMA250_INT_CTRL_REG,
+						val | BMA250_INT_RESET);
+		if (rc)
+			goto interrupt_error;
+	}
+	return rc;
+
+interrupt_error:
+	dev_err(&dd->ip_dev->dev,
+		"%s: device failed, error %d\n", __func__, rc);
+	return rc;
+}
+
+static inline void bma250_reset_timer(struct driver_data *dd)
+{
+	if (dd->cur_cnf.resolution == TIMER_RESOLUTION)
+		schedule_delayed_work(&dd->work_data, dd->delay_jiffies);
+}
+
+static inline int bma250_range_handler(struct driver_data *dd)
+{
+	int rc = 0;
+	u8 range, threshold, duration = 0;
+
+	if (dd->new_cnf.range == dd->cur_cnf.range)
+		return rc;
+
+	if (dd->new_cnf.range == 16) {
+		range = BMA250_RANGE_16G;
+		threshold = 2;
+	} else if (dd->new_cnf.range == 8) {
+		range = BMA250_RANGE_8G;
+		threshold = 3;
+	} else if (dd->new_cnf.range == 4) {
+		range = BMA250_RANGE_4G;
+		threshold = 4;
+	} else {
+		range = BMA250_RANGE_2G;
+		threshold = 5;
+	}
+	rc = bma250_ic_write(dd->ic_dev, BMA250_RANGE_REG, range);
+	if (rc)
+		goto range_error;
+
+	/* threshold definition for the slope int, g-range dependant */
+	rc = bma250_ic_write(dd->ic_dev, BMA250_SLOPE_THR, threshold);
+	if (rc)
+		goto range_error;
+
+	/* number of samples (n + 1) to be evaluted for slope int */
+	rc = bma250_ic_write(dd->ic_dev, BMA250_SLOPE_DUR, duration);
+	if (rc)
+		goto range_error;
+
+	dd->shift = bma250_range2shift(range);
+	dd->cur_cnf.range = dd->new_cnf.range;
+	return rc;
+
+range_error:
+	dev_err(&dd->ip_dev->dev,
+		"%s: device failed, error %d\n", __func__, rc);
+	return rc;
+}
+
+static inline int bma250_rate_handler(struct driver_data *dd)
+{
+	int rc = 0;
+	u8 sleep, filter;
+
+	if (dd->new_cnf.rate == dd->cur_cnf.rate)
+		return rc;
+
+	if (dd->new_cnf.rate > 1000) {
+		sleep = BMA250_MODE_SLEEP_1000MS;
+	} else if (dd->new_cnf.rate > 500) {
+		sleep = BMA250_MODE_SLEEP_500MS;
+	} else if (dd->new_cnf.rate > 100) {
+		sleep = BMA250_MODE_SLEEP_100MS;
+	} else if (dd->new_cnf.rate > 50) {
+		sleep = BMA250_MODE_SLEEP_50MS;
+	} else if (dd->new_cnf.rate > 25) {
+		sleep = BMA250_MODE_SLEEP_25MS;
+	} else if (dd->new_cnf.rate > 10) {
+		sleep = BMA250_MODE_SLEEP_10MS;
+	} else if (dd->new_cnf.rate > 6) {
+		sleep = BMA250_MODE_SLEEP_6MS;
+	}  else {
+		sleep = BMA250_MODE_NOSLEEP;
+	}
+
+	if (dd->new_cnf.rate > 100) {
+		filter = BMA250_BW_7_81HZ;
+	} else if (dd->new_cnf.rate > 50) {
+		filter = BMA250_BW_15_63HZ;
+	} else {
+		filter = BMA250_BW_31_25HZ;
+	}
+
+	/* only possible to use sleep together with interrupt */
+	if (dd->new_cnf.resolution == TIMER_RESOLUTION)
+		sleep = BMA250_MODE_NOSLEEP;
+
+	rc = bma250_ic_write(dd->ic_dev, BMA250_MODE_CTRL_REG, sleep);
+	if (rc)
+		goto rate_error;
+
+	rc = bma250_ic_write(dd->ic_dev, BMA250_BW_SEL_REG, filter);
+	if (rc)
+		goto rate_error;
+
+	dd->delay_jiffies = msecs_to_jiffies(dd->new_cnf.rate);
+	dd->cur_cnf.rate = dd->new_cnf.rate;
+	return rc;
+
+rate_error:
+	dev_err(&dd->ip_dev->dev,
+		"%s: device failed, error %d\n", __func__, rc);
+	return rc;
+}
+
+static inline int bma250_resolution_handler(struct driver_data *dd)
+{
+	int rc = 0;
+	u8 interrupt;
+
+	if (dd->new_cnf.resolution == dd->cur_cnf.resolution)
+		return rc;
+
+	if (dd->new_cnf.resolution == INTERRUPT_RESOLUTION) {
+		/* slope and orientation interrupt based motion detect */
+		interrupt = BMA250_INT_SLOPE_Z |
+				BMA250_INT_SLOPE_Y |
+				BMA250_INT_SLOPE_X |
+				BMA250_INT_ORIENT;
+	} else {
+		/* disable all interrupts, use timer based solution */
+		interrupt = 0;
+
+		/* only possible to use sleep together with interrupt */
+		rc = bma250_ic_write(dd->ic_dev,BMA250_MODE_CTRL_REG,
+			BMA250_MODE_NOSLEEP);
+		if (rc)
+			goto resolution_error;
+	}
+	rc = bma250_ic_write(dd->ic_dev, BMA250_INT_ENABLE1_REG, interrupt);
+	if (rc)
+		dev_err(&dd->ip_dev->dev,
+			"%s: device failed, error %d\n", __func__, rc);
+	else
+		dd->cur_cnf.resolution = dd->new_cnf.resolution;
+	return rc;
+
+resolution_error:
+	dev_err(&dd->ip_dev->dev,
+		"%s: device failed, error %d\n", __func__, rc);
+	return rc;
+}
+
+static inline int bma250_update_settings(struct driver_data *dd)
+{
+	int rc;
+
+	rc = bma250_range_handler(dd);
+	if (rc)
+		return rc;
+
+	rc = bma250_rate_handler(dd);
+	if (rc)
+		return rc;
+
+	rc = bma250_resolution_handler(dd);
+	if (rc)
+		return rc;
+
+	bma250_reset_timer(dd);
+
+	rc = bma250_reset_interrupt(dd);
+	return rc;
+}
+
+static ssize_t bma250_rate_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct driver_data *dd = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%d\n", dd->cur_cnf.rate);
+}
+
+static ssize_t bma250_rate_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct driver_data *dd = dev_get_drvdata(dev);
+	int rc;
+	unsigned long val;
+
+	rc = strict_strtoul(buf, 10, &val);
+	if (rc)
+		return rc;
+
+	if ((val >= 1) && (val <= 10000)) {
+		dd->new_cnf.rate = (unsigned int)val;
+		return strnlen(buf, count);
+	}
+	return -EINVAL;
+}
+
+static ssize_t bma250_range_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct driver_data *dd = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%d\n", dd->cur_cnf.range);
+}
+
+static ssize_t bma250_range_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct driver_data *dd = dev_get_drvdata(dev);
+	int rc;
+	unsigned long val;
+
+	rc = strict_strtoul(buf, 10, &val);
+	if (rc)
+		return rc;
+
+	if ((val == 2) || (val == 4) || (val == 8) || (val == 16)) {
+		dd->new_cnf.range = (unsigned int)val;
+		return strnlen(buf, count);
+	}
+	return -EINVAL;
+}
+
+static ssize_t bma250_resolution_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct driver_data *dd = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%d\n", dd->cur_cnf.resolution);
+}
+
+static ssize_t bma250_resolution_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct driver_data *dd = dev_get_drvdata(dev);
+	int rc;
+	unsigned long val;
+
+	rc = strict_strtoul(buf, 10, &val);
+	if (rc)
+		return rc;
+
+	if ((val == INTERRUPT_RESOLUTION) || (val == TIMER_RESOLUTION)) {
+		dd->new_cnf.resolution = (unsigned int)val;
+		return strnlen(buf, count);
+	}
+	return -EINVAL;
+}
+
+static struct device_attribute attributes[] = {
+	__ATTR(bma250_rate, 0644, bma250_rate_show, bma250_rate_store),
+	__ATTR(bma250_range, 0644, bma250_range_show, bma250_range_store),
+	__ATTR(bma250_resolution, 0644, bma250_resolution_show,
+				bma250_resolution_store)
+};
+
+static int add_sysfs_interfaces(struct device *dev)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(attributes); i++)
+		if (device_create_file(dev, attributes + i))
+			goto undo;
+	return 0;
+undo:
+	for (; i >= 0 ; i--)
+		device_remove_file(dev, attributes + i);
+	dev_err(dev, "%s: failed to create sysfs interface\n", __func__);
+	return -ENODEV;
+}
+
+static void remove_sysfs_interfaces(struct device *dev)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(attributes); i++)
+		device_remove_file(dev, attributes + i);
+}
 
 #if defined(CONFIG_DEBUG_FS)
 static int bma250_dbfs_open(struct inode *inode, struct file *fp)
@@ -342,7 +657,7 @@ static ssize_t bma250_dbfs_write(struct file *fp, const char __user *buf,
 
 		/* update here to avoid checking g-range at each interrupt */
 		if ((!rc) && (reg == BMA250_RANGE_REG))
-			dd->shift = bma250_resolution(data);
+			dd->shift = bma250_range2shift(data);
 
 	} while (!rc && (np - mbuf) < count);
 
@@ -434,28 +749,43 @@ static void __devinit bma250_create_dbfs_entry(struct driver_data *dd) { }
 
 static void __devexit bma250_remove_dbfs_entry(struct driver_data *dd) { }
 #endif
-static int __devexit bma250_power_down(struct driver_data *dd)
+static int  bma250_power_down(struct driver_data *dd)
 {
 	int                 rc;
+
+	mutex_lock(&bma250_power_lock);
+
 	rc = bma250_ic_write(dd->ic_dev, BMA250_MODE_CTRL_REG,
 				BMA250_MODE_SUSPEND);
+	dd->power = false;
+	cancel_delayed_work(&dd->work_data);
+
+	mutex_unlock(&bma250_power_lock);
 	return rc;
 }
 
-static int __devinit bma250_power_up(struct driver_data *dd)
+static int  bma250_power_up(struct driver_data *dd)
 {
 	int                 rc;
+
+	mutex_lock(&bma250_power_lock);
+
+	dd->cur_cnf.rate = INVALID;
+	dd->cur_cnf.range = INVALID;
+	dd->cur_cnf.resolution = INVALID;
+	dd->power = true;
+
 	rc = bma250_ic_write(dd->ic_dev, BMA250_RESET_REG, BMA250_RESET);
-	msleep(2);
+	msleep(4);
+
+	mutex_unlock(&bma250_power_lock);
 	return rc;
 }
 
 static int __devinit bma250_config(struct driver_data *dd)
 {
 	int                 rc;
-	u8                  reg;
-	u8                  val;
-	char               *rx_buf;
+	u8                  rx_buf[2];
 	const struct registers   *preg = &use_chip_default;
 	struct bma250_platform_data *pdata = dd->ic_dev->dev.platform_data;
 
@@ -463,16 +793,11 @@ static int __devinit bma250_config(struct driver_data *dd)
 	if (pdata && pdata->reg)
 		preg = pdata->reg;
 
-	rx_buf = kzalloc(BMA250_LAST_REG + 1, GFP_KERNEL);
-	if (!rx_buf)
-		return -ENOMEM;
-
 	rc = bma250_power_up(dd);
 	if (rc)
 		goto config_exit;
 
-	reg = BMA250_CHIP_ID_REG;
-	rc = bma250_ic_read(dd->ic_dev, reg, rx_buf, 2);
+	rc = bma250_ic_read(dd->ic_dev, BMA250_CHIP_ID_REG, rx_buf, 2);
 	if (rc)
 		goto config_exit;
 
@@ -481,110 +806,51 @@ static int __devinit bma250_config(struct driver_data *dd)
 		rc = -ENODEV;
 		goto config_exit;
 	}
-
-	if (rx_buf[0] != 0x03) {
-		printk(KERN_ERR "bma250: chip id %d not supported.\n",
-				rx_buf[0] & 0x07);
-		rc = -ENODEV;
-		goto config_exit;
-	}
 	printk(KERN_INFO "bma250: detected chip id %d, rev 0x%X\n",
 				rx_buf[0] & 0x07, rx_buf[1]);
 
-	rc = bma250_ic_read(dd->ic_dev, reg, rx_buf, BMA250_LAST_REG + 1);
-	if (rc)
-		goto config_exit;
-
-	if (preg->range >= 0) {
-		reg = BMA250_RANGE_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->range;
-		dd->shift = bma250_resolution(preg->range);
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
-		if (rc)
-			goto config_exit;
-	}
-	if (preg->bw_sel >= 0) {
-		reg = BMA250_BW_SEL_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->bw_sel;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
-		if (rc)
-			goto config_exit;
-	}
-	if (preg->int_mode_ctrl >= 0) {
-		reg = BMA250_MODE_CTRL_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->int_mode_ctrl;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
-		if (rc)
-			goto config_exit;
-	}
-	if (preg->int_enable1 >= 0) {
-		reg = BMA250_INT_ENABLE1_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->int_enable1;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
-		if (rc)
-			goto config_exit;
-	}
-	if (preg->int_enable2 >= 0) {
-		reg = BMA250_INT_ENABLE2_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->int_enable2;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
-		if (rc)
-			goto config_exit;
-	}
 	if (preg->int_pin1 >= 0) {
-		reg = BMA250_INT_PIN1_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->int_pin1;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
+		rc = bma250_ic_write(dd->ic_dev, BMA250_INT_PIN1_REG,
+							preg->int_pin1);
 		if (rc)
 			goto config_exit;
 	}
-	if (preg->int_new_data >= 0) {
-		reg = BMA250_INT_NEW_DATA_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->int_new_data;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
-		if (rc)
-			goto config_exit;
-	}
+
 	if (preg->int_pin2 >= 0) {
-		reg = BMA250_INT_PIN2_REG;
-		val = (rx_buf[reg] & ~bma250_mask[reg]) | preg->int_pin2;
-		rc = bma250_ic_write(dd->ic_dev, reg, val);
+		rc = bma250_ic_write(dd->ic_dev, BMA250_INT_PIN2_REG,
+							preg->int_pin2);
 		if (rc)
 			goto config_exit;
 	}
-	reg = BMA250_INT_CTRL_REG;
-	val = (rx_buf[reg] & ~bma250_mask[reg]) | BMA250_INT_RESET;
-	rc = bma250_ic_write(dd->ic_dev, reg, val);
+
+	rc = bma250_update_settings(dd);
 
 config_exit:
-	kfree(rx_buf);
+
 	return rc;
 }
 
-#if defined(CONFIG_PM)
-static int bma250_suspend(struct i2c_client *ic_dev, pm_message_t mesg)
+#ifdef CONFIG_SUSPEND
+static int bma250_suspend(struct device *dev)
 {
-	struct driver_data *dd;
-	dd = bma250_ic_get_data(ic_dev);
+	struct driver_data *dd = dev_get_drvdata(dev);
 
 	bma250_power_down(dd);
-	disable_irq(ic_dev->irq);
-
+	if (dd->ip_dev->users)
+		disable_irq(dd->ic_dev->irq);
 	if (dd->pdata && dd->pdata->teardown)
-		dd->pdata->teardown(&ic_dev->dev);
+		dd->pdata->teardown(&dd->ic_dev->dev);
 
 	return 0;
 }
 
-static int bma250_resume(struct i2c_client *ic_dev)
+static int bma250_resume(struct device *dev)
 {
-	struct driver_data *dd;
+	struct driver_data *dd = dev_get_drvdata(dev);
 	int rc;
 
-	dd = bma250_ic_get_data(ic_dev);
-
 	if (dd->pdata && dd->pdata->setup) {
-		rc = dd->pdata->setup(&ic_dev->dev);
+		rc = dd->pdata->setup(&dd->ic_dev->dev);
 		if (rc)
 			return rc;
 	}
@@ -593,26 +859,21 @@ static int bma250_resume(struct i2c_client *ic_dev)
 	if (rc)
 		return rc;
 
-	enable_irq(ic_dev->irq);
-
+	if (dd->ip_dev->users)
+		enable_irq(dd->ic_dev->irq);
 	return rc;
 }
-#else /* !CONFIG_PM */
-#define bma250_suspend NULL
-#define bma250_resume NULL
-#endif /* CONFIG_PM */
+#endif
 
-static irqreturn_t bma250_irq(int irq, void *dev_id)
+static inline int bma250_report_data(struct driver_data *dd)
 {
-	int                         rc;
+	int                         rc = 0;
 	u8                          rx_buf[7];
 	struct bma250_accel_data    data;
-	struct device              *dev = dev_id;
-	struct driver_data         *dd = dev_get_drvdata(dev);
 
 	rc = bma250_ic_read(dd->ic_dev, BMA250_X_AXIS_LSB_REG, rx_buf, 7);
 	if (rc)
-		goto error_exit;
+		goto report_error;
 
 	/* 10bit signed to 16bit signed */
 	data.accel_x = ((rx_buf[1] << 8) | (rx_buf[0] & 0xC0));
@@ -632,19 +893,50 @@ static irqreturn_t bma250_irq(int irq, void *dev_id)
 	input_report_abs(dd->ip_dev, ABS_Z, data.accel_z);
 	input_report_abs(dd->ip_dev, ABS_MISC, data.temp);
 	input_sync(dd->ip_dev);
+	return rc;
 
-	rc = bma250_ic_read(dd->ic_dev, BMA250_INT_CTRL_REG, rx_buf, 1);
-	if (rc)
-		goto error_exit;
+report_error:
+	dev_err(&dd->ip_dev->dev,
+		"%s: device failed, error %d\n", __func__, rc);
+	return rc;
+}
 
-	rc = bma250_ic_write(dd->ic_dev, BMA250_INT_CTRL_REG,
-			rx_buf[0] | BMA250_INT_RESET);
-	if (rc)
-		goto error_exit;
-	return IRQ_HANDLED;
+static void bma250_work_f(struct work_struct *work)
+{
+	int                         rc;
+	struct driver_data         *dd = container_of(work, struct driver_data,
+							work_data.work);
+	mutex_lock(&bma250_power_lock);
 
-error_exit:
-	dev_err(&dd->ip_dev->dev, "%s: exit with error %d\n", __func__, rc);
+	if (dd->power) {
+		rc = bma250_report_data(dd);
+		if (rc)
+			goto work_error;
+
+		rc = bma250_update_settings(dd);
+	}
+work_error:
+	mutex_unlock(&bma250_power_lock);
+	return ;
+}
+
+static irqreturn_t bma250_irq(int irq, void *dev_id)
+{
+	int                         rc = 0;
+	struct device              *dev = dev_id;
+	struct driver_data         *dd = dev_get_drvdata(dev);
+
+	mutex_lock(&bma250_power_lock);
+
+	if (dd->power) {
+		rc = bma250_report_data(dd);
+		if (rc)
+			goto irq_error;
+
+		rc = bma250_update_settings(dd);
+	}
+irq_error:
+	mutex_unlock(&bma250_power_lock);
 	return IRQ_HANDLED;
 }
 
@@ -677,7 +969,6 @@ static int __devinit bma250_probe(struct i2c_client *ic_dev,
 {
 	struct driver_data *dd;
 	int                 rc;
-	char               *devname;
 	struct bma250_platform_data *pdata = ic_dev->dev.platform_data;
 
 	dd = kzalloc(sizeof(struct driver_data), GFP_KERNEL);
@@ -686,16 +977,12 @@ static int __devinit bma250_probe(struct i2c_client *ic_dev,
 		goto probe_exit;
 	}
 
-	devname = kzalloc(sizeof(BMA250_DEVICE_NAME) + 1, GFP_KERNEL);
-	if (!devname) {
-		rc = -ENOMEM;
-		goto probe_exit_alloc;
-	}
-
 	mutex_lock(&bma250_dd_lock);
 	list_add_tail(&dd->next_dd, &dd_list);
 	mutex_unlock(&bma250_dd_lock);
 	dd->ic_dev = ic_dev;
+
+	INIT_DELAYED_WORK(&dd->work_data, bma250_work_f);
 
 	if (pdata && pdata->setup) {
 		rc = pdata->setup(&ic_dev->dev);
@@ -704,6 +991,12 @@ static int __devinit bma250_probe(struct i2c_client *ic_dev,
 	}
 
 	dd->pdata = pdata;
+
+	/* initial configuration */
+	dd->new_cnf.rate = 200;
+	dd->new_cnf.range = 2;
+	dd->new_cnf.resolution = INTERRUPT_RESOLUTION;
+
 	rc = bma250_config(dd);
 	if (rc)
 		goto probe_err_cfg;
@@ -717,11 +1010,9 @@ static int __devinit bma250_probe(struct i2c_client *ic_dev,
 		goto probe_err_reg;
 	}
 	input_set_drvdata(dd->ip_dev, dd);
-	snprintf(devname, sizeof(BMA250_DEVICE_NAME) + 1, BMA250_DEVICE_NAME);
 	dd->ip_dev->open       = bma250_open;
 	dd->ip_dev->close      = bma250_release;
 	dd->ip_dev->name       = BMA250_NAME;
-	dd->ip_dev->phys       = devname;
 	dd->ip_dev->id.vendor  = BMA250_VENDORID;
 	dd->ip_dev->id.product = 1;
 	dd->ip_dev->id.version = 1;
@@ -737,16 +1028,18 @@ static int __devinit bma250_probe(struct i2c_client *ic_dev,
 
 	rc = input_register_device(dd->ip_dev);
 	if (rc) {
-		dev_err(&dd->ip_dev->dev,
-			"bma250_probe: input_register_device rc=%d\n",
-		       rc);
-		goto probe_err_reg_dev;
+		input_free_device(dd->ip_dev);
+		goto probe_err_reg;
 	}
+
+	rc = add_sysfs_interfaces(&dd->ip_dev->dev);
+	if (rc)
+		goto probe_err_sysfs;
+
 	return rc;
 
-probe_err_reg_dev:
-	dd->ip_dev = NULL;
-	input_free_device(dd->ip_dev);
+probe_err_sysfs:
+	input_unregister_device(dd->ip_dev);
 probe_err_reg:
 	bma250_remove_dbfs_entry(dd);
 	bma250_ic_set_data(ic_dev, NULL);
@@ -757,8 +1050,6 @@ probe_err_setup:
 	mutex_lock(&bma250_dd_lock);
 	list_del(&dd->next_dd);
 	mutex_unlock(&bma250_dd_lock);
-	kfree(devname);
-probe_exit_alloc:
 	kfree(dd);
 probe_exit:
 	return rc;
@@ -768,16 +1059,15 @@ static int __devexit bma250_remove(struct i2c_client *ic_dev)
 {
 	struct driver_data *dd;
 	int                 rc;
-	const char	   *devname;
 	struct bma250_platform_data *pdata = ic_dev->dev.platform_data;
 
 	dd = bma250_ic_get_data(ic_dev);
-	devname = dd->ip_dev->phys;
 	rc = bma250_power_down(dd);
 	if (rc)
 		dev_err(&dd->ip_dev->dev,
 			"%s: power down failed with error %d\n",
 			__func__, rc);
+	remove_sysfs_interfaces(&dd->ip_dev->dev);
 	input_unregister_device(dd->ip_dev);
 	bma250_remove_dbfs_entry(dd);
 	bma250_ic_set_data(ic_dev, NULL);
@@ -786,7 +1076,6 @@ static int __devexit bma250_remove(struct i2c_client *ic_dev)
 	mutex_lock(&bma250_dd_lock);
 	list_del(&dd->next_dd);
 	mutex_unlock(&bma250_dd_lock);
-	kfree(devname);
 	kfree(dd);
 	return 0;
 }
@@ -796,15 +1085,23 @@ static const struct i2c_device_id bma250_i2c_id[] = {
 	{}
 };
 
+#ifdef CONFIG_SUSPEND
+static struct dev_pm_ops bma250_pm_ops = {
+	.suspend	= bma250_suspend,
+	.resume		= bma250_resume,
+};
+#endif
+
 static struct i2c_driver bma250_driver = {
 	.driver = {
 		.name  = BMA250_NAME,
 		.owner = THIS_MODULE,
+#ifdef CONFIG_SUSPEND
+		.pm	= &bma250_pm_ops,
+#endif
 	},
 	.probe         = bma250_probe,
 	.remove        = __devexit_p(bma250_remove),
-	.suspend       = bma250_suspend,
-	.resume        = bma250_resume,
 	.id_table      = bma250_i2c_id,
 };
 
@@ -813,12 +1110,13 @@ static int __init bma250_init(void)
 {
 	INIT_LIST_HEAD(&dd_list);
 	mutex_init(&bma250_dd_lock);
+	mutex_init(&bma250_power_lock);
 	return i2c_add_driver(&bma250_driver);
 }
 module_init(bma250_init);
 
 static void __exit bma250_exit(void)
 {
-	i2c_add_driver(&bma250_driver);
+	i2c_del_driver(&bma250_driver);
 }
 module_exit(bma250_exit);

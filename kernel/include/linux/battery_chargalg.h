@@ -5,12 +5,18 @@
 
 #define BATTERY_CHARGALG_NAME "chargalg"
 
-enum battery_charalg_temperature {
+enum battery_chargalg_temperature {
 	BATTERY_CHARGALG_TEMP_COLD,
 	BATTERY_CHARGALG_TEMP_NORMAL,
 	BATTERY_CHARGALG_TEMP_WARM,
 	BATTERY_CHARGALG_TEMP_OVERHEAT,
 	BATTERY_CHARGALG_TEMP_MAX_NBR,
+};
+
+enum battery_chargalg_fraction {
+	BATTERY_CHARGALG_NUM,
+	BATTERY_CHARGALG_DENOM,
+	BATTERY_CHARGALG_FRACTION,
 };
 
 /**
@@ -38,8 +44,23 @@ struct ambient_temperature_limit {
 	s8 hyst[BATTERY_CHARGALG_TEMP_MAX_NBR];
 };
 
-struct ambient_temperature_data {
+#ifdef CONFIG_BATTERY_CHARGALG_ENABLE_STEP_CHARGING
+struct step_charging {
+	u8 c_curr[BATTERY_CHARGALG_FRACTION]; /* fraction of C */
+	u16 volt;		/* mV */
+	u8 volt_hysteresis_up;	/* mV */
+	u8 volt_hysteresis_down;/* mV */
+};
+#endif
+
+struct device_data {
 	struct ambient_temperature_limit *limit_tbl;
+#ifdef CONFIG_BATTERY_CHARGALG_ENABLE_STEP_CHARGING
+	struct step_charging *step_charging;
+	size_t num_step_charging;
+#endif
+	u16 battery_capacity_mah;
+	u16 maximum_charging_current_ma;
 };
 
 struct battery_chargalg_platform_data {
@@ -55,9 +76,8 @@ struct battery_chargalg_platform_data {
 	u16 eoc_current_term; /* mA */
 	s16 eoc_current_flat_time; /* seconds */
 	s8 temp_hysteresis_design; /* degree C */
-	const u16 *battery_capacity_mah;  /* mAh */
 	u8 disable_usb_host_charging;
-	struct ambient_temperature_data *ambient_temp;
+	struct device_data *ddata;
 	char *batt_volt_psy_name;
 	char *batt_curr_psy_name;
 
@@ -79,9 +99,7 @@ struct battery_chargalg_platform_data {
 	int average_current_max_limit; /* mA */
 };
 
-extern struct ambient_temperature_data battery_chargalg_platform_ambient_temp;
-
-extern const u16 battery_capacity_mah;
+extern struct device_data device_data;
 
 void battery_chargalg_set_battery_health(int health);
 void battery_chargalg_disable(bool);

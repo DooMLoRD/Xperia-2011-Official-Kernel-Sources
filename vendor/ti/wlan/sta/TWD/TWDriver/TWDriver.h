@@ -4045,6 +4045,19 @@ TI_STATUS TWD_CfgBeaconFilterOpt (TI_HANDLE hTWD, TI_UINT8 uBeaconFilteringStatu
  */
 TI_STATUS TWD_CfgBeaconFilterTable (TI_HANDLE hTWD, TI_UINT8 uNumOfIe, TI_UINT8 *pIeTable, TI_UINT8 uIeTableSize);
 /** @ingroup Power_Management
+ * \brief  Configure Enable Multicast MAC Fixup
+ *
+ * \param  hTWD     			- TWD module object handle
+ * \param  enableFixup			- bitmask to determine whether to enable MAC Fixup or not
+ * \return TI_OK on success or TI_NOK on failure
+ *
+ * \par Description
+ * Configure Multicast MAC fixup enable in the FW
+ *
+ * \sa
+ */
+TI_STATUS TWD_CfgEnableMulticastMACFixup (TI_HANDLE hTWD, TI_UINT8 enableFixup);
+/** @ingroup Power_Management
  * \brief  Configure Wake Up Condition
  *
  * \param  hTWD     		- TWD module object handle
