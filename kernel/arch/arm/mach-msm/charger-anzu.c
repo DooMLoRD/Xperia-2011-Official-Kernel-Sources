@@ -11,8 +11,8 @@
 #include <linux/battery_chargalg.h>
 
 static struct ambient_temperature_limit limit_tbl = {
-	{0,	42,	43,	127},	/* ambient temp: base */
-	{4,	1,	37,	0},	/* ambient temp: hysteresis */
+	{0,	45,	57,	127},	/* ambient temp: base */
+	{4,	4,	4,	0},	/* ambient temp: hysteresis */
 };
 
 struct ambient_temperature_data battery_chargalg_platform_ambient_temp = {

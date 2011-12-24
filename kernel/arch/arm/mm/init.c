@@ -80,38 +80,37 @@ struct meminfo meminfo;
 void show_mem(void)
 {
 	int free = 0, total = 0, reserved = 0;
-	int shared = 0, cached = 0, slab = 0, node, i;
+	int shared = 0, cached = 0, slab = 0, i;
 	struct meminfo * mi = &meminfo;
 
 	printk("Mem-info:\n");
 	show_free_areas();
-	for_each_online_node(node) {
-		for_each_nodebank (i,mi,node) {
-			struct membank *bank = &mi->bank[i];
-			unsigned int pfn1, pfn2;
-			struct page *page, *end;
 
-			pfn1 = bank_pfn_start(bank);
-			pfn2 = bank_pfn_end(bank);
+	for_each_bank (i, mi) {
+		struct membank *bank = &mi->bank[i];
+		unsigned int pfn1, pfn2;
+		struct page *page, *end;
 
-			page = pfn_to_page(pfn1);
-			end  = pfn_to_page(pfn2 - 1) + 1;
+		pfn1 = bank_pfn_start(bank);
+		pfn2 = bank_pfn_end(bank);
 
-			do {
-				total++;
-				if (PageReserved(page))
-					reserved++;
-				else if (PageSwapCache(page))
-					cached++;
-				else if (PageSlab(page))
-					slab++;
-				else if (!page_count(page))
-					free++;
-				else
-					shared += page_count(page) - 1;
-				page++;
-			} while (page < end);
-		}
+		page = pfn_to_page(pfn1);
+		end  = pfn_to_page(pfn2 - 1) + 1;
+
+		do {
+			total++;
+			if (PageReserved(page))
+				reserved++;
+			else if (PageSwapCache(page))
+				cached++;
+			else if (PageSlab(page))
+				slab++;
+			else if (!page_count(page))
+				free++;
+			else
+				shared += page_count(page) - 1;
+			page++;
+		} while (page < end);
 	}
 
 	printk("%d pages of RAM\n", total);
@@ -130,7 +129,7 @@ static void __init find_node_limits(int node, struct meminfo *mi,
 	*min = -1UL;
 	*max_low = *max_high = 0;
 
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		struct membank *bank = &mi->bank[i];
 		unsigned long start, end;
 
@@ -162,7 +161,7 @@ find_bootmap_pfn(int node, struct meminfo *mi, unsigned int bootmap_pages)
 	start_pfn   = PAGE_ALIGN(__pa(_end)) >> PAGE_SHIFT;
 	bootmap_pfn = 0;
 
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		struct membank *bank = &mi->bank[i];
 		unsigned int start, end;
 
@@ -249,7 +248,7 @@ static void __init bootmem_init_node(int node, struct meminfo *mi,
 	/*
 	 * Map the memory banks for this node.
 	 */
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		struct membank *bank = &mi->bank[i];
 
 #if defined(CONFIG_FLATMEM) && !defined(CONFIG_HOLES_IN_ZONE)
@@ -288,7 +287,7 @@ static void __init bootmem_init_node(int node, struct meminfo *mi,
 	pgdat = NODE_DATA(node);
 	init_bootmem_node(pgdat, boot_pfn, start_pfn, end_pfn);
 
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		struct membank *bank = &mi->bank[i];
 		if (!bank->highmem)
 			free_bootmem_node(pgdat, bank_phys_start(bank), bank_phys_size(bank));
@@ -350,7 +349,7 @@ static void __init bootmem_free_node(int node, struct meminfo *mi)
 	 *  holes = node_size - sum(bank_sizes_in_node)
 	 */
 	memcpy(zhole_size, zone_size, sizeof(zhole_size));
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		int idx = 0;
 #ifdef CONFIG_HIGHMEM
 		if (mi->bank[i].highmem)
@@ -396,7 +395,7 @@ static void arm_memory_present(struct meminfo *mi, int node)
 static void arm_memory_present(struct meminfo *mi, int node)
 {
 	int i;
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		struct membank *bank = &mi->bank[i];
 		memory_present(node, bank_pfn_start(bank), bank_pfn_end(bank));
 	}
@@ -593,7 +592,7 @@ static void __init free_unused_memmap_node(int node, struct meminfo *mi)
 	 * This relies on each bank being in address order.
 	 * The banks are sorted previously in bootmem_init().
 	 */
-	for_each_nodebank(i, mi, node) {
+	for_each_bank(i, mi) {
 		struct membank *bank = &mi->bank[i];
 
 		bank_start = bank_pfn_start(bank);
@@ -659,26 +658,24 @@ void __init mem_init(void)
 
 	reserved_pages = free_pages = 0;
 
-	for_each_online_node(node) {
-		for_each_nodebank(i, &meminfo, node) {
-			struct membank *bank = &meminfo.bank[i];
-			unsigned int pfn1, pfn2;
-			struct page *page, *end;
+	for_each_bank(i, &meminfo) {
+		struct membank *bank = &meminfo.bank[i];
+		unsigned int pfn1, pfn2;
+		struct page *page, *end;
 
-			pfn1 = bank_pfn_start(bank);
-			pfn2 = bank_pfn_end(bank);
+		pfn1 = bank_pfn_start(bank);
+		pfn2 = bank_pfn_end(bank);
 
-			page = pfn_to_page(pfn1);
-			end  = pfn_to_page(pfn2 - 1) + 1;
+		page = pfn_to_page(pfn1);
+		end  = pfn_to_page(pfn2 - 1) + 1;
 
-			do {
-				if (PageReserved(page))
-					reserved_pages++;
-				else if (!page_count(page))
-					free_pages++;
-				page++;
-			} while (page < end);
-		}
+		do {
+			if (PageReserved(page))
+				reserved_pages++;
+			else if (!page_count(page))
+				free_pages++;
+			page++;
+		} while (page < end);
 	}
 
 	/*
@@ -697,7 +694,7 @@ void __init mem_init(void)
 		nr_free_pages() << (PAGE_SHIFT-10),
 		free_pages << (PAGE_SHIFT-10),
 		reserved_pages << (PAGE_SHIFT-10),
-		totalhigh_pages << (PAGE_SHIFT-10));
+		(long unsigned int)totalhigh_pages << (PAGE_SHIFT-10));
 
 #define MLK(b, t) b, t, ((t) - (b)) >> 10
 #define MLM(b, t) b, t, ((t) - (b)) >> 20

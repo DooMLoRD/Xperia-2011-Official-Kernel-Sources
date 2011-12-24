@@ -8,7 +8,7 @@ obj-y += mdp.o
 
 ifeq ($(CONFIG_FB_MSM_MDP40),y)
 obj-y += mdp4_util.o
-obj-$(CONFIG_DEBUG_FS) += mdp_debugfs.o
+obj-$(CONFIG_DEBUG_FS) += mdp4_debugfs.o
 else
 obj-y += mdp_hw_init.o
 obj-y += mdp_ppp.o

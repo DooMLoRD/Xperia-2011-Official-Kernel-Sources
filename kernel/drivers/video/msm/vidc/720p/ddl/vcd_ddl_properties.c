@@ -411,7 +411,7 @@ static u32 ddl_set_enc_property(struct ddl_client_context *ddl,
 				) {
 				encoder->frame_size = *framesize;
 				ddl_calculate_stride(&encoder->frame_size,
-					false, encoder->codec.codec);
+					false);
 				ddl_set_default_encoder_buffer_req(encoder);
 				vcd_status = VCD_S_SUCCESS;
 			}
@@ -837,8 +837,7 @@ static u32 ddl_get_dec_property
 			    property_hdr->sz) {
 					ddl_calculate_stride(
 					&decoder->client_frame_size,
-					!decoder->progressive_only,
-					decoder->codec.codec);
+					!decoder->progressive_only);
 					*(struct vcd_property_frame_size *)
 					    property_value =
 					    decoder->client_frame_size;
@@ -958,8 +957,7 @@ static u32 ddl_get_dec_property
 				struct vcd_property_frame_size frame_sz =
 					decoder->client_frame_size;
 				ddl_calculate_stride(&frame_sz,
-					!decoder->progressive_only,
-					decoder->codec.codec);
+					!decoder->progressive_only);
 				*(u32 *) property_value =
 				    ((frame_sz.stride >> 4) *
 				     (frame_sz.scan_lines >> 4));
@@ -1634,7 +1632,7 @@ void ddl_set_default_encoder_buffer_req(struct ddl_encoder_data *encoder)
 	u32 y_cb_cr_size;
 
 	y_cb_cr_size = ddl_get_yuv_buffer_size(&encoder->frame_size,
-		&encoder->buf_format, false, encoder->codec.codec);
+		&encoder->buf_format, false);
 
 	memset(&encoder->input_buf_req, 0,
 	       sizeof(struct vcd_buffer_requirement));
@@ -1677,8 +1675,8 @@ void ddl_set_default_decoder_buffer_req(struct ddl_decoder_data *decoder,
 		input_buf_req = &decoder->client_input_buf_req;
 		min_dpb = ddl_decoder_min_num_dpb(decoder);
 		 y_cb_cr_size = ddl_get_yuv_buffer_size(frame_size,
-			&decoder->buf_format, (!decoder->progressive_only),
-			decoder->codec.codec);
+			&decoder->buf_format,
+			(!decoder->progressive_only));
 	} else {
 		frame_size = &decoder->frame_size;
 		output_buf_req = &decoder->actual_output_buf_req;
@@ -1724,12 +1722,11 @@ void ddl_set_default_decoder_buffer_req(struct ddl_decoder_data *decoder,
 }
 
 u32 ddl_get_yuv_buffer_size(struct vcd_property_frame_size *frame_size,
-     struct vcd_property_buffer_format *buf_format, u32 inter_lace,
-     enum vcd_codec codec)
+     struct vcd_property_buffer_format *buf_format, u32 inter_lace)
 {
 	struct vcd_property_frame_size frame_sz = *frame_size;
 	u32 total_memory_size;
-	ddl_calculate_stride(&frame_sz, inter_lace, codec);
+	ddl_calculate_stride(&frame_sz, inter_lace);
 
 	if (buf_format->buffer_format != VCD_BUFFER_FORMAT_NV12) {
 		u32 component_mem_size;
@@ -1764,19 +1761,16 @@ u32 ddl_get_yuv_buffer_size(struct vcd_property_frame_size *frame_size,
 }
 
 void ddl_calculate_stride(struct vcd_property_frame_size *frame_size,
-	u32 interlace, enum vcd_codec codec)
+						 u32 interlace)
 {
 	frame_size->stride = ((frame_size->width + 15) >> 4) << 4;
-	if (!interlace || codec == VCD_CODEC_MPEG4 ||
-		codec == VCD_CODEC_DIVX_4 ||
-		codec == VCD_CODEC_DIVX_5 ||
-		codec == VCD_CODEC_DIVX_6 ||
-		codec == VCD_CODEC_XVID) {
-		frame_size->scan_lines =
-			((frame_size->height + 15) >> 4) << 4;
-	} else {
+
+	if (interlace) {
 		frame_size->scan_lines =
 			((frame_size->height + 31) >> 5) << 5;
+	} else {
+		frame_size->scan_lines =
+			((frame_size->height + 15) >> 4) << 4;
 	}
 
 }
@@ -1827,8 +1821,7 @@ static u32 ddl_decoder_min_num_dpb(struct ddl_decoder_data *decoder)
 	case VCD_CODEC_H264:
 		{
 			ddl_calculate_stride(&frame_sz,
-				!decoder->progressive_only,
-				decoder->codec.codec);
+				!decoder->progressive_only);
 			yuv_size =
 			    ((frame_sz.scan_lines *
 			      frame_sz.stride * 3) >> 1);

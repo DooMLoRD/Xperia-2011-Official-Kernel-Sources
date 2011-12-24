@@ -13,7 +13,6 @@
  * of the License, or (at your option) any later version.
  */
 
-
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
@@ -150,7 +149,6 @@ struct simple_remote_driver {
 
 	atomic_t detection_in_progress;
 	atomic_t detect_cycle;
-	atomic_t initialized;
 
 	u8 pressed_button;
 	u8 nodetect_cycles;
@@ -590,8 +588,8 @@ static void simple_remote_close(struct input_dev *dev)
 static void simple_remote_plug_det_work(struct work_struct *work)
 {
 	u8 getgpiovalue;
-	unsigned int adc_value = 0;
-	unsigned int alt_adc_val = 0;
+	unsigned int adc_value = 2000;
+	unsigned int alt_adc_val = 2000;
 	enum dev_state state;
 
 	struct simple_remote_driver *jack =
@@ -604,33 +602,34 @@ static void simple_remote_plug_det_work(struct work_struct *work)
 	if (!getgpiovalue) {
 		jack->interface->enable_mic_bias(1);
 		jack->interface->read_hs_adc(&adc_value);
-		if ( 0 > jack->interface->enable_alternate_adc_mode(1))
-			dev_warn(jack->dev,
-				 "%s - Alternate ADC mode did not engage "
-				 "correctly. Unsupported headset may not be"
-				 "correctly detected!\n", __func__);
-		jack->interface->read_hs_adc(&alt_adc_val);
-		jack->interface->enable_mic_bias(0);
-		jack->interface->enable_alternate_adc_mode(0);
 
 		dev_dbg(jack->dev, "%s - adc_value = %d\n", __func__,
 			adc_value);
-		dev_dbg(jack->dev, "%s - alt_adc_val = %d\n", __func__,
-			alt_adc_val);
+		jack->interface->enable_mic_bias(0);
 	}
 
 	jack->new_accessory_state =
 		simple_remote_attrs_parse_accessory_type(
 			jack, adc_value, getgpiovalue);
 
-	state = simple_remote_attrs_parse_accessory_type(
-		jack, alt_adc_val, getgpiovalue);
-
 	/* performing CTIA detection */
 	if (!getgpiovalue && jack->new_accessory_state == DEVICE_HEADSET) {
 		dev_dbg(jack->dev,
 			"%s - Headset detected. Checking for unsupported\n",
 			__func__);
+		jack->interface->enable_mic_bias(1);
+		if (0 > jack->interface->enable_alternate_adc_mode(1))
+			dev_warn(jack->dev,
+				 "%s - Alternate ADC mode did not engage "
+				 "correctly. Unsupported headset may not be"
+				 "correctly detected!\n", __func__);
+		jack->interface->read_hs_adc(&alt_adc_val);
+		dev_dbg(jack->dev, "%s - alt_adc_val = %d\n", __func__,
+			alt_adc_val);
+		jack->interface->enable_mic_bias(0);
+		jack->interface->enable_alternate_adc_mode(0);
+		state = simple_remote_attrs_parse_accessory_type(
+			jack, alt_adc_val, getgpiovalue);
 		if (DEVICE_HEADPHONE == state) {
 			dev_info(jack->dev,
 				 "%s - CTIA headset detected", __func__);
@@ -733,13 +732,9 @@ static irqreturn_t simple_remote_button_irq_handler(int irq, void *data)
 
 	struct simple_remote_driver *jack = data;
 
-	if (atomic_read(&jack->initialized)) {
-		dev_dbg(jack->dev, "Received a Button interrupt\n");
-		schedule_work(&jack->btn_det_work);
-	} else {
-		dev_dbg(jack->dev, "Received button IRQ before initialized "
-			"system. Discarding\n");
-	}
+	dev_dbg(jack->dev, "Received a Button interrupt\n");
+
+	schedule_work(&jack->btn_det_work);
 
 	return IRQ_HANDLED;
 }
@@ -886,8 +881,6 @@ static int simple_remote_probe(struct platform_device *pdev)
 	}
 
 	dev_info(jack->dev, "***** Successfully registered\n");
-
-	atomic_set(&jack->initialized, 1);
 
 	return ret;
 

@@ -20,6 +20,14 @@ static const struct novatek_reg_set novatek_setup_regs[] = {
 	{ 0x1100, 0x0000 },
 	{ 0x0000,     10 },	/* sleep_ms(10) */
 
+	/* Frame frequency is Change */
+	{ 0x0480, 0x0038 },
+	{ 0x0580, 0x0038 },
+	{ 0x0680, 0x0038 },
+	{ 0x9480, 0x00A0 },
+	{ 0x9780, 0x0095 },
+	{ 0x9980, 0x0015 },
+
 	/* LED PWM */
 	{ 0x22C0, 0x0002 },
 	{ 0x5100, 0x00FF },
@@ -53,7 +61,7 @@ static const struct novatek_reg_set novatek_display_off_regs[] = {
 
 static const struct novatek_reg_set novatek_takedown_regs[] = {
 	{ 0x1000, 0x0000 },
-	{ 0x0000,    200 },	/* sleep_ms(200) */
+	{ 0x0000,     70 },	/* sleep_ms(70) */
 	{ 0, 0 }
 };
 
@@ -79,7 +87,7 @@ static struct msm_fb_panel_data *get_panel_info(void)
 	novatek_panel_data.panel_info.bl_min = 1;
 	novatek_panel_data.panel_info.fb_num = 2;
 	novatek_panel_data.panel_info.mddi.vdopkt = MDDI_DEFAULT_PRIM_PIX_ATTR;
-	novatek_panel_data.panel_info.lcd.refx100 = 6000;
+	novatek_panel_data.panel_info.lcd.refx100 = 6500;
 	novatek_panel_data.panel_info.lcd.v_back_porch = 12;
 	novatek_panel_data.panel_info.lcd.v_front_porch = 14;
 	novatek_panel_data.panel_info.lcd.v_pulse_width = 0;
@@ -104,8 +112,6 @@ const struct panel_id novatek_panel_id_hitachi_dx09d09vm_type1 = {
 	.regs = { {0xDB00, 0x80}, {0xDC00, 0x06} },
 	.pinfo = &novatek_controller_panel,
 	.mddi_type = 1,
-	.width = 46,
-	.height = 82,
 	.suspend_support = 1,
 	.esd_support = 1,
 };
@@ -116,8 +122,6 @@ const struct panel_id novatek_panel_id_hitachi_dx09d09vm = {
 	.regs = { {0xDA00, 0x01}, {0xDC00, 0x06} },
 	.pinfo = &novatek_controller_panel,
 	.mddi_type = 2,
-	.width = 46,
-	.height = 82,
 	.suspend_support = 1,
 	.esd_support = 1,
 };

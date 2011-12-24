@@ -632,9 +632,6 @@ static int pm8058_probe(struct i2c_client *client,
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < MAX_PM_IRQ; i++)
-		chip->config[i] = PM8058_IRQF_MASK_ALL;
-
 	chip->dev = client;
 
 	/* Read PMIC chip revision */
@@ -725,12 +722,11 @@ static int pm8058_suspend(struct device *dev)
 
 	for (i = 0; i < MAX_PM_IRQ; i++) {
 		spin_lock_irqsave(&chip->pm_lock, irqsave);
-
-		if (!chip->wake_enable[i] &&
-				((chip->config[i] & PM8058_IRQF_MASK_ALL)
-						!= PM8058_IRQF_MASK_ALL))
-			pm8058_irq_mask(i + chip->pdata.irq_base);
-
+		if (chip->config[i] && !chip->wake_enable[i]) {
+			if (!((chip->config[i] & PM8058_IRQF_MASK_ALL)
+			      == PM8058_IRQF_MASK_ALL))
+				pm8058_irq_mask(i + chip->pdata.irq_base);
+		}
 		spin_unlock_irqrestore(&chip->pm_lock, irqsave);
 	}
 
@@ -752,12 +748,11 @@ static int pm8058_resume(struct device *dev)
 
 	for (i = 0; i < MAX_PM_IRQ; i++) {
 		spin_lock_irqsave(&chip->pm_lock, irqsave);
-
-		if (!chip->wake_enable[i] &&
-				((chip->config[i] & PM8058_IRQF_MASK_ALL)
-						!= PM8058_IRQF_MASK_ALL))
-			pm8058_irq_unmask(i + chip->pdata.irq_base);
-
+		if (chip->config[i] && !chip->wake_enable[i]) {
+			if (!((chip->config[i] & PM8058_IRQF_MASK_ALL)
+			      == PM8058_IRQF_MASK_ALL))
+				pm8058_irq_unmask(i + chip->pdata.irq_base);
+		}
 		spin_unlock_irqrestore(&chip->pm_lock, irqsave);
 	}
 

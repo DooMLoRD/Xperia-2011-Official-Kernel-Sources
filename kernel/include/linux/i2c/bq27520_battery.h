@@ -22,7 +22,5 @@ struct bq27520_platform_data {
 	int polling_lower_capacity;
 	int polling_upper_capacity;
 	struct bq27520_block_table *udatap;
-	int ocv_issue_capacity_threshold;
-	void (*disable_algorithm)(bool);
 };
 #endif /* BQ27520_BATTERY_H_ */

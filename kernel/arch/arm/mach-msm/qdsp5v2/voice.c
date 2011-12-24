@@ -100,6 +100,7 @@ static void voice_auddev_cb_function(u32 evt_id,
 
 	MM_INFO("auddev_cb_function, evt_id=%d, dev_state=%d, voc_state=%d\n",
 		evt_id, v->dev_state, v->voc_state);
+
 	if ((evt_id != AUDDEV_EVT_START_VOICE) ||
 			(evt_id != AUDDEV_EVT_END_VOICE)) {
 		if (evt_payload == NULL) {
@@ -107,6 +108,7 @@ static void voice_auddev_cb_function(u32 evt_id,
 			return;
 		}
 	}
+
 	switch (evt_id) {
 	case AUDDEV_EVT_START_VOICE:
 		if ((v->dev_state == DEV_INIT) ||
@@ -508,7 +510,7 @@ static int voice_cmd_device_info(struct voice_data *v)
 }
 EXPORT_SYMBOL(voice_cmd_device_info);
 
-void voice_change_sample_rate(struct voice_data *v)
+static void voice_change_sample_rate(struct voice_data *v)
 {
 	int freq = 48000;
 	int rc = 0;

@@ -281,10 +281,9 @@ u32 ddl_decoder_ready_to_start(struct ddl_client_context *,
 			       struct vcd_sequence_hdr *);
 u32 ddl_get_yuv_buffer_size
     (struct vcd_property_frame_size *frame_size,
-     struct vcd_property_buffer_format *buf_format, u32 inter_lace,
-     enum vcd_codec codec);
+     struct vcd_property_buffer_format *buf_format, u32 inter_lace);
 void ddl_calculate_stride(struct vcd_property_frame_size *frame_size,
-	u32 inter_lace, enum vcd_codec codec);
+						  u32 inter_lace);
 void ddl_encode_dynamic_property(struct ddl_client_context *ddl,
 				 u32 enable);
 void ddl_decode_dynamic_property(struct ddl_client_context *ddl,

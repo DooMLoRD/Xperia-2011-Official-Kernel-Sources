@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
  *
  * All source code in this file is licensed under the following license except
  * where indicated.
@@ -38,6 +38,7 @@
 #include <asm/mach-types.h>
 #include <mach/qdsp5v2/audio_dev_ctl.h>
 #include <mach/debug_mm.h>
+#include <mach/qdsp5v2/afe.h>
 
 static struct platform_device *msm_audio_snd_device;
 struct audio_locks the_locks;
@@ -356,9 +357,6 @@ static int msm_device_put(struct snd_kcontrol *kcontrol,
 			dev_info->opened = 1;
 			broadcast_event(AUDDEV_EVT_DEV_RDY, route_cfg.dev_id,
 							SESSION_IGNORE);
-			/* Event to notify client for device info */
-			broadcast_event(AUDDEV_EVT_DEVICE_INFO,
-					route_cfg.dev_id, SESSION_IGNORE);
 		}
 	} else {
 		if (dev_info->opened) {
@@ -466,15 +464,10 @@ static int msm_route_put(struct snd_kcontrol *kcontrol,
 			dev_info->sessions &= ~(session_mask);
 		} else {
 			dev_info->sessions = dev_info->sessions | session_mask;
-			if (dev_info->opened) {
+			if (dev_info->opened)
 				broadcast_event(AUDDEV_EVT_DEV_RDY,
 							route_cfg.dev_id,
 							session_mask);
-				/* Event to notify client for device info */
-				broadcast_event(AUDDEV_EVT_DEVICE_INFO,
-							route_cfg.dev_id,
-							session_mask);
-			}
 		}
 	} else {
 		rc = msm_snddev_set_enc(session_id, dev_info->copp_id, set);
@@ -508,15 +501,10 @@ static int msm_route_put(struct snd_kcontrol *kcontrol,
 							SESSION_IGNORE);
 				}
 			}
-			if (dev_info->opened) {
+			if (dev_info->opened)
 				broadcast_event(AUDDEV_EVT_DEV_RDY,
 							route_cfg.dev_id,
 							session_mask);
-				/* Event to notify client for device info */
-				broadcast_event(AUDDEV_EVT_DEVICE_INFO,
-							route_cfg.dev_id,
-							session_mask);
-			}
 		}
 	}
 
@@ -585,6 +573,57 @@ static int msm_device_volume_put(struct snd_kcontrol *kcontrol,
 	return rc;
 }
 
+static int msm_device_mute_info(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 2;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = msm_snddev_devcount();
+	return 0;
+}
+
+static int msm_device_mute_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = 0;
+	return 0;
+}
+
+static int msm_device_mute_put(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	int dev_id = ucontrol->value.integer.value[0];
+	int mute = ucontrol->value.integer.value[1];
+	struct msm_snddev_info *dev_info;
+	int afe_dev_id = 0;
+	int volume = 0x4000;
+
+	dev_info = audio_dev_ctrl_find_dev(dev_id);
+	if (IS_ERR(dev_info)) {
+		MM_ERR("pass invalid dev_id %d\n", dev_id);
+		return PTR_ERR(dev_info);
+	}
+
+	if (dev_info->capability & SNDDEV_CAP_RX)
+		return -EPERM;
+
+	MM_DBG("Muting device id %d(%s) afe_id=%d mute=%d\n", dev_id, dev_info->name, dev_info->copp_id, mute);
+
+	if (dev_info->copp_id == 0)
+		afe_dev_id = AFE_HW_PATH_CODEC_TX;
+	if (dev_info->copp_id == 1)
+		afe_dev_id = AFE_HW_PATH_AUXPCM_TX;
+	if (dev_info->copp_id == 2)
+		afe_dev_id = AFE_HW_PATH_MI2S_TX;
+	if (mute)
+		volume = 0;
+	else
+		volume = dev_info->dev_volume;
+
+	afe_device_volume_ctrl(afe_dev_id, volume);
+	return 0;
+}
 
 static struct snd_kcontrol_new snd_dev_controls[AUDIO_DEV_CTL_MAX_DEV];
 
@@ -640,6 +679,8 @@ static struct snd_kcontrol_new snd_msm_controls[] = {
 						msm_v_call_put, 0),
 	MSM_EXT("Device_Volume", 9, msm_device_volume_info,
 			msm_device_volume_get, msm_device_volume_put, 0),
+	MSM_EXT("Device_Mute", 10, msm_device_mute_info,
+			msm_device_mute_get, msm_device_mute_put, 0),
 };
 
 static int msm_new_mixer(struct snd_card *card)

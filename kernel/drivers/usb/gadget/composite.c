@@ -367,6 +367,10 @@ int __init usb_interface_id(struct usb_configuration *config,
 	return -ENODEV;
 }
 
+#ifdef CONFIG_USB_POWER_REENUMERATION
+extern u8 usb_reenum_get_maxpower(void);
+#endif
+
 static int config_buf(struct usb_configuration *config,
 		enum usb_device_speed speed, void *buf, u8 type)
 {
@@ -387,6 +391,9 @@ static int config_buf(struct usb_configuration *config,
 	c->bConfigurationValue = config->bConfigurationValue;
 	c->iConfiguration = config->iConfiguration;
 	c->bmAttributes = USB_CONFIG_ATT_ONE | config->bmAttributes;
+#ifdef CONFIG_USB_POWER_REENUMERATION
+	config->bMaxPower = usb_reenum_get_maxpower();
+#endif
 	c->bMaxPower = config->bMaxPower ? : (CONFIG_USB_GADGET_VBUS_DRAW / 2);
 
 	/* There may be e.g. OTG descriptors */
@@ -533,7 +540,9 @@ static void reset_config(struct usb_composite_dev *cdev)
 			f->disable(f);
 	}
 	cdev->config = NULL;
-	if (!cdev->mute_switch)
+	if (cdev->mute_switch)
+		cdev->mute_switch = 0;
+	else
 		schedule_work(&cdev->switch_work);
 }
 
@@ -598,9 +607,6 @@ static int set_config(struct usb_composite_dev *cdev,
 	power = c->bMaxPower ? (2 * c->bMaxPower) : CONFIG_USB_GADGET_VBUS_DRAW;
 done:
 	usb_gadget_vbus_draw(gadget, power);
-
-	if (cdev->mute_switch)
-		cdev->mute_switch = 0;
 
 	schedule_work(&cdev->switch_work);
 	return result;
@@ -1115,26 +1121,9 @@ static void composite_disconnect(struct usb_gadget *gadget)
 	 * disconnect callbacks?
 	 */
 	spin_lock_irqsave(&cdev->lock, flags);
-	if (cdev->config) {
-		reset_config(cdev);
-	} else if (cdev->mute_switch) {
-		cdev->mute_switch = 0;
-		schedule_work(&cdev->switch_work);
-	}
-	spin_unlock_irqrestore(&cdev->lock, flags);
-}
-
-static void composite_offline(struct usb_gadget *gadget)
-{
-	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
-	unsigned long			flags;
-
-	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config)
-		cdev->mute_switch = 0;
+		reset_config(cdev);
 	spin_unlock_irqrestore(&cdev->lock, flags);
-
-	composite_disconnect(gadget);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1381,7 +1370,6 @@ static struct usb_gadget_driver composite_driver = {
 
 	.setup		= composite_setup,
 	.disconnect	= composite_disconnect,
-	.offline	= composite_offline,
 
 	.suspend	= composite_suspend,
 	.resume		= composite_resume,

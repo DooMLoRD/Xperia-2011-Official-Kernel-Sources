@@ -63,7 +63,6 @@
 #include <mach/qdsp5v2/aux_pcm.h>
 #include <mach/semc_rpc_server_handset.h>
 #include <mach/semc_battery_data.h>
-#include <mach/msm_tsif.h>
 
 #include <asm/mach/mmc.h>
 #include <asm/mach/flash.h>
@@ -82,10 +81,6 @@
 #include <mach/msm_reqs.h>
 
 #include <mach/vreg.h>
-
-#ifdef CONFIG_MOGAMI_PMIC_KEYPAD
-#include "keypad-pmic-mogami.h"
-#endif
 
 /* Platform-specific regulator name mappings according to conf. spec. */
 #define VREG_L8	"gp7"	/* BMA150, AK8975B, LCD, Touch, HDMI */
@@ -153,6 +148,10 @@
 #define GPIO_MSM_MDDI_XRES		(157)
 #endif
 
+#ifdef CONFIG_CAPTURE_KERNEL
+#include "smd_private.h"
+#endif
+
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 #define MSM_RAM_CONSOLE_START   (0x50000000 - MSM_RAM_CONSOLE_SIZE)
 #define MSM_RAM_CONSOLE_SIZE    (128 * SZ_1K)
@@ -181,6 +180,21 @@
 /* Macros assume PMIC GPIOs start at 0 */
 #define PM8058_GPIO_PM_TO_SYS(pm_gpio)     (pm_gpio + NR_GPIO_IRQS)
 #define PM8058_GPIO_SYS_TO_PM(sys_gpio)    (sys_gpio - NR_GPIO_IRQS)
+
+#ifdef CONFIG_CAPTURE_KERNEL
+#define AMSSCORE_RAM_START	0x04700000
+#define AMSSCORE_RAM_END	0x06FFFFFF
+#define SMEMCORE_RAM_START	0x00100000
+#define SMEMCORE_RAM_END   	0x001FFFFF
+#define ADSPCORE_RAMA_START	0xA7000000
+#define ADSPCORE_RAMA_END	0xA707FFFF
+#define ADSPCORE_RAMB_START	0xA7200000
+#define ADSPCORE_RAMB_END	0xA727FFFF
+#define ADSPCORE_RAMC_START	0xA7400000
+#define ADSPCORE_RAMC_END	0xA747FFFF
+#define ADSPCORE_RAMI_START	0xA7600000
+#define ADSPCORE_RAMI_END	0xA767FFFF
+#endif
 
 #define GPIO_BQ27520_SOC_INT 20
 #define LIPO_BAT_MAX_VOLTAGE 4200
@@ -225,7 +239,7 @@ static int vreg_helper_on(const char *pzName, unsigned mv)
 		return rc;
 	}
 
-	printk(KERN_ERR "Enabled VREG \"%s\" at %u mV\n", pzName, mv);
+	printk(KERN_INFO "Enabled VREG \"%s\" at %u mV\n", pzName, mv);
 	return rc;
 }
 
@@ -247,7 +261,7 @@ static void vreg_helper_off(const char *pzName)
 		return;
 	}
 
-	printk(KERN_ERR "Disabled VREG \"%s\"\n", pzName);
+	printk(KERN_INFO "Disabled VREG \"%s\"\n", pzName);
 }
 
 static ssize_t hw_id_get_mask(struct class *class, char *buf)
@@ -486,38 +500,7 @@ static struct pm8058_gpio_platform_data pm8058_mpp_data = {
 	.irq_base = PM8058_MPP_IRQ(PMIC8058_IRQ_BASE, 0),
 };
 
-static struct mfd_cell pm8058_subdevs[] = {
-
-	[1].name = "pm8058-gpio",
-	[1].id = -1,
-	[1].platform_data = &pm8058_gpio_data,
-	[1].data_size = sizeof(pm8058_gpio_data),
-
-	[2].name = "pm8058-mpp",
-	[2].id = -1,
-	[2].platform_data = &pm8058_mpp_data,
-	[2].data_size = sizeof(pm8058_mpp_data),
-
-	[3].name = "pm8058-nfc",
-	[3].id = -1,
-
-	[4].name = "pm8058-upl",
-	[4].id = -1,
-
-#ifdef CONFIG_MOGAMI_PMIC_KEYPAD
-	[5].name = KP_NAME,
-	[5].platform_data = &keypad_pmic_platform_data,
-	[5].id = -1,
-	[5].data_size = sizeof(keypad_pmic_platform_data),
-#endif
-
-};
-
-/* Separate function for sub device populations, to be set as per device */
-static void __init set_pm8058_sub_devices(void)
-{
-	pm8058_subdevs[0] = *(get_pm8058_keypad_dev());
-}
+static struct mfd_cell pm8058_subdevs[5];
 
 static struct pm8058_platform_data pm8058_7x30_data = {
 	.irq_base = PMIC8058_IRQ_BASE,
@@ -525,6 +508,28 @@ static struct pm8058_platform_data pm8058_7x30_data = {
 	.num_subdevs = ARRAY_SIZE(pm8058_subdevs),
 	.sub_devices = pm8058_subdevs,
 };
+
+/* Separate function for sub device populations, to be set as per device */
+static void __init set_pm8058_sub_devices(void)
+{
+	pm8058_subdevs[0] = *(get_pm8058_keypad_dev());
+
+	pm8058_subdevs[1].name = "pm8058-gpio";
+	pm8058_subdevs[1].id = -1;
+	pm8058_subdevs[1].platform_data = &pm8058_gpio_data;
+	pm8058_subdevs[1].data_size = sizeof(pm8058_gpio_data);
+
+	pm8058_subdevs[2].name = "pm8058-mpp";
+	pm8058_subdevs[2].id = -1;
+	pm8058_subdevs[2].platform_data = &pm8058_mpp_data;
+	pm8058_subdevs[2].data_size = sizeof(pm8058_mpp_data);
+
+	pm8058_subdevs[3].name = "pm8058-nfc";
+	pm8058_subdevs[3].id = -1;
+
+	pm8058_subdevs[4].name = "pm8058-upl";
+	pm8058_subdevs[4].id = -1;
+}
 
 static struct i2c_board_info pm8058_boardinfo[] __initdata = {
 	{
@@ -803,6 +808,54 @@ static struct platform_device msm_vpe_standalone_device = {
        .id   = 0,
        .num_resources = ARRAY_SIZE(msm_vpe_resources),
        .resource = msm_vpe_resources,
+};
+#endif
+
+#ifdef CONFIG_CAPTURE_KERNEL
+static struct resource kdump_amsscoredump_resources[] = {
+	{
+		.name   = "amsscore0",
+		.start  = AMSSCORE_RAM_START,
+		.end    = AMSSCORE_RAM_END,
+		.flags  = IORESOURCE_MEM,
+	},
+	{
+		.name   = "smemcore0",
+		.start  = SMEMCORE_RAM_START,
+		.end    = SMEMCORE_RAM_END,
+		.flags  = IORESOURCE_MEM,
+	},
+	{
+		.name   = "adspcore0",
+		.start  = ADSPCORE_RAMA_START,
+		.end    = ADSPCORE_RAMA_END,
+		.flags  = IORESOURCE_MEM,
+	},
+	{
+		.name   = "adspcore1",
+		.start  = ADSPCORE_RAMB_START,
+		.end    = ADSPCORE_RAMB_END,
+		.flags  = IORESOURCE_MEM,
+	},
+	{
+		.name   = "adspcore2",
+		.start  = ADSPCORE_RAMC_START,
+		.end    = ADSPCORE_RAMC_END,
+		.flags  = IORESOURCE_MEM,
+	},
+	{
+		.name   = "adspcore3",
+		.start  = ADSPCORE_RAMI_START,
+		.end    = ADSPCORE_RAMI_END,
+		.flags  = IORESOURCE_MEM,
+	}
+};
+
+static struct platform_device kdump_amsscoredump_device = {
+	.name		= "amsscoredump",
+	.id		= -1,
+	.num_resources	= ARRAY_SIZE(kdump_amsscoredump_resources),
+	.resource	= kdump_amsscoredump_resources,
 };
 #endif
 
@@ -2376,10 +2429,6 @@ struct bq27520_platform_data bq27520_platform_data = {
 	.polling_lower_capacity = FULLY_CHARGED_AND_RECHARGE_CAP,
 	.polling_upper_capacity = 100,
 	.udatap = bq27520_block_table,
-	.ocv_issue_capacity_threshold = 20,
-#ifdef CONFIG_BATTERY_CHARGALG
-	.disable_algorithm = battery_chargalg_disable,
-#endif
 };
 
 /* Driver(s) to be notified upon change in charging */
@@ -2587,7 +2636,6 @@ static struct bma250_platform_data bma250_platform_data = {
 
 #define APDS9702_DOUT_GPIO   88
 #define APDS9702_VDD_VOLTAGE 2900
-#define APDS9702_WAIT_TIME   5000
 
 static int apds9702_gpio_setup(int request)
 {
@@ -2604,7 +2652,6 @@ static void apds9702_hw_config(int enable)
 		vreg_helper_on("wlan", APDS9702_VDD_VOLTAGE);
 	else
 		vreg_helper_off("wlan");
-	usleep(APDS9702_WAIT_TIME);
 }
 
 static struct apds9702_platform_data apds9702_pdata = {
@@ -2933,10 +2980,14 @@ static void __init msm_qsd_spi_init(void)
 
 static int hsusb_rpc_connect(int connect)
 {
+#ifdef CONFIG_CAPTURE_KERNEL
+	return 0;
+#else
 	if (connect)
 		return msm_hsusb_rpc_connect();
 	else
 		return msm_hsusb_rpc_close();
+#endif
 }
 
 static struct msm_hsusb_gadget_platform_data msm_gadget_pdata;
@@ -2960,14 +3011,6 @@ static struct msm_usb_host_platform_data msm_usb_host_pdata = {
 static char *hsusb_chg_supplied_to[] = {
 	BATTERY_CHARGALG_NAME,
 	BQ27520_NAME,
-};
-
-static int hs_drv_ampl_ratio[] = {
-	HS_DRV_AMPLITUDE_DEFAULT,
-	HS_DRV_AMPLITUDE_ZERO_PERCENT,
-	HS_DRV_AMPLITUDE_25_PERCENTI,
-	HS_DRV_AMPLITUDE_5_PERCENT,
-	HS_DRV_AMPLITUDE_75_PERCENT,
 };
 
 static struct msm_otg_platform_data msm_otg_pdata = {
@@ -3457,11 +3500,13 @@ static struct platform_device ram_console_device = {
 
 static void ram_console_reserve_mem(void)
 {
+#ifndef CONFIG_CAPTURE_KERNEL
 	if(reserve_bootmem(MSM_RAM_CONSOLE_START, MSM_RAM_CONSOLE_SIZE,
 						BOOTMEM_EXCLUSIVE)) {
 		printk(KERN_ERR "ram_console reserve memory failed\n");
 		return;
 	}
+#endif
 	ram_console_device.num_resources  = ARRAY_SIZE(ram_console_resources);
 	ram_console_device.resource       = ram_console_resources;
 }
@@ -3537,10 +3582,10 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 	&ram_console_device,
 #endif
-	&bdata_driver,
-#if defined(CONFIG_TSIF) || defined(CONFIG_TSIF_MODULE)
-	&msm_device_tsif,
+#ifdef CONFIG_CAPTURE_KERNEL
+	&kdump_amsscoredump_device,
 #endif
+	&bdata_driver,
 	/*      &msm_batt_device, */
 	/*      &msm_adc_device, */
 #ifdef CONFIG_SIMPLE_REMOTE_PLATFORM
@@ -3999,32 +4044,6 @@ static void msm7x30_init_uart3(void)
 
 }
 
-#if defined(CONFIG_TSIF) || defined(CONFIG_TSIF_MODULE)
-
-#define TSIF_B_SYNC      GPIO_CFG(37, 1, GPIO_CFG_INPUT, \
-				GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA)
-#define TSIF_B_DATA      GPIO_CFG(36, 1, GPIO_CFG_INPUT, \
-				GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA)
-#define TSIF_B_EN        GPIO_CFG(35, 1, GPIO_CFG_INPUT, \
-				GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA)
-#define TSIF_B_CLK       GPIO_CFG(34, 1, GPIO_CFG_INPUT, \
-				GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA)
-
-static const struct msm_gpio tsif_gpios[] = {
-	{ .gpio_cfg = TSIF_B_CLK,  .label =  "tsif_clk", },
-	{ .gpio_cfg = TSIF_B_EN,   .label =  "tsif_en", },
-	{ .gpio_cfg = TSIF_B_DATA, .label =  "tsif_data", },
-	{ .gpio_cfg = TSIF_B_SYNC, .label =  "tsif_sync", },
-};
-
-static struct msm_tsif_platform_data tsif_platform_data = {
-	.num_gpios = ARRAY_SIZE(tsif_gpios),
-	.gpios = tsif_gpios,
-	.tsif_pclk = "tsif_pclk",
-	.tsif_ref_clk = "tsif_ref_clk",
-};
-#endif /* defined(CONFIG_TSIF) || defined(CONFIG_TSIF_MODULE) */
-
 static struct msm_spm_platform_data msm_spm_data __initdata = {
 	.reg_base_addr = MSM_SAW_BASE,
 
@@ -4081,6 +4100,9 @@ static void __init shared_vreg_on(void)
 
 static void __init msm7x30_init(void)
 {
+#ifdef CONFIG_CAPTURE_KERNEL
+	smsm_wait_for_modem_reset();
+#endif
 	if (socinfo_init() < 0)
 		printk(KERN_ERR "%s: socinfo_init() failed!\n", __func__);
 
@@ -4097,10 +4119,6 @@ static void __init msm7x30_init(void)
 
 	hsusb_chg_set_supplicants(hsusb_chg_supplied_to,
 				  ARRAY_SIZE(hsusb_chg_supplied_to));
-	if (0 <= CONFIG_USB_HS_DRV_AMPLITUDE ||
-		CONFIG_USB_HS_DRV_AMPLITUDE < ARRAY_SIZE(hs_drv_ampl_ratio))
-		msm_otg_pdata.drv_ampl =
-			hs_drv_ampl_ratio[CONFIG_USB_HS_DRV_AMPLITUDE];
 	msm_device_otg.dev.platform_data = &msm_otg_pdata;
 	msm_otg_pdata.swfi_latency =
 	    msm_pm_data
@@ -4109,9 +4127,6 @@ static void __init msm7x30_init(void)
 
 	msm_uart_dm1_pdata.wakeup_irq = gpio_to_irq(136);
 	msm_device_uart_dm1.dev.platform_data = &msm_uart_dm1_pdata;
-#if defined(CONFIG_TSIF) || defined(CONFIG_TSIF_MODULE)
-	msm_device_tsif.dev.platform_data = &tsif_platform_data;
-#endif
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 
 	msm_add_host(0, &msm_usb_host_pdata);
@@ -4238,6 +4253,7 @@ static void __init pmem_kernel_ebi1_size_setup(char **p)
 
 __early_param("pmem_kernel_ebi1_size=", pmem_kernel_ebi1_size_setup);
 
+#ifndef CONFIG_CAPTURE_KERNEL
 static void __init msm7x30_allocate_memory_regions(void)
 {
 	void *addr;
@@ -4325,6 +4341,7 @@ static void __init msm7x30_allocate_memory_regions(void)
 	}
 
 }
+#endif
 
 static void __init msm7x30_map_io(void)
 {
@@ -4333,9 +4350,12 @@ static void __init msm7x30_map_io(void)
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 	ram_console_reserve_mem();
 #endif
+#ifndef CONFIG_CAPTURE_KERNEL
 	msm7x30_allocate_memory_regions();
+#endif
 }
 
+#ifndef CONFIG_CAPTURE_KERNEL
 static void __init msm7x30_fixup(struct machine_desc *desc, struct tag *tags,
 				 char **cmdline, struct meminfo *mi)
 {
@@ -4361,10 +4381,15 @@ static void __init msm7x30_fixup(struct machine_desc *desc, struct tag *tags,
 	mi->bank[2].size = MSM_BANK2_SIZE;
 	mi->bank[2].node = PHYS_TO_NID(mi->bank[2].start);
 }
+#endif
 
 MACHINE_START(SEMC_MOGAMI, "mogami")
+#ifdef CONFIG_CAPTURE_KERNEL
+	.boot_params = PHYS_OFFSET + 0x1000,
+#else
 	.fixup = msm7x30_fixup,
 	.boot_params = PHYS_OFFSET + 0x100,
+#endif
 	.map_io = msm7x30_map_io,
 	.init_irq = msm7x30_init_irq,
 	.init_machine = msm7x30_init,

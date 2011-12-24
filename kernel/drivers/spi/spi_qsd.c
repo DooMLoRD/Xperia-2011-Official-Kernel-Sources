@@ -2068,9 +2068,6 @@ static int msm_spi_suspend(struct platform_device *pdev, pm_message_t state)
 	/* Wait for transactions to end, or time out */
 	wait_event_interruptible(dd->continue_suspend, !dd->transfer_pending);
 
-	del_timer_sync(&dd->clk_disable_timer);
-	msm_spi_clk_disable(dd);
-
 suspend_exit:
 	return 0;
 }

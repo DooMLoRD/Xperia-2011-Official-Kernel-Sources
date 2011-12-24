@@ -2743,7 +2743,6 @@ static int yaffs_FindBlockForGarbageCollection(yaffs_Device *dev,
 static void yaffs_BlockBecameDirty(yaffs_Device *dev, int blockNo)
 {
 	yaffs_BlockInfo *bi = yaffs_GetBlockInfo(dev, blockNo);
-	yaffs_BlockState oldState = bi->blockState;
 
 	int erasedOk = 0;
 
@@ -2784,8 +2783,7 @@ static void yaffs_BlockBecameDirty(yaffs_Device *dev, int blockNo)
 	if (erasedOk) {
 		/* Clean it up... */
 		bi->blockState = YAFFS_BLOCK_STATE_EMPTY;
-		if (oldState != YAFFS_BLOCK_STATE_EMPTY)
-			dev->nErasedBlocks++;
+		dev->nErasedBlocks++;
 		bi->pagesInUse = 0;
 		bi->softDeletions = 0;
 		bi->hasShrinkHeader = 0;

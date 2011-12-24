@@ -170,6 +170,10 @@ void smd_sleep_exit(void);
 void smsm_notify_apps_crashdump(void);
 #endif
 
+#ifdef CONFIG_CAPTURE_KERNEL
+void smsm_wait_for_modem_reset(void);
+#endif
+
 #define SMEM_NUM_SMD_STREAM_CHANNELS        64
 #define SMEM_NUM_SMD_BLOCK_CHANNELS         64
 

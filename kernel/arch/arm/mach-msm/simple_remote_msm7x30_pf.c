@@ -80,7 +80,7 @@
 		dev_dbg(loc_dat->dev, "%s - %d Unlocking mutex\n",	\
 		       __func__, __LINE__);				\
 		mutex_unlock(x);					\
-	} while(0)							\
+	} while (0)							\
 
 #define TRY_LOCK(x)							\
 	mutex_trylock(x)						\
@@ -360,6 +360,13 @@ struct local_data {
 
 	u8 mic_bias_first_enable;
 
+	u8 x33_orig_val;
+	u8 x34_orig_val;
+	u8 x38_orig_val;
+	u8 x39_orig_val;
+
+	bool hpamp_enabled;
+
 #ifdef CONFIG_CRADLE_SUPPORT
 	struct cradle_data cradle;
 #endif /* CONFIG_CRADLE_SUPPORT */
@@ -415,7 +422,7 @@ static void cradle_detect_work(struct work_struct *work)
 		switch_set_state(&loc_dat->cradle.cradle_dev,
 				 loc_dat->cradle.dock_state);
 	} else {
-		dev_dbg(loc_dat->dev,"Cradle not detected\n");
+		dev_dbg(loc_dat->dev, "Cradle not detected\n");
 		/* If no cradle is detected here, restart the detection scheme
 		 * a bit later just to try again. */
 		if (NUM_DETECT_ITERATIONS > loc_dat->cradle.detect_iterations) {
@@ -656,17 +663,17 @@ static void acc_convert_irq_btn_det_work(struct work_struct *work)
 	dev_vdbg(loc_dat->dev, "%s - Called\n", __func__);
 
 	dev_dbg(loc_dat->dev, "%s - acc_convert.hold = %d\n", __func__,
-	       (int)atomic_read(&loc_dat->acc_convert.hold));
+		(int)atomic_read(&loc_dat->acc_convert.hold));
 
-	while(atomic_read(&loc_dat->acc_convert.hold))
+	while (atomic_read(&loc_dat->acc_convert.hold))
 		msleep(10);
 
 	dev_dbg(loc_dat->dev, "%s - acc_convert.hold released\n", __func__);
 
 	if (!TRY_LOCK(&loc_dat->acc_convert.acc_detect_lock)) {
 		dev_dbg(loc_dat->dev,
-			 "%s - Failed to acquire lock. Aborting\n",
-		       __func__);
+			"%s - Failed to acquire lock. Aborting\n",
+			__func__);
 		return;
 	}
 
@@ -708,19 +715,18 @@ static void acc_convert_irq_btn_det_work(struct work_struct *work)
 					   msecs_to_jiffies(100));
 			loc_dat->acc_convert.det_retries++;
 		} else {
-			atomic_set(&loc_dat->acc_convert.acc_detected ,0);
+			atomic_set(&loc_dat->acc_convert.acc_detected, 0);
 			dev_dbg(loc_dat->dev,
 				"%s - Sending IRQ ot logic layer\n", __func__);
 			goto out;
 		}
-	} else if(!atomic_read(&loc_dat->acc_convert.acc_detected)) {
+	} else if (!atomic_read(&loc_dat->acc_convert.acc_detected)) {
 		/* Acessory newly inserted */
 		dev_dbg(loc_dat->dev, "%s - Accessory just inserted."
 			" Calling plug detect IRQ handler\n", __func__);
 		atomic_set(&loc_dat->acc_convert.acc_detected, 1);
 		goto out;
-	}
-	else if (!gpiovalue) { /* Accessory already inserted */
+	} else if (!gpiovalue) { /* Accessory already inserted */
 		dev_dbg(loc_dat->dev, "%s - Accessory inserted. Calling "
 			"btn_detect IRQ handler\n", __func__);
 		if (loc_dat->simple_remote_btn_det_cb_func)
@@ -896,7 +902,7 @@ static int simple_remote_pf_enable_mic_bias(unsigned int enable)
 	LOCK(&loc_dat->lock);
 
 	dev_dbg(loc_dat->dev, "%s - %s MIC Bias\n", __func__,
-		enable ? "Enabling" :"Disabling");
+		enable ? "Enabling" : "Disabling");
 
 	dev_vdbg(loc_dat->dev, "%s - MIC_BIAS_COUNTER = %d\n", __func__,
 		 (int)atomic_read(&loc_dat->mic_bias_enable_counter));
@@ -1192,7 +1198,7 @@ static int simple_remote_pf_enable_vregs(u8 enable)
 		}
 	} else {
 		/* And turn them off the other way */
-		for (i = loc_dat->jack_pf->num_regs -1; i >= 0; i--) {
+		for (i = loc_dat->jack_pf->num_regs - 1; i >= 0; i--) {
 			if (vreg_disable(loc_dat->jack_pf->regs[i].reg)) {
 				dev_err(loc_dat->dev,
 					"%s - Failed to enable regulator %s\n",
@@ -1216,21 +1222,20 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 	u8 x38_pa_cfg = 0;
 	u8 x39_pa_cfg = 0;
 
-	static u8 x33_orig_val = 0;
-	static u8 x34_orig_val = 0;
-	static u8 x38_orig_val = 0;
-	static u8 x39_orig_val = 0;
-
 	dev_dbg(loc_dat->dev, "%s - %s HP amp\n", __func__,
 	       enable ? "Enabling" : "Disabling");
 
 	LOCK(&loc_dat->lock);
 	if (enable) {
+		if (loc_dat->hpamp_enabled)
+			goto same_state;
+
 		simple_remote_pf_enable_vregs(1);
 
 		adie_codec_powerup(1);
 
-		if (0 > marimba_read(&config, 0x33, &x33_orig_val, 1)) {
+		if (0 > marimba_read(&config, 0x33,
+				     &loc_dat->x33_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to read register 0x33\n",
 				 __func__);
@@ -1238,7 +1243,8 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 			goto error;
 		}
 
-		if (0 > marimba_read(&config, 0x34, &x34_orig_val, 1)) {
+		if (0 > marimba_read(&config, 0x34,
+				     &loc_dat->x34_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to read register 0x34\n",
 				 __func__);
@@ -1246,7 +1252,8 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 			goto error;
 		}
 
-		if (0 > marimba_read(&config, 0x38, &x38_orig_val, 1)) {
+		if (0 > marimba_read(&config, 0x38,
+				     &loc_dat->x38_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to read register 0x38\n",
 				 __func__);
@@ -1254,7 +1261,8 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 			goto error;
 		}
 
-		if (0 > marimba_read(&config, 0x39, &x39_orig_val, 1)) {
+		if (0 > marimba_read(&config, 0x39,
+				     &loc_dat->x39_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to read register 0x39\n",
 				 __func__);
@@ -1263,19 +1271,19 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 		}
 
 		dev_dbg(loc_dat->dev, "%s - reg 0x33 = 0x%02x\n", __func__,
-			x33_orig_val);
+			loc_dat->x33_orig_val);
 		dev_dbg(loc_dat->dev, "%s - reg 0x34 = 0x%02x\n", __func__,
-			x34_orig_val);
+			loc_dat->x34_orig_val);
 		dev_dbg(loc_dat->dev, "%s - reg 0x38 = 0x%02X\n", __func__,
-			x38_orig_val);
+			loc_dat->x38_orig_val);
 		dev_dbg(loc_dat->dev, "%s - reg 0x39 = 0x%02X\n", __func__,
-			x39_orig_val);
+			loc_dat->x39_orig_val);
 
 		/* Enable the HP AMP */
-		x33_pa_enable = (x33_orig_val | 0x80);
-		x34_pa_enable = (x34_orig_val | 0xF0);
-		x38_pa_cfg = (x38_orig_val | 0x02);
-		x39_pa_cfg = (x39_orig_val | 0x02);
+		x33_pa_enable = (loc_dat->x33_orig_val | 0x80);
+		x34_pa_enable = (loc_dat->x34_orig_val | 0xF0);
+		x38_pa_cfg = (loc_dat->x38_orig_val | 0x02);
+		x39_pa_cfg = (loc_dat->x39_orig_val | 0x02);
 
 		if (0 > marimba_write(&config, 0x38, &x38_pa_cfg, 1)) {
 			dev_warn(loc_dat->dev,
@@ -1311,8 +1319,13 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 
 		/* wait a bit to give the HP amp time to start */
 		msleep(20);
+		loc_dat->hpamp_enabled = true;
 	} else {
-		if (0 > marimba_write(&config, 0x33, &x33_orig_val, 1)) {
+		if (!loc_dat->hpamp_enabled)
+			goto same_state;
+
+		if (0 > marimba_write(&config, 0x33,
+				      &loc_dat->x33_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to write register 0x33\n",
 				 __func__);
@@ -1320,7 +1333,8 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 			goto error;
 		}
 
-		if (0 > marimba_write(&config, 0x34, &x34_orig_val, 1)) {
+		if (0 > marimba_write(&config, 0x34,
+				      &loc_dat->x34_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to write register 0x34\n",
 				 __func__);
@@ -1328,7 +1342,8 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 			goto error;
 		}
 
-		if (0 > marimba_write(&config, 0x38, &x38_orig_val, 1)) {
+		if (0 > marimba_write(&config, 0x38,
+				      &loc_dat->x38_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to write register 0x38\n",
 				 __func__);
@@ -1336,7 +1351,8 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 			goto error;
 		}
 
-		if (0 > marimba_write(&config, 0x39, &x39_orig_val, 1)) {
+		if (0 > marimba_write(&config, 0x39,
+				      &loc_dat->x39_orig_val, 1)) {
 			dev_warn(loc_dat->dev,
 				 "%s - Failed to write register 0x39\n",
 				 __func__);
@@ -1345,9 +1361,14 @@ static int simple_remote_pf_enable_hp_amp(u8 enable)
 		}
 
 		adie_codec_powerup(0);
-
 		simple_remote_pf_enable_vregs(0);
+		loc_dat->hpamp_enabled = false;
 	}
+
+same_state:
+	dev_info(loc_dat->dev,
+		"%s - HP Amp already %s\n", __func__,
+		enable ? "enabled" : "disabled");
 
 error:
 	if (rc < 0)

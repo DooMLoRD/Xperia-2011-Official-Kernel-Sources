@@ -277,8 +277,7 @@ u32 ddl_encode_start(u32 *ddl_handle, void *client_data)
 	encoder = &ddl->codec_data.encoder;
 
 	dpb_size = ddl_get_yuv_buffer_size(&encoder->frame_size,
-					&encoder->re_con_buf_format, false,
-					encoder->codec.codec);
+					&encoder->re_con_buf_format, false);
 
 	dpb_size *= DDL_ENC_NUM_DPB_BUFFERS;
 	ddl_pmem_alloc(&encoder->enc_dpb_addr,

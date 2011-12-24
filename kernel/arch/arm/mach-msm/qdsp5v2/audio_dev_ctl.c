@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -121,7 +121,7 @@ void msm_snddev_register(struct msm_snddev_info *dev_info)
 	mutex_lock(&session_lock);
 	if (audio_dev_ctrl.num_dev < AUDIO_DEV_CTL_MAX_DEV) {
 		audio_dev_ctrl.devs[audio_dev_ctrl.num_dev] = dev_info;
-		dev_info->dev_volume = 0; /* 0 db */
+		dev_info->dev_volume = 0x4000; /* 0 db */
 		dev_info->sessions = 0x0;
 		dev_info->usage_count = 0;
 		audio_dev_ctrl.num_dev++;
@@ -838,26 +838,6 @@ volume_strm:
 					evt_payload->freq_info.acdb_dev_id
 						= dev_info->acdb_id;
 				}
-			/* Propogate device information to client */
-			} else if (evt_id == AUDDEV_EVT_DEVICE_INFO) {
-				evt_payload->devinfo.dev_id
-					= dev_info->copp_id;
-				evt_payload->devinfo.acdb_id
-					= dev_info->acdb_id;
-				evt_payload->devinfo.dev_type =
-					(dev_info->capability & SNDDEV_CAP_TX) ?
-					SNDDEV_CAP_TX : SNDDEV_CAP_RX;
-				evt_payload->devinfo.sample_rate
-					= dev_info->sample_rate;
-				if (session_id == SESSION_IGNORE)
-					evt_payload->devinfo.sessions
-					= dev_info->sessions;
-				else
-					evt_payload->devinfo.sessions
-					= session_id;
-				evt_payload->devinfo.sessions =
-					(evt_payload->devinfo.sessions >>
-						((AUDDEV_CLNT_DEC-1) * 8));
 			} else if (evt_id == AUDDEV_EVT_VOICE_STATE_CHG)
 				evt_payload->voice_state =
 					routing_info.voice_state;
@@ -896,26 +876,6 @@ sent_dec:
 					evt_payload->freq_info.acdb_dev_id
 						= dev_info->acdb_id;
 				}
-			/* Propogate device information to client */
-			} else if (evt_id == AUDDEV_EVT_DEVICE_INFO) {
-				evt_payload->devinfo.dev_id
-					= dev_info->copp_id;
-				evt_payload->devinfo.acdb_id
-					= dev_info->acdb_id;
-				evt_payload->devinfo.dev_type =
-					(dev_info->capability & SNDDEV_CAP_TX) ?
-					SNDDEV_CAP_TX : SNDDEV_CAP_RX;
-				evt_payload->devinfo.sample_rate
-					= dev_info->sample_rate;
-				if (session_id == SESSION_IGNORE)
-					evt_payload->devinfo.sessions
-					= dev_info->sessions;
-				else
-					evt_payload->devinfo.sessions
-					= session_id;
-				evt_payload->devinfo.sessions =
-					(evt_payload->devinfo.sessions >>
-						((AUDDEV_CLNT_ENC-1) * 8));
 			} else if (evt_id == AUDDEV_EVT_VOICE_STATE_CHG)
 				evt_payload->voice_state =
 					routing_info.voice_state;

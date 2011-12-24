@@ -78,6 +78,9 @@
 
 #include "gadget_chips.h"
 
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+#include "marlin_scsi_ext.h"
+#endif
 
 #define BULK_BUFFER_SIZE           16384
 
@@ -215,6 +218,10 @@ struct bulk_cs_wrap {
 #define SC_WRITE_6			0x0a
 #define SC_WRITE_10			0x2a
 #define SC_WRITE_12			0xaa
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+#define SC_SEND_KEY			0xa3
+#define SC_REPORT_KEY			0xa4
+#endif
 
 /* SCSI Sense Key/Additional Sense Code/ASC Qualifier values */
 #define SS_NO_SENSE				0
@@ -810,6 +817,59 @@ static int sleep_thread(struct fsg_dev *fsg)
 
 
 /*-------------------------------------------------------------------------*/
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+static int do_send_key(struct fsg_dev *fsg)
+{
+	int len, rc;
+	struct lun *curlun = fsg->curlun;
+	struct fsg_buffhd *bh = fsg->next_buffhd_to_fill;
+
+	if (fsg->data_size_from_cmnd > 0) {
+		fsg->usb_amount_left -= fsg->data_size_from_cmnd;
+		bh->outreq->length = fsg->data_size_from_cmnd;
+		bh->bulk_out_intended_length = fsg->data_size_from_cmnd;
+		start_transfer(fsg,
+				fsg->bulk_out,
+				bh->outreq,
+				&bh->outreq_busy,
+				&bh->state);
+		fsg->next_buffhd_to_fill = bh->next;
+		while (bh->state != BUF_STATE_FULL) {
+			rc = sleep_thread(fsg);
+			if (rc)
+				return 0;
+		}
+	}
+
+	len = mldd_do_send_key(fsg->cmnd_size,
+				fsg->cmnd,
+				fsg->data_size,
+				bh->buf,
+				&curlun->sense_data);
+	fsg->next_buffhd_to_drain = bh->next;
+	bh->state = BUF_STATE_EMPTY;
+	fsg->residue -= fsg->data_size_from_cmnd;
+
+	return len;
+}
+
+
+
+static int do_report_key(struct fsg_dev *fsg)
+{
+	int len;
+	struct fsg_buffhd *bh = fsg->next_buffhd_to_fill;
+	struct lun *curlun = fsg->curlun;
+
+	len = mldd_do_report_key(fsg->cmnd_size,
+					fsg->cmnd,
+					fsg->data_size_from_cmnd,
+					bh->buf,
+					&curlun->sense_data);
+
+	return len;
+}
+#endif
 
 static int do_read(struct fsg_dev *fsg)
 {
@@ -1560,6 +1620,18 @@ static int do_mode_sense(struct fsg_dev *fsg, struct fsg_buffhd *bh)
 		limit = 65535;
 	}
 
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+	if (!curlun->is_cdrom) {
+		if (backing_file_is_open(curlun)) {
+			buf += mldd_do_mode_sense(all_pages, page_code,
+						  fsg->cmnd[3], buf);
+		} else if (page_code == 0x3D) {
+			curlun->sense_data = SS_INVALID_FIELD_IN_CDB;
+			return -EINVAL;
+		}
+	}
+#endif
+
 	/* No block descriptors */
 
 	/* Disabled to workaround USB reset problems with a Vista host.
@@ -2242,7 +2314,24 @@ static int do_scsi_command(struct fsg_dev *fsg)
 				"WRITE(12)")) == 0)
 			reply = do_write(fsg);
 		break;
-
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+	case SC_REPORT_KEY:
+		fsg->data_size_from_cmnd = get_be16(&fsg->cmnd[8]);
+		reply = check_command(fsg, 12, DATA_DIR_TO_HOST,
+					(1 << 1) | (0xf << 7), 1,
+					"REPORT KEY");
+		if (reply == 0)
+			reply = do_report_key(fsg);
+		break;
+	case SC_SEND_KEY:
+		fsg->data_size_from_cmnd = get_be16(&fsg->cmnd[8]);
+		reply = check_command(fsg, 12, DATA_DIR_FROM_HOST,
+					(1 << 1) | (0xf << 7), 1,
+					"SEND KEY");
+		if (reply == 0)
+			reply = do_send_key(fsg);
+		break;
+#endif
 	/* Some mandatory commands that we recognize but don't implement.
 	 * They don't mean much in this setting.  It's left as an exercise
 	 * for anyone interested to implement RESERVE and RELEASE in terms
@@ -2427,6 +2516,9 @@ reset:
 		}
 	}
 
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+	mldd_disable();
+#endif
 
 	fsg->running = 0;
 	if (altsetting < 0 || rc != 0)
@@ -2434,6 +2526,9 @@ reset:
 
 	DBG(fsg, "set interface %d\n", altsetting);
 
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+	mldd_enable();
+#endif
 
 	/* Allocate the requests */
 	for (i = 0; i < NUM_BUFFERS; ++i) {
@@ -2852,12 +2947,27 @@ static void close_all_backing_files(struct fsg_dev *fsg)
 		close_backing_file(fsg, &fsg->luns[i]);
 }
 
+static int check_dev_state(struct device *dev)
+{
+	struct lun *curlun = dev_to_lun(dev);
+	struct fsg_dev	*fsg = dev_get_drvdata(dev);
 
+	if ((!curlun->is_cdrom && fsg->func_type != FUNC_TYPE_MSC) ||
+		(curlun->is_cdrom && fsg->func_type != FUNC_TYPE_CDROM))
+		return -ENODEV;
+
+	return 0;
+}
 
 static ssize_t show_ro(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct lun *curlun = dev_to_lun(dev);
+	ssize_t rc;
+
+	rc = check_dev_state(dev);
+	if (rc)
+		return 0;
 
 	return sprintf(buf, "%d\n", curlun->ro);
 }
@@ -2870,6 +2980,9 @@ static ssize_t show_file(struct device *dev, struct device_attribute *attr,
 	char		*p;
 	ssize_t		rc;
 
+	rc = check_dev_state(dev);
+	if (rc)
+		return 0;
 
 	down_read(&fsg->filesem);
 	if (backing_file_is_open(curlun)) {	/* Get the complete pathname */
@@ -2898,13 +3011,16 @@ static ssize_t store_ro(struct device *dev, struct device_attribute *attr,
 	struct fsg_dev	*fsg = dev_get_drvdata(dev);
 	int		i;
 
+	rc = check_dev_state(dev);
+	if (rc)
+		return 0;
 
 	if (sscanf(buf, "%d", &i) != 1)
 		return -EINVAL;
 
 	/* Allow the write-enable status to change only while the backing file
 	 * is closed. */
-
+	rc = count;
 	down_read(&fsg->filesem);
 	if (backing_file_is_open(curlun)) {
 		LDBG(curlun, "read-only status change prevented\n");
@@ -2926,6 +3042,10 @@ static ssize_t store_file(struct device *dev, struct device_attribute *attr,
 
 	DBG(fsg, "store_file: \"%s\"\n", buf);
 
+	rc = check_dev_state(dev);
+	if (rc)
+		return 0;
+
 #if 0
 	/* disabled because we need to allow closing the backing file if the media was removed */
 	if (curlun->prevent_medium_removal && backing_file_is_open(curlun)) {
@@ -2941,6 +3061,10 @@ static ssize_t store_file(struct device *dev, struct device_attribute *attr,
 	/* Eject current medium */
 	down_write(&fsg->filesem);
 	if (backing_file_is_open(curlun)) {
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+		if (!curlun->is_cdrom)
+			mldd_unmount();
+#endif
 		close_backing_file(fsg, curlun);
 		curlun->unit_attention_data = SS_MEDIUM_NOT_PRESENT;
 	}
@@ -2951,6 +3075,10 @@ static ssize_t store_file(struct device *dev, struct device_attribute *attr,
 		if (rc == 0)
 			curlun->unit_attention_data =
 					SS_NOT_READY_TO_READY_TRANSITION;
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+		if (rc == 0 && !curlun->is_cdrom)
+			mldd_mount();
+#endif
 	}
 	up_write(&fsg->filesem);
 	return (rc < 0 ? rc : count);
@@ -3042,10 +3170,31 @@ fsg_function_unbind(struct usb_configuration *c, struct usb_function *f)
 	for (i = 0; i < NUM_BUFFERS; ++i)
 		kfree(fsg->buffhds[i].buf);
 	switch_dev_unregister(&fsg->sdev);
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+	mldd_fin();
+#endif
 }
 
 static void setup_luns(struct fsg_dev *fsg)
 {
+	int		i;
+	struct lun	*curlun;
+
+	down_write(&fsg->filesem);
+	for (i = 0; i < fsg->nluns; ++i) {
+		curlun = &fsg->luns[i];
+
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+		if (!curlun->is_cdrom)
+			mldd_unmount();
+#endif
+		if (backing_file_is_open(curlun)) {
+			close_backing_file(fsg, curlun);
+			curlun->unit_attention_data = SS_MEDIUM_NOT_PRESENT;
+		}
+	}
+	up_write(&fsg->filesem);
+
 	if (fsg->func_type == FUNC_TYPE_MSC || fsg->cdrom_nluns < 1) {
 		fsg->nluns = fsg->msc_nluns;
 		fsg->luns = fsg->luns_all;
@@ -3363,6 +3512,11 @@ int mass_storage_bind_config(struct usb_configuration *c)
 	struct fsg_dev	*fsg;
 
 	printk(KERN_INFO "mass_storage_bind_config\n");
+#ifdef CONFIG_USB_MARLIN_SCSI_EXTENSIONS
+	rc = mldd_init();
+	if (rc != 0)
+		return rc;
+#endif
 	rc = fsg_alloc();
 	if (rc)
 		return rc;

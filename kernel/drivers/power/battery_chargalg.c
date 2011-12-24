@@ -1368,27 +1368,6 @@ void battery_chargalg_set_battery_health(int health)
 }
 EXPORT_SYMBOL_GPL(battery_chargalg_set_battery_health);
 
-void battery_chargalg_disable(bool disable)
-{
-	struct power_supply *psy =
-		power_supply_get_by_name(BATTERY_CHARGALG_NAME);
-	struct battery_chargalg_driver *alg;
-
-	if (!psy)
-		return;
-	alg = container_of(psy, struct battery_chargalg_driver, ps);
-
-	dev_dbg(alg->dev, "%s(): dis=%d\n", __func__, disable);
-
-	MUTEX_LOCK(&alg->lock);
-	alg->disable_algorithm = (u8)disable;
-	MUTEX_UNLOCK(&alg->lock);
-
-	battery_chargalg_schedule_delayed_work(&alg->work, 0);
-	return;
-}
-EXPORT_SYMBOL_GPL(battery_chargalg_disable);
-
 static int battery_chargalg_probe(struct platform_device *pdev)
 {
 	struct battery_chargalg_driver *alg;

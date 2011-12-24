@@ -1279,7 +1279,9 @@ static int smsm_init(void)
 					      sizeof(uint32_t));
 
 		if (smsm_info.state) {
+#ifndef CONFIG_CAPTURE_KERNEL
 			writel(0, SMSM_STATE_ADDR(SMSM_APPS_STATE));
+#endif
 			if ((shared->version[VERSION_MODEM] >> 16) >= 0xB)
 				writel(0, SMSM_STATE_ADDR(SMSM_APPS_DEM_I));
 		}
@@ -1654,3 +1656,28 @@ void smsm_notify_apps_crashdump(void)
 }
 #endif
 
+#ifdef CONFIG_CAPTURE_KERNEL
+void smsm_wait_for_modem_reset(void)
+{
+	uint32_t *smsm = NULL;
+	unsigned long flags;
+
+	printk(KERN_INFO "Waiting for Modem reset...\n");
+	for (;;) {
+		spin_lock_irqsave(&smem_lock, flags);
+		if (smsm == NULL) {
+			smsm = smem_alloc(ID_SHARED_STATE,
+			SMSM_NUM_ENTRIES * sizeof(uint32_t));
+		} else {
+			if ((smsm[SMSM_MODEM_STATE] & SMSM_RESET) != 0) {
+				spin_unlock_irqrestore(&smem_lock, flags);
+				break;
+			}
+		}
+		spin_unlock_irqrestore(&smem_lock, flags);
+		schedule();
+	}
+
+	return;
+}
+#endif

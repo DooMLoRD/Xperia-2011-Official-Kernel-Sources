@@ -532,7 +532,6 @@ void mdp_pipe_ctrl(MDP_BLOCK_TYPE block, MDP_BLOCK_POWER_STATE state,
 			if (block == MDP_MASTER_BLOCK) {
 				mdp_current_clk_on = FALSE;
 				/* turn off MDP clks */
-				mdp_vsync_clk_disable();
 				pmdh_clk_disable();
 				if (mdp_clk != NULL) {
 					clk_disable(mdp_clk);
@@ -560,7 +559,6 @@ void mdp_pipe_ctrl(MDP_BLOCK_TYPE block, MDP_BLOCK_POWER_STATE state,
 				clk_enable(mdp_pclk);
 				MSM_FB_DEBUG("MDP PCLK ON\n");
 			}
-			mdp_vsync_clk_enable();
 		}
 		up(&mdp_pipe_ctrl_mutex);
 	}
@@ -1265,8 +1263,8 @@ static int __init mdp_driver_init(void)
 		return ret;
 	}
 
-#if defined(CONFIG_DEBUG_FS)
-	mdp_debugfs_init();
+#if defined(CONFIG_DEBUG_FS) && defined(CONFIG_FB_MSM_MDP40)
+	mdp4_debugfs_init();
 #endif
 
 	return 0;

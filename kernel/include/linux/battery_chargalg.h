@@ -84,6 +84,5 @@ extern struct ambient_temperature_data battery_chargalg_platform_ambient_temp;
 extern const u16 battery_capacity_mah;
 
 void battery_chargalg_set_battery_health(int health);
-void battery_chargalg_disable(bool);
 
 #endif /* _BATTERY_CHARGALG_H_ */

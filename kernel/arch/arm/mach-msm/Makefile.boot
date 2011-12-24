@@ -14,9 +14,17 @@ params_phys-$(CONFIG_ARCH_MSM7X27)	:= 0x00200100
 initrd_phys-$(CONFIG_ARCH_MSM7X27)	:= 0x0A000000
 
 # MSM7x30
+ifeq ($(CONFIG_CAPTURE_KERNEL),y)
+# Capture kernel
+   zreladdr-$(CONFIG_ARCH_MSM7X30)	:= 0x03608000
+params_phys-$(CONFIG_ARCH_MSM7X30)	:= 0x03601000
+initrd_phys-$(CONFIG_ARCH_MSM7X30)	:= 0x03b00000
+else
+# Main kernel
    zreladdr-$(CONFIG_ARCH_MSM7X30)	:= 0x00208000
 params_phys-$(CONFIG_ARCH_MSM7X30)	:= 0x00200100
 initrd_phys-$(CONFIG_ARCH_MSM7X30)	:= 0x01200000
+endif
 
 ifeq ($(CONFIG_MSM_SOC_REV_A),y)
 # QSD8X50A

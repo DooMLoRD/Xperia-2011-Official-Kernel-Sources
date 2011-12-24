@@ -95,6 +95,7 @@ again:
 }
 EXPORT_SYMBOL(msm_proc_comm_reset_modem_now);
 
+#ifndef CONFIG_CAPTURE_KERNEL
 int msm_proc_comm(unsigned cmd, unsigned *data1, unsigned *data2)
 {
 	unsigned base = (unsigned)MSM_SHARED_RAM_BASE;
@@ -131,4 +132,36 @@ again:
 	spin_unlock_irqrestore(&proc_comm_lock, flags);
 	return ret;
 }
+#else
+int msm_proc_comm(unsigned cmd, unsigned *data1, unsigned *data2)
+{
+	unsigned int base = (unsigned int)MSM_SHARED_RAM_BASE;
+	unsigned long flags;
+	int ret = 0;
+
+	spin_lock_irqsave(&proc_comm_lock, flags);
+
+	writel(data1 ? *data1 : 0, base + APP_DATA1);
+	writel(data2 ? *data2 : 0, base + APP_DATA2);
+	writel(cmd, base + APP_COMMAND);
+
+	while (readl(base + APP_COMMAND) != PCOM_CMD_DONE)
+		udelay(5);
+
+	if ((readl(base + APP_STATUS)) == PCOM_CMD_SUCCESS) {
+		if (data1)
+			*data1 = readl(base + APP_DATA1);
+		if (data2)
+			*data2 = readl(base + APP_DATA2);
+		ret = 0;
+	} else {
+		ret = -EIO;
+	}
+
+	writel(PCOM_CMD_IDLE, base + APP_COMMAND);
+
+	spin_unlock_irqrestore(&proc_comm_lock, flags);
+	return ret;
+}
+#endif
 EXPORT_SYMBOL(msm_proc_comm);

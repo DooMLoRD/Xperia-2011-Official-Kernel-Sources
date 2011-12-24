@@ -1564,6 +1564,13 @@ int mdp4_overlay_play(struct fb_info *info, struct msmfb_overlay_data *req,
 		pipe->srcp1_ystride = pipe->src_width;
 	}
 
+#ifdef CONFIG_FB_MSM_MDDI
+	if (pipe->mixer_num == MDP4_MIXER0) {
+		if (ctrl->panel_mode & MDP4_PANEL_MDDI)
+			mdp4_mddi_dma_busy_wait(mfd, pipe);
+	}
+#endif
+
 	if (pipe->pipe_num >= OVERLAY_PIPE_VG1)
 		mdp4_overlay_vg_setup(pipe);	/* video/graphic pipe */
 	else
@@ -1588,10 +1595,13 @@ int mdp4_overlay_play(struct fb_info *info, struct msmfb_overlay_data *req,
 			mdp4_overlay_reg_flush(pipe, 1);
 #ifdef CONFIG_FB_MSM_MDDI
 		else if (ctrl->panel_mode & MDP4_PANEL_MDDI) {
-			if (mfd->panel_power_on) {
-				mdp4_mddi_dma_busy_wait(mfd, pipe);
-				mdp4_mddi_kickoff_video(mfd, pipe);
-			}
+
+#ifdef MDP4_NONBLOCKING
+			if (mfd->panel_power_on)
+#else
+			if (!mfd->dma->busy && mfd->panel_power_on)
+#endif
+				mdp4_mddi_overlay_kickoff(mfd, pipe);
 		}
 	}
 #endif

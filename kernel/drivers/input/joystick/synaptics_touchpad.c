@@ -357,7 +357,6 @@ static int synaptics_touchpad_read_extents(struct synaptics_touchpad *this)
 #ifdef CONFIG_JOYSTICK_SYNAPTICS_FLASH
 static int synaptics_touchpad_flash(struct synaptics_touchpad *this);
 #endif
-static int synaptics_touchpad_input_init(struct synaptics_touchpad *this);
 
 static int synaptics_touchpad_initialize(struct synaptics_touchpad *this)
 {
@@ -432,7 +431,6 @@ static int synaptics_touchpad_initialize(struct synaptics_touchpad *this)
 
 	this->state = SYN_STATE_RUNNING;
 
-	rc = synaptics_touchpad_input_init(this);
 	return rc;
 }
 
@@ -573,7 +571,7 @@ static int synaptics_flash_data(struct synaptics_touchpad *this)
 		return rc;
 
 	if (f->data.pos % 100 == 0)
-		printk(KERN_INFO SYNAPTICS_TOUCHPAD_NAME ": wrote %d blocks \n",
+		printk(KERN_INFO SYNAPTICS_TOUCHPAD_NAME ": wrote %d blocks\n",
 				f->data.pos);
 
 	/* if we've reached the end of the data flashing */
@@ -690,6 +688,8 @@ static int synaptics_flash_verify(struct synaptics_touchpad *this)
 		return -EIO;
 	}
 
+	mutex_lock(&synaptics_touchpad_lock);
+
 	this->state = SYN_STATE_INIT;
 	this->task = SYN_TASK_NONE;
 
@@ -697,6 +697,7 @@ static int synaptics_flash_verify(struct synaptics_touchpad *this)
 			": device successfully flashed\n");
 
 	synaptics_touchpad_set_irq(this, IRQ_FLASH_ENABLE, false);
+	mutex_unlock(&synaptics_touchpad_lock);
 
 	rc = synaptics_touchpad_initialize(this);
 	return rc;
@@ -771,17 +772,15 @@ static int synaptics_touchpad_set_power(struct synaptics_touchpad *this)
 	int active;
 	bool should_wake;
 	u8 irq;
-	int users;
 
 	mutex_lock(&synaptics_touchpad_lock);
 	active = this->active;
-	users = this->input ? this->input->users : 0;
 
-	dev_info(&this->i2c->dev, "%s: powered %d, activated %d,"
+	dev_dbg(&this->i2c->dev, "%s: powered %d, activated %d,"
 			" users %d, standby %d\n", __func__,
 			!!(active & SYN_ACTIVE_POWER),
 			!!(active & SYN_ACTIVE_REQ),
-			users,
+			this->input->users,
 			!!(active & SYN_STANDBY));
 
 	if (this->state == SYN_STATE_DISABLED) {
@@ -789,7 +788,7 @@ static int synaptics_touchpad_set_power(struct synaptics_touchpad *this)
 		return -ENODEV;
 	}
 	should_wake = (active & SYN_ACTIVE_REQ) && !(active & SYN_STANDBY) &&
-			users;
+			this->input->users;
 
 	if (should_wake && !(active & SYN_ACTIVE_POWER)) {
 
@@ -823,10 +822,9 @@ static int synaptics_touchpad_set_power(struct synaptics_touchpad *this)
 
 		/* lie to the listening applications, tell them that there
 		 * are no fingers touching. */
-		if (users) {
-			input_mt_sync(this->input);
-			input_sync(this->input);
-		}
+		input_mt_sync(this->input);
+		input_sync(this->input);
+
 		this->active &= ~SYN_ACTIVE_POWER;
 	}
 	mutex_unlock(&synaptics_touchpad_lock);
@@ -1058,8 +1056,6 @@ static int synaptics_touchpad_input_init(struct synaptics_touchpad *this)
 {
 	int rc;
 
-	if (this->input)
-		return 0;
 	this->input = input_allocate_device();
 	if (!this->input)
 		return -ENOMEM;
@@ -1221,11 +1217,21 @@ static int __devinit synaptics_touchpad_probe_i2c(struct i2c_client *i2c,
 	i2c_set_clientdata(i2c, this);
 	dev_set_drvdata(&i2c->dev, this);
 
+	rc = synaptics_touchpad_initialize(this);
+	if (rc) {
+		dev_err(&i2c->dev, "failed initialization (bad device?)\n");
+		goto err_teardown;
+	}
+
 	this->active = SYN_ACTIVE_POWER;
 
 	rc = synaptics_touchpad_ctrl_init(this);
 	if (rc)
 		goto err_teardown;
+
+	rc = synaptics_touchpad_input_init(this);
+	if (rc)
+		goto err_misc_deregister;
 
 	mutex_lock(&synaptics_touchpad_lock);
 	rc = request_irq(this->i2c->irq, &synaptics_touchpad_irq,
@@ -1239,13 +1245,6 @@ static int __devinit synaptics_touchpad_probe_i2c(struct i2c_client *i2c,
 	}
 	this->irq_count = IRQ_SET_POWER;
 	mutex_unlock(&synaptics_touchpad_lock);
-
-	rc = synaptics_touchpad_initialize(this);
-	if (rc) {
-		dev_err(&i2c->dev, "failed initialization (bad device?)\n");
-		goto err_input_unregister;
-	}
-
 	synaptics_touchpad_set_power(this);
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -1256,8 +1255,8 @@ static int __devinit synaptics_touchpad_probe_i2c(struct i2c_client *i2c,
 	return 0;
 
 err_input_unregister:
-	if (this->input)
-		input_unregister_device(this->input);
+	input_unregister_device(this->input);
+err_misc_deregister:
 	misc_deregister(&synaptics_touchpad_ctrl);
 err_teardown:
 	if (this->pdata->gpio_teardown)
@@ -1274,8 +1273,7 @@ static int __devexit synaptics_touchpad_remove_i2c(struct i2c_client *i2c)
 	free_irq(this->i2c->irq, &this->i2c->dev);
 	unregister_early_suspend(&this->early_suspend);
 	misc_deregister(&synaptics_touchpad_ctrl);
-	if (this->input)
-		input_unregister_device(this->input);
+	input_unregister_device(this->input);
 
 	if (this->pdata->gpio_teardown)
 		(* this->pdata->gpio_teardown)();

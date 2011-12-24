@@ -37,11 +37,13 @@ static int lcdc_sharp_panel_off(struct platform_device *pdev);
 #ifdef CONFIG_PMIC8058_PWM
 static struct pwm_device *bl_pwm;
 
-#define PWM_PERIOD	1000    /* us, period of 1Khz */
-#define DUTY_LEVEL	(PWM_PERIOD / BL_MAX)
-#endif
+/* 50 Khz == 20000 ns period
+ * divide 20000 ns to 15 levels
+ * each level has 1333 ns
+ */
 
-#define BL_MAX		16
+#define PWM_PERIOD 20000	/* ns, period of 50Khz */
+#endif
 
 #ifndef CONFIG_SPI_QSD
 static int spi_cs;
@@ -275,7 +277,9 @@ static void lcdc_sharp_panel_set_backlight(struct msm_fb_data_type *mfd)
 
 #ifdef CONFIG_PMIC8058_PWM
 	if (bl_pwm) {
-		pwm_config(bl_pwm, DUTY_LEVEL * bl_level, PWM_PERIOD);
+		int duty_level;
+		duty_level = (PWM_PERIOD / mfd->panel_info.bl_max);
+		pwm_config(bl_pwm, duty_level * bl_level, PWM_PERIOD);
 		pwm_enable(bl_pwm);
 	}
 #endif
@@ -369,7 +373,7 @@ static int __init lcdc_sharp_panel_init(void)
 	pinfo->bpp = 18;
 	pinfo->fb_num = 2;
 	pinfo->clk_rate = 24500000;
-	pinfo->bl_max = BL_MAX;
+	pinfo->bl_max = 15;
 	pinfo->bl_min = 1;
 
 	pinfo->lcdc.h_back_porch = 20;

@@ -74,7 +74,6 @@
 #include <linux/usb/android_composite.h>
 #include "pm.h"
 #include "spm.h"
-#include "keypad-pmic-mogami.h"
 #include <linux/msm_kgsl.h>
 #include <mach/dal_axi.h>
 #include <mach/msm_serial_hs.h>
@@ -138,6 +137,8 @@
 #define MSM_RAM_CONSOLE_SIZE    (128 * SZ_1K)
 #endif
 
+#define USB_VREG_MV		3500	/* usb voltage regulator mV */
+
 /* GPIO hardware device identification */
 enum board_hwid {
 	BOARD_HWID_UNK,
@@ -183,7 +184,7 @@ static int vreg_helper_on(const char *pzName, unsigned mv)
 		return rc;
 	}
 
-	printk(KERN_ERR "Enabled VREG \"%s\" at %u mV\n", pzName, mv);
+	printk(KERN_INFO "Enabled VREG \"%s\" at %u mV\n", pzName, mv);
 	return rc;
 }
 
@@ -205,7 +206,7 @@ static void vreg_helper_off(const char *pzName)
 		return;
 	}
 
-	printk(KERN_ERR "Disabled VREG \"%s\"\n", pzName);
+	printk(KERN_INFO "Disabled VREG \"%s\"\n", pzName);
 }
 
 static int pm8058_gpios_init(void)
@@ -268,6 +269,7 @@ static struct pmic8058_keypad_data zeus_keypad_data = {
 	.keymap_data = &keymap_game_data,
 };
 
+
 /* Put sub devices with fixed location first in sub_devices array */
 #define	PM8058_SUBDEV_KPD	0
 #define	PM8058_SUBDEV_LED	1
@@ -307,10 +309,6 @@ static struct mfd_cell pm8058_subdevs[] = {
 	,
 	{	.name = "pm8058-upl",
 		.id		= -1,
-	},
-	{	.name = KP_NAME,
-		.platform_data = &keypad_pmic_platform_data,
-		.data_size = sizeof(keypad_pmic_platform_data),
 	},
 };
 
@@ -1094,30 +1092,6 @@ static char *usb_functions_msc_adb_eng[] = {
 	"diag",
 };
 
-#if defined(CONFIG_USB_ANDROID_MTP_ARICENT)
-static char *usb_functions_mtp[] = {
-	"mtp",
-};
-
-static char *usb_functions_mtp_adb[] = {
-	"mtp",
-	"adb",
-};
-
-static char *usb_functions_mtp_msc[] = {
-	"mtp",
-	"usb_mass_storage",
-};
-
-static char *usb_functions_mtp_adb_eng[] = {
-	"mtp",
-	"adb",
-	"modem",
-	"nmea",
-	"diag",
-};
-#endif
-
 static char *usb_functions_rndis[] = {
 	"rndis",
 };
@@ -1136,9 +1110,6 @@ static char *usb_functions_diag[] = {
 static char *usb_functions_all[] = {
 	"rndis",
 	"usb_mass_storage",
-#if defined(CONFIG_USB_ANDROID_MTP_ARICENT)
-	"mtp",
-#endif
 	"adb",
 	"modem",
 	"nmea",
@@ -1147,32 +1118,15 @@ static char *usb_functions_all[] = {
 
 static struct android_usb_product usb_products[] = {
 	{
-		.product_id	= 0xE000 | CONFIG_USB_PRODUCT_SUFFIX,
+		.product_id	= 0x3000 | CONFIG_USB_PRODUCT_SUFFIX,
 		.num_functions	= ARRAY_SIZE(usb_functions_msc),
 		.functions	= usb_functions_msc,
 	},
 	{
-		.product_id	= 0x6000 | CONFIG_USB_PRODUCT_SUFFIX,
+		.product_id	= 0x2000 | CONFIG_USB_PRODUCT_SUFFIX,
 		.num_functions	= ARRAY_SIZE(usb_functions_msc_adb),
 		.functions	= usb_functions_msc_adb,
 	},
-#if defined(CONFIG_USB_ANDROID_MTP_ARICENT)
-	{
-		.product_id	= 0x0000 | CONFIG_USB_PRODUCT_SUFFIX,
-		.num_functions	= ARRAY_SIZE(usb_functions_mtp),
-		.functions	= usb_functions_mtp,
-	},
-	{
-		.product_id	= 0x5000 | CONFIG_USB_PRODUCT_SUFFIX,
-		.num_functions	= ARRAY_SIZE(usb_functions_mtp_adb),
-		.functions	= usb_functions_mtp_adb,
-	},
-	{
-		.product_id	= 0x4000 | CONFIG_USB_PRODUCT_SUFFIX,
-		.num_functions	= ARRAY_SIZE(usb_functions_mtp_msc),
-		.functions	= usb_functions_mtp_msc,
-	},
-#endif
 	{
 		.product_id	= 0x7000 | CONFIG_USB_PRODUCT_SUFFIX,
 		.num_functions	= ARRAY_SIZE(usb_functions_rndis),
@@ -1188,13 +1142,6 @@ static struct android_usb_product usb_products[] = {
 		.num_functions	= ARRAY_SIZE(usb_functions_diag),
 		.functions	= usb_functions_diag,
 	},
-#if defined(CONFIG_USB_ANDROID_MTP_ARICENT)
-	{
-		.product_id	= 0x5146,
-		.num_functions	= ARRAY_SIZE(usb_functions_mtp_adb_eng),
-		.functions	= usb_functions_mtp_adb_eng,
-	},
-#endif
 	{
 		.product_id	= 0x6146,
 		.num_functions	= ARRAY_SIZE(usb_functions_msc_adb_eng),
@@ -1238,7 +1185,7 @@ static struct platform_device rndis_device = {
 
 static struct android_usb_platform_data android_usb_pdata = {
 	.vendor_id		= 0x0FCE,
-	.product_id		= 0xE000 | CONFIG_USB_PRODUCT_SUFFIX,
+	.product_id		= 0x3000 | CONFIG_USB_PRODUCT_SUFFIX,
 	.version		= 0x0100,
 	.num_products		= ARRAY_SIZE(usb_products),
 	.products		= usb_products,
@@ -1354,6 +1301,8 @@ out:
 static struct novatek_fwvga_platform_data novatek_platform_data = {
 	.power = novatek_power,
 	.reset = NULL,
+	.width = 51,
+	.height = 89,
 };
 
 static struct platform_device novatek_device = {
@@ -1518,6 +1467,13 @@ static struct gp2a_platform_data gp2a_platform_data = {
 	.gpio_shutdown = gp2a_gpio_teardown,
 };
 
+static struct cypress_callback *cy_callback;
+
+static void cy_register_cb(struct cypress_callback *cy)
+{
+	cy_callback = cy;
+}
+
 static struct cypress_touch_platform_data cypress_touch_data = {
 	.x_min		= 0,
 	.x_max		= 479,
@@ -1529,7 +1485,14 @@ static struct cypress_touch_platform_data cypress_touch_data = {
 	.reset_polarity	= 1,
 	.irq_polarity	= IRQF_TRIGGER_FALLING,
 	.no_fw_update = 0,
+	.register_cb	= cy_register_cb,
 };
+
+void charger_connected(int on)
+{
+	if (cy_callback && cy_callback->cb)
+		cy_callback->cb(cy_callback, on);
+}
 
 static void cypress_touch_gpio_init(void)
 {
@@ -1624,8 +1587,8 @@ static struct max17040_platform_data max17040_platform_data = {
 	},
 	.rcomp_data = {
 		.rcomp0 = 0x55,
-		.temp_co_hot = 1400,
-		.temp_co_cold = 9725,
+		.temp_co_hot = -1400,
+		.temp_co_cold = -9725,
 		.temp_div = 1000,
 	}
 };
@@ -1832,7 +1795,7 @@ static int msm_hsusb_ldo_init(int init)
 		vreg_3p3 = vreg_get(NULL, "usb");
 		if (IS_ERR(vreg_3p3))
 			return PTR_ERR(vreg_3p3);
-		vreg_set_level(vreg_3p3, 3500);
+		vreg_set_level(vreg_3p3, USB_VREG_MV);
 	} else
 		vreg_put(vreg_3p3);
 
@@ -1859,13 +1822,15 @@ static int msm_hsusb_ldo_enable(int enable)
 
 static int msm_hsusb_ldo_set_voltage(int mV)
 {
-	static int cur_voltage = 3500;
+	static int cur_voltage = USB_VREG_MV;
 
 	if (!vreg_3p3 || IS_ERR(vreg_3p3))
 		return -ENODEV;
 
 	if (cur_voltage == mV)
 		return 0;
+
+	charger_connected(USB_VREG_MV == mV);
 
 	cur_voltage = mV;
 
@@ -2036,7 +2001,7 @@ static struct kgsl_platform_data kgsl_pdata = {
 	.min_grp2d_freq = 0,
 	.set_grp2d_async = NULL,	/* HW workaround, run Z180 SYNC @ 192 MHZ */
 	.max_grp3d_freq = 245760000,
-	.min_grp3d_freq = 192 * 1000*1000,
+	.min_grp3d_freq = 193000000,
 	.set_grp3d_async = set_grp3d_async,
 	.imem_clk_name = "imem_clk",
 	.grp3d_clk_name = "grp_clk",

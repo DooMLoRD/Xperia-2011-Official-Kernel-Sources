@@ -865,6 +865,13 @@ config USB_CSW_HACK
 	 This csw hack feature is for increasing the performance of the mass
 	 storage
 
+config USB_MARLIN_SCSI_EXTENSIONS
+	boolean "SCSI Command Extenstion for Marlin Device"
+	depends on USB_ANDROID_MASS_STORAGE
+	default n
+	help
+	 The mass storage extension for marlin device.
+
 config USB_ANDROID_RNDIS
 	boolean "Android gadget RNDIS ethernet function"
 	depends on USB_ANDROID
@@ -934,6 +941,13 @@ config USB_REMOTE_WAKEUP
 	default n
 	help
 	  USB remote wakeup support.
+
+config USB_POWER_REENUMERATION
+	boolean "Power reenumeration support"
+	depends on USB_ANDROID
+	default n
+	help
+	  Enabling this option adds the power reenumeration support.
 
 config USB_ANDROID_MTP_ARICENT
 	boolean "Aricent USB Media Transfer Protocol driver"

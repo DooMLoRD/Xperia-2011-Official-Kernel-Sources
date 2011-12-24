@@ -1824,10 +1824,11 @@ static int __devinit kgsl_platform_probe(struct platform_device *pdev)
 		kgsl_driver.yamato_reg = NULL;
 
 	/* put the AXI bus into asynchronous mode with the graphics cores */
-	if ((pdata->set_grp3d_async != NULL) &&
-		(pdata->max_grp3d_freq) &&
-		(!pdata->set_grp3d_async())) {
-		clk_set_rate(clk, pdata->max_grp3d_freq);
+	if (pdata != NULL) {
+		if ((pdata->set_grp3d_async != NULL) &&
+			(pdata->max_grp3d_freq) &&
+			(!pdata->set_grp3d_async()))
+			clk_set_rate(clk, pdata->max_grp3d_freq);
 	}
 
 	if (pdata->imem_clk_name != NULL) {
@@ -1869,7 +1870,7 @@ static int __devinit kgsl_platform_probe(struct platform_device *pdev)
 	kgsl_driver.g12_grp_pclk = NULL;
 #endif
 
-	if (clk != NULL) {
+	if (pdata != NULL && clk != NULL) {
 		if ((pdata->set_grp2d_async != NULL) &&
 			(pdata->max_grp2d_freq) &&
 			(!pdata->set_grp2d_async()))
@@ -1878,23 +1879,25 @@ static int __devinit kgsl_platform_probe(struct platform_device *pdev)
 
 	kgsl_driver.power_flags = 0;
 
-	kgsl_driver.clk_freq[KGSL_AXI_HIGH_3D] = pdata->high_axi_3d;
-	kgsl_driver.clk_freq[KGSL_AXI_HIGH_2D] = pdata->high_axi_2d;
-	if (kgsl_driver.g12_grp_clk) {
-		kgsl_driver.clk_freq[KGSL_2D_MIN_FREQ] =
-			clk_round_rate(kgsl_driver.g12_grp_clk,
-				       pdata->min_grp2d_freq);
-		kgsl_driver.clk_freq[KGSL_2D_MAX_FREQ] =
-			clk_round_rate(kgsl_driver.g12_grp_clk,
-				       pdata->max_grp2d_freq);
-	}
-	if (kgsl_driver.yamato_grp_clk) {
-		kgsl_driver.clk_freq[KGSL_3D_MIN_FREQ] =
-			clk_round_rate(kgsl_driver.yamato_grp_clk,
-				       pdata->min_grp3d_freq);
-		kgsl_driver.clk_freq[KGSL_3D_MAX_FREQ] =
-			clk_round_rate(kgsl_driver.yamato_grp_clk,
-				       pdata->max_grp3d_freq);
+	if (pdata) {
+		kgsl_driver.clk_freq[KGSL_AXI_HIGH_3D] = pdata->high_axi_3d;
+		kgsl_driver.clk_freq[KGSL_AXI_HIGH_2D] = pdata->high_axi_2d;
+		if (kgsl_driver.g12_grp_clk) {
+			kgsl_driver.clk_freq[KGSL_2D_MIN_FREQ] =
+				clk_round_rate(kgsl_driver.g12_grp_clk,
+					       pdata->min_grp2d_freq);
+			kgsl_driver.clk_freq[KGSL_2D_MAX_FREQ] =
+				clk_round_rate(kgsl_driver.g12_grp_clk,
+					       pdata->max_grp2d_freq);
+		}
+		if (kgsl_driver.yamato_grp_clk) {
+			kgsl_driver.clk_freq[KGSL_3D_MIN_FREQ] =
+				clk_round_rate(kgsl_driver.yamato_grp_clk,
+					       pdata->min_grp3d_freq);
+			kgsl_driver.clk_freq[KGSL_3D_MAX_FREQ] =
+				clk_round_rate(kgsl_driver.yamato_grp_clk,
+					       pdata->max_grp3d_freq);
+		}
 	}
 
 	pm_qos_add_requirement(PM_QOS_SYSTEM_BUS_FREQ, "kgsl_3d",

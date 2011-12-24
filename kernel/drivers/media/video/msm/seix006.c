@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2008-2009 QUALCOMM USA, INC.
- * Copyright (C) 2010 Sony Ericsson Mobile Communications AB.
+ * Copyright (C) 2010-2011 Sony Ericsson Mobile Communications AB.
  *
  * All source code in this file is licensed under the following license
  *

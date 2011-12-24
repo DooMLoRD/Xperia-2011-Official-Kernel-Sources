@@ -1411,11 +1411,20 @@ config CRASH_NOTES_VM
 	  virtual memory setup (start address and if it's sparse or flatmem).
 
 config CRASH_DUMP
-        bool "kernel crashdumps (EXPERIMENTAL)"
-        depends on EXPERIMENTAL
-        default n
-        help
-          Generate Crash dump
+	bool "kernel crashdumps (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	default n
+	select CAPTURE_KERNEL
+	help
+	  Generate Crash dump (Enable this option only for Capture Kernel)
+
+config CAPTURE_KERNEL
+	bool "kdump capture kernel"
+	depends on CRASH_DUMP
+	default n
+	help
+	  Use this option to build the capture kernel for kdump. It is a
+	  minimal kernel used to take crash dump on any kernel crash.
 
 config ATAGS_PROC
 	bool "Export atags in procfs"

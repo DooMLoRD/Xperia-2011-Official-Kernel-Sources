@@ -540,8 +540,8 @@ static int __devinit novatek_controller_probe(struct platform_device *pdev)
 	panel_data->power_on_panel_at_pan = 0;
 
 	pinfo = &panel_data->panel_info;
-	pinfo->width = rd->panel->width;
-	pinfo->height = rd->panel->height;
+	pinfo->width = pdata->width;
+	pinfo->height = pdata->height;
 	pinfo->lcd.rev = rd->panel->mddi_type;
 
 	dev_info(&pdev->dev, "Using MDDI type %d\n", pinfo->lcd.rev);

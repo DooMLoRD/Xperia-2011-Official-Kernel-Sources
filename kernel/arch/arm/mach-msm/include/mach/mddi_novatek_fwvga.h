@@ -9,6 +9,8 @@
 struct novatek_fwvga_platform_data {
 	int (*power)(int on);
 	int (*reset)(void);
+	u32 width;	/* in mm; optional */
+	u32 height;	/* in mm; optional */
 };
 
 struct panel_id;

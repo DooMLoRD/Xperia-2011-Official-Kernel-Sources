@@ -1376,15 +1376,6 @@ static void  vcd_clnt_cb_in_invalid(
 			vcd_mark_frame_channel(cctxt->dev_ctxt);
 			break;
 		}
-	case VCD_EVT_IND_OUTPUT_RECONFIG:
-		{
-			if (cctxt->status.frame_submitted > 0)
-				cctxt->status.frame_submitted--;
-			else
-				cctxt->status.frame_delayed--;
-			vcd_mark_frame_channel(cctxt->dev_ctxt);
-			break;
-		}
 	default:
 		{
 			VCD_MSG_ERROR("Unexpected callback event=%d status=%d"

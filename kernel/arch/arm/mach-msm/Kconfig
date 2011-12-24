@@ -31,9 +31,9 @@ config ARCH_MSM7X30
 	select MSM_VIC
 	select CPU_V7
 	select MSM_REMOTE_SPINLOCK_DEKKERS
-	select ARCH_SPARSEMEM_ENABLE
-	select MEMORY_HOTPLUG
-	select MEMORY_HOTREMOVE
+	select ARCH_SPARSEMEM_ENABLE if !CAPTURE_KERNEL
+	select MEMORY_HOTPLUG if !CAPTURE_KERNEL
+	select MEMORY_HOTREMOVE if !CAPTURE_KERNEL
 	select MIGRATION
 	select ARCH_MEMORY_PROBE
 	select ARCH_MEMORY_REMOVE
@@ -186,10 +186,19 @@ config MACH_SEMC_ZEUS
 	help
 	  Support for the SonyEricsson Zeus devices.
 
+config MACH_SEMC_MOGAMI
+       depends on ARCH_MSM7X30
+       depends on !MSM_STACKED_MEMORY
+       select TI1271 if !CAPTURE_KERNEL
+       default y
+       bool "SonyEricsson Mogami CDB"
+       help
+         Support for the SonyEricsson Mogami CDB (development board).
+
 config MACH_SEMC_ANZU
 	depends on ARCH_MSM7X30
 	depends on !MSM_STACKED_MEMORY
-	select TI1271
+	select TI1271 if !CAPTURE_KERNEL
 	select SUPPORT_ALIEN_USB_CHARGER
 	default y
 	bool "SonyEricsson Anzu"
@@ -199,12 +208,71 @@ config MACH_SEMC_ANZU
 config MACH_SEMC_HALLON
 	depends on ARCH_MSM7X30
 	depends on !MSM_STACKED_MEMORY
-	select TI1271
+	select TI1271 if !CAPTURE_KERNEL
 	select SUPPORT_ALIEN_USB_CHARGER
 	default y
 	bool "SonyEricsson Hallon"
 	help
 	  Support for the SonyEricsson Hallon devices.
+
+config MACH_SEMC_IYOKAN
+	depends on ARCH_MSM7X30
+	depends on !MSM_STACKED_MEMORY
+	select TI1271 if !CAPTURE_KERNEL
+	select SUPPORT_ALIEN_USB_CHARGER
+	default y
+	bool "SonyEricsson Iyokan"
+	help
+	  Support for the SonyEricsson Iyokan devices.
+
+config MACH_SEMC_URUSHI
+	depends on ARCH_MSM7X30
+	depends on !MSM_STACKED_MEMORY
+	select TI1271 if !CAPTURE_KERNEL
+	select SUPPORT_ALIEN_USB_CHARGER
+	default y
+	bool "SonyEricsson Urushi"
+	help
+	  Support for the SonyEricsson Urushi devices.
+
+config MACH_SEMC_SMULTRON
+	depends on ARCH_MSM7X30
+	depends on !MSM_STACKED_MEMORY
+	select TI1271 if !CAPTURE_KERNEL
+	select SUPPORT_ALIEN_USB_CHARGER
+	default y
+	bool "SonyEricsson Smultron"
+	help
+	  Support for the SonyEricsson Smultron devices.
+
+config MACH_SEMC_MANGO
+	depends on ARCH_MSM7X30
+	depends on !MSM_STACKED_MEMORY
+	select TI1271 if !CAPTURE_KERNEL
+	default n
+	bool "SonyEricsson Mango"
+	help
+	  Support for the SonyEricsson Mango devices.
+
+config MACH_SEMC_AKANE
+	depends on ARCH_MSM7X30
+	depends on !MSM_STACKED_MEMORY
+	select TI1271 if !CAPTURE_KERNEL
+	select SUPPORT_ALIEN_USB_CHARGER
+	default y
+	bool "SonyEricsson Akane"
+	help
+	  Support for the SonyEricsson Akane devices.
+
+config MACH_SEMC_AZUSA
+	depends on ARCH_MSM7X30
+	depends on !MSM_STACKED_MEMORY
+	select TI1271 if !CAPTURE_KERNEL
+	select SUPPORT_ALIEN_USB_CHARGER
+	default y
+	bool "SonyEricsson Azusa"
+	help
+	  Support for the SonyEricsson Azusa devices.
 
 config MACH_SAPPHIRE
 	depends on ARCH_MSM7X01A
@@ -357,8 +425,8 @@ config MSM_STACKED_MEMORY
 
 config PHYS_OFFSET
 	hex
-	default "0x00200000" if !MSM_STACKED_MEMORY
-	default "0x03600000" if !MSM_STACKED_MEMORY && ARCH_MSM7X30
+	default "0x00200000" if !MSM_STACKED_MEMORY && !CAPTURE_KERNEL
+	default "0x03600000" if !MSM_STACKED_MEMORY && ARCH_MSM7X30 && CAPTURE_KERNEL
 	default "0x00000000" if ARCH_QSD8X50 && MSM_SOC_REV_A
 	default "0x20000000" if ARCH_QSD8X50
 	default "0x40200000" if ARCH_MSM8X60
@@ -1048,6 +1116,12 @@ config ZEUS_GPIO_KEYPAD
         help
           Select if the GPIO keypad is attached.
 
+config ZEUS_VIBRATOR
+       bool "Zeus Vibrator"
+       default y
+       help
+         Select to get vibrator support on the Zeus board
+
 config MOGAMI_VIBRATOR
 	bool "Mogami Vibrator"
 	default n
@@ -1327,19 +1401,6 @@ config USB_PRODUCT_SUFFIX
 	hex "Suffix of USB product id"
 	default 0
 
-config USB_HS_DRV_AMPLITUDE
-	int "USB high speed driver amplitude ratio"
-	range 0 4
-	default 0
-	help
-	  Set 0 if ratio is HS_DRV_AMPLITUDE_DEFAULT
-	  Set 1 if ratio is HS_DRV_AMPLITUDE_ZERO_PERCENT
-	  Set 2 if ratio is HS_DRV_AMPLITUDE_25_PERCENTI
-	  Set 3 if ratio is HS_DRV_AMPLITUDE_5_PERCENT
-	  Set 4 if ratio is HS_DRV_AMPLITUDE_75_PERCENT
-
-	  The ratio is defined in kernel\arch\arm\mach-msm\include\mach\msm_hsusb.h
-
 config PMIC_GPIO_25
 	bool "Enable PMIC_GPIO_25 support"
 	default n
@@ -1350,12 +1411,5 @@ config USE_PMIC_CHARGING_ON_AMSS
 	bool "Charging functionality on PMIC on AMSS"
 	depends on ARCH_MSM7X30
 	default n
-
-config MOGAMI_PMIC_KEYPAD
-	bool "Enable Mogami pmic gpio keypad support"
-	depends on ARCH_MSM7X30
-	default n
-	help
-	  This enables the Mogami pmic gpio keypad support.
 
 endif

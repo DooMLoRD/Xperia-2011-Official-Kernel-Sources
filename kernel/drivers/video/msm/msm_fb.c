@@ -4,7 +4,6 @@
  *
  * Copyright (C) 2007 Google Incorporated
  * Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
- * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -582,7 +581,10 @@ static void msmfb_early_suspend(struct early_suspend *h)
 {
 	struct msm_fb_data_type *mfd = container_of(h, struct msm_fb_data_type,
 						    early_suspend);
+	struct fb_info *fbi = mfd->fbi;
 
+	/* set the last frame on suspend as black frame */
+	memset(fbi->screen_base, 0x0, fbi->fix.smem_len);
 	msm_fb_suspend_sub(mfd);
 }
 
@@ -642,6 +644,9 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			if (ret == 0) {
 				mfd->panel_power_on = TRUE;
 
+				msm_fb_set_backlight(mfd,
+						     mfd->bl_level, 0);
+
 /* ToDo: possible conflict with android which doesn't expect sw refresher */
 /*
 	  if (!mfd->hw_refresh)
@@ -673,6 +678,7 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 			if (ret)
 				mfd->panel_power_on = curr_pwr_state;
 
+			msm_fb_set_backlight(mfd, 0, 0);
 			mfd->op_enable = TRUE;
 		}
 		break;
@@ -2455,21 +2461,6 @@ static int msmfb_overlay_play_enable(struct fb_info *info, unsigned long *argp)
 	return 0;
 }
 
-static int msmfb_dtv_lcdc_enable(struct fb_info *info, unsigned long *argp)
-{
-	int	ret, enable;
-	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
-
-	ret = copy_from_user(&enable, argp, sizeof(enable));
-	if (ret) {
-		printk(KERN_ERR "%s:msmfb_dtv_lcdc_enable ioctl failed \n",
-			__func__);
-		return ret;
-	}
-
-	ret = mdp4_dtv_lcdc_enable(mfd->pdev, enable);
-	return ret;
-}
 #endif
 
 DECLARE_MUTEX(msm_fb_ioctl_ppp_sem);
@@ -2554,11 +2545,6 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	case MSMFB_OVERLAY_PLAY_ENABLE:
 		down(&msm_fb_ioctl_ppp_sem);
 		ret = msmfb_overlay_play_enable(info, argp);
-		up(&msm_fb_ioctl_ppp_sem);
-		break;
-	case MSMFB_DTV_LCDC_ENABLE:
-		down(&msm_fb_ioctl_ppp_sem);
-		ret = msmfb_dtv_lcdc_enable(info, argp);
 		up(&msm_fb_ioctl_ppp_sem);
 		break;
 #endif

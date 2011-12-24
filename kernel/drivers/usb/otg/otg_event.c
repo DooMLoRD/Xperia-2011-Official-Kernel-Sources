@@ -25,9 +25,8 @@ struct otg_event_drv {
 	struct class *class;
 	struct device *dev;
 	char name[MAX_NAME_SIZE];
+	struct semaphore sem;
 };
-
-static DECLARE_MUTEX(sem);
 
 static struct otg_event_drv *otg_event;
 
@@ -72,7 +71,7 @@ static int otg_send_uevent(struct otg_transceiver *xceiv,
 	if (dev == NULL)
 		return -ENODEV;
 
-	ret = down_interruptible(&sem);
+	ret = down_interruptible(&dev->sem);
 	if (ret < 0)
 		return ret;
 
@@ -83,7 +82,7 @@ static int otg_send_uevent(struct otg_transceiver *xceiv,
 	snprintf(module, MAX_MODULE_NAME_SIZE, "MODULE=%s", dev->name);
 	ret = kobject_uevent_env(&dev->dev->kobj, KOBJ_CHANGE, envp);
 
-	up(&sem);
+	up(&dev->sem);
 
 	if (ret < 0)
 		pr_info("uevent sending failed with ret = %d\n", ret);
@@ -104,6 +103,8 @@ int otg_event_driver_register(struct otg_transceiver *xceiv)
 		return -ENOMEM;
 
 	otg_event = dev;
+
+	init_MUTEX(&dev->sem);
 
 	dev->class = class_create(THIS_MODULE, "usb_otg");
 	if (IS_ERR(dev->class)) {
@@ -140,12 +141,12 @@ void otg_event_driver_unregister(void)
 {
 	struct otg_event_drv *dev = otg_event;
 
-	down(&sem);
+	down(&dev->sem);
 
 	device_destroy(dev->class, MKDEV(0, 0));
 	class_destroy(dev->class);
 	kfree(dev);
 	otg_event = NULL;
 
-	up(&sem);
+	up(&dev->sem);
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -39,7 +39,6 @@
 #define SDIO_MUX_HDR_CMD_OPEN    1
 #define SDIO_MUX_HDR_CMD_CLOSE   2
 
-#define SDIO_OOM_RETRY_DELAY_MS  200
 #define DEBUG
 
 static int msm_rmnet_sdio_debug_enable;
@@ -118,7 +117,7 @@ static void sdio_mux_read_data(struct work_struct *work);
 static void sdio_mux_write_data(struct work_struct *work);
 
 static DEFINE_MUTEX(sdio_mux_lock);
-static DECLARE_DELAYED_WORK(work_sdio_mux_read, sdio_mux_read_data);
+static DECLARE_WORK(work_sdio_mux_read, sdio_mux_read_data);
 static DECLARE_WORK(work_sdio_mux_write, sdio_mux_write_data);
 
 static struct workqueue_struct *sdio_mux_workqueue;
@@ -287,23 +286,14 @@ static void sdio_mux_read_data(struct work_struct *work)
 		len = sdio_partial_pkt.skb->len;
 	/* if allocation fails attempt to get a smaller chunk of mem */
 	do {
-		skb_mux = __dev_alloc_skb(sz + NET_IP_ALIGN + len, GFP_KERNEL);
+		skb_mux = dev_alloc_skb(sz + NET_IP_ALIGN + len);
 		if (skb_mux)
 			break;
-		pr_err("%s: cannot allocate skb of size:%d + "
-			"%d (NET_SKB_PAD)\n",
-			 __func__, sz + NET_IP_ALIGN + len, NET_SKB_PAD);
-		/* the skb structure adds NET_SKB_PAD bytes to the memory
-		 * request, which may push the actual request above PAGE_SIZE
-		 * in that case, we need to iterate one more time to make sure
-		 * we get the memory request under PAGE_SIZE
-		 */
-		if (sz + NET_IP_ALIGN + len + NET_SKB_PAD <= PAGE_SIZE) {
+		pr_err("%s: cannot allocate skb of size:%d\n", __func__,
+			sz + NET_IP_ALIGN + len);
+		if (sz + NET_IP_ALIGN + len <= PAGE_SIZE) {
 			pr_err("%s: allocation failed\n", __func__);
 			mutex_unlock(&sdio_mux_lock);
-			queue_delayed_work(sdio_mux_workqueue,
-				&work_sdio_mux_read,
-				msecs_to_jiffies(SDIO_OOM_RETRY_DELAY_MS));
 			return;
 		}
 		sz /= 2;
@@ -320,8 +310,7 @@ static void sdio_mux_read_data(struct work_struct *work)
 		pr_err("%s: sdio read failed %d\n", __func__, rc);
 		dev_kfree_skb_any(skb_mux);
 		mutex_unlock(&sdio_mux_lock);
-		queue_delayed_work(sdio_mux_workqueue,
-				   &work_sdio_mux_read, 0);
+		queue_work(sdio_mux_workqueue, &work_sdio_mux_read);
 		return;
 	}
 	mutex_unlock(&sdio_mux_lock);
@@ -352,7 +341,7 @@ static void sdio_mux_read_data(struct work_struct *work)
 	dev_kfree_skb_any(skb_mux);
 
 	DBG("%s: read done\n", __func__);
-	queue_delayed_work(sdio_mux_workqueue, &work_sdio_mux_read, 0);
+	queue_work(sdio_mux_workqueue, &work_sdio_mux_read);
 }
 
 static int sdio_mux_write(struct sk_buff *skb)
@@ -572,8 +561,7 @@ static void sdio_mux_notify(void *_dev, unsigned event)
 
 	if ((event == SDIO_EVENT_DATA_READ_AVAIL) &&
 	    sdio_read_avail(sdio_mux_ch))
-		queue_delayed_work(sdio_mux_workqueue,
-				   &work_sdio_mux_read, 0);
+		queue_work(sdio_mux_workqueue, &work_sdio_mux_read);
 }
 
 static int msm_rmnet_sdio_probe(struct platform_device *pdev)

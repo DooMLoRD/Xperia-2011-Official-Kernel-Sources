@@ -159,7 +159,6 @@ struct cy8ctma300_touch {
 	struct input_dev *input;
 	struct spi_device *spi;
 	struct work_struct irq_worker;
-	struct work_struct resume_worker;
 	struct cdev device_cdev;
 	int device_major;
 	struct class *device_class;
@@ -180,8 +179,6 @@ struct cy8ctma300_touch {
 	struct timer_list esd_timer;
 	struct work_struct esd_worker;
 	u8 bist_failure_ct;
-	bool charger_mode_status;
-	bool wall_charger_status;
 };
 
 /*--------------------------------------------------------------------------*/
@@ -431,45 +428,12 @@ static void dump_calib_register(struct spi_device *spi)
 }
 #endif
 
-static void cy8ctma300_charger_mode_reset(struct cy8ctma300_touch *tp)
-{
-	tp->charger_mode_status = false;
-	dev_dbg(&tp->spi->dev, "%s: Current charger mode: 0\n", __func__);
-}
-
-static void cy8ctma300_charger_status_update(struct cy8ctma300_touch *tp,
-					    bool new_status)
-{
-	dev_dbg(&tp->spi->dev, "%s: Wall charger status: %d => %d\n",
-		__func__, tp->wall_charger_status, new_status);
-	tp->wall_charger_status = new_status;
-}
-
-static int cy8ctma300_charger_mode_update(struct cy8ctma300_touch *tp)
-{
-	int err = 0;
-	if (tp->bl_data.app_ver >= 0x24) {
-		if (tp->wall_charger_status)
-			err = reg_write_byte(tp->spi, TP_REG_BIST, 0x10);
-		else
-			err = reg_write_byte(tp->spi, TP_REG_BIST, 0x00);
-	}
-	if (!err) {
-		tp->charger_mode_status = tp->wall_charger_status;
-		dev_dbg(&tp->spi->dev, "%s: Set charger mode: %d\n",
-			__func__, tp->charger_mode_status);
-	} else {
-		dev_dbg(&tp->spi->dev, "%s: error %d\n", __func__, err);
-	}
-	return err;
-}
 
 static int reset_device(struct cy8ctma300_touch *tp)
 {
 	struct spi_device *spi = tp->spi;
 	struct cypress_touch_platform_data *pdata = spi->dev.platform_data;
 	int reset_time = 250;
-	cy8ctma300_charger_mode_reset(tp);
 
 	/* send reset signal to device (Active Low) */
 	gpio_set_value(pdata->gpio_reset_pin, 0);
@@ -557,15 +521,11 @@ static void cy8ctma300_esd_tmr_update(struct cy8ctma300_touch *tp)
 }
 
 
-static void cy8ctma300_bist_check(struct cy8ctma300_touch *tp,
-				  bool force_calibration)
+static void cy8ctma300_bist_check(struct cy8ctma300_touch *tp)
 {
 	struct spi_device *spi = tp->spi;
 	u8 read_buf = 0xFF;	/* 0xff is set for update*/
 	int retry = 5;
-
-	if (force_calibration)
-		goto calibrate_and_bist;
 
 	if (reg_read(spi, TP_REG_BIST, &read_buf, 1)) {
 		dev_dbg(&spi->dev, "%s: error reading TP_REG_BIST\n",
@@ -584,8 +544,6 @@ static void cy8ctma300_bist_check(struct cy8ctma300_touch *tp,
 	}
 
 	/* Execute calibration and BIST */
-calibrate_and_bist:
-	dev_dbg(&spi->dev, "%s: execute calibration\n", __func__);
 	reg_write_byte(spi, TP_REG_BIST, 0x02);
 	while (retry > 0) {
 		msleep(300);
@@ -611,7 +569,6 @@ static void cy8ctma300_setup(struct cy8ctma300_touch *tp)
 	struct spi_device *spi = tp->spi;
 	struct cypress_touch_platform_data *pdata = spi->dev.platform_data;
 	u8 read_buffer = 0xFF;
-	bool force_calibration = false;
 
 	dev_dbg(&spi->dev, "%s: start\n", __func__);
 
@@ -636,7 +593,6 @@ static void cy8ctma300_setup(struct cy8ctma300_touch *tp)
 						__func__);
 			return;
 		}
-		force_calibration = true;
 		tp->bl_data.fw_upd = 0;
 		if (read_buffer != tp->bl_data.app_ver) {
 			tp->bl_data.app_ver = read_buffer;
@@ -685,7 +641,7 @@ static void cy8ctma300_setup(struct cy8ctma300_touch *tp)
 	msleep(100);	/* to be compatible between v1.07 and v1.10 for now */
 #endif
 
-	cy8ctma300_bist_check(tp, force_calibration);
+	cy8ctma300_bist_check(tp);
 	/* auto power control */
 	reg_write_byte(spi, TP_REG_L3_SLEEP, 0x00);
 	reg_write_byte(spi, TP_REG_L2_SLEEP, 0x08);
@@ -902,13 +858,6 @@ static void cy8ctma300_touch_worker(struct work_struct *work)
 		goto out;
 	}
 
-	/* set charger mode if necessary */
-	if (tp->charger_mode_status != tp->wall_charger_status) {
-		err = cy8ctma300_charger_mode_update(tp);
-		if (err)
-			goto out;
-	}
-
 	/* finger info processing */
 	cy8ctma300_mt_handler(tp, read_buf);
 
@@ -958,12 +907,6 @@ static int cy8ctma300_touch_suspend(struct spi_device *spi,
 	u8 buf[TOUCH_DATA_FSTAT2 + 1];
 	long t = msecs_to_jiffies(900);
 
-	/*
-	 * Ensure that the resume worker has run to completion,
-	 * this is to prevent wrong sequence between resume and suspend.
-	 */
-	if (work_pending(&tp->resume_worker))
-		flush_work(&tp->resume_worker);
 	mutex_lock(&tp->s_lock);
 	tp->mode |= TP_MODE_SUSPEND;
 	if (tp->mode & TP_MODE_BL)
@@ -1002,81 +945,11 @@ done:
 	return 0;
 }
 
-static void cy8ctma300_invalidate_all_track_active(struct cy8ctma300_touch *tp)
-{
-	int i = 0;
-
-	dev_dbg(&tp->spi->dev, "%s: start\n", __func__);
-
-	for (i = 0; i < TP_TOUCH_CNT_MAX; i++) {
-		if (tp->track_state[i] == TP_TRACK_ACTIVE) {
-			tp->track_state[i] = TP_TRACK_INACTIVE;
-			input_report_abs(tp->input, ABS_MT_TOUCH_MAJOR, 0);
-			input_report_abs(tp->input, ABS_MT_TRACKING_ID,
-					tp->mt_pos[i].id);
-			input_report_abs(tp->input, ABS_MT_POSITION_X,
-					tp->mt_pos[i].x);
-			input_report_abs(tp->input, ABS_MT_POSITION_Y,
-					tp->mt_pos[i].y);
-			input_mt_sync(tp->input);
-			dev_dbg(&tp->spi->dev, "%s: ID = %d, X = %d, Y=%d\n",
-				__func__, tp->mt_pos[i].id,
-				tp->mt_pos[i].x, tp->mt_pos[i].y);
-		}
-	}
-	input_sync(tp->input);
-}
-
-static void cy8ctma300_resume_worker(struct work_struct *work)
-{
-	struct cy8ctma300_touch *tp =
-		container_of(work, struct cy8ctma300_touch, resume_worker);
-	struct spi_device *spi = tp->spi;
-	struct cypress_touch_platform_data *pdata = spi->dev.platform_data;
-	long t = msecs_to_jiffies(100);
-
-	dev_dbg(&spi->dev, "%s: start\n", __func__);
-	mutex_lock(&tp->s_lock);
-	cy8ctma300_invalidate_all_track_active(tp);
-	dev_dbg(&spi->dev, "%s: SPI_CS wake-up sequence start\n", __func__);
-	if (!pdata->spi_cs_set)
-		goto reset;
-	set_bit(GOING_TO_RESUME, &tp->sflag);
-	clear_bit(READY_TO_RESUME, &tp->sflag);
-	if (pdata->spi_cs_set(0)) {
-		clear_bit(GOING_TO_RESUME, &tp->sflag);
-		goto reset;
-	}
-	msleep(30);
-	if (pdata->spi_cs_set(1)) {
-		clear_bit(GOING_TO_RESUME, &tp->sflag);
-		goto reset;
-	}
-	t = wait_event_interruptible_timeout(tp->wq,
-			test_bit(READY_TO_RESUME, &tp->sflag), t);
-	clear_bit(READY_TO_RESUME, &tp->sflag);
-	clear_bit(GOING_TO_RESUME, &tp->sflag);
-	if (t <= 0) {
-		dev_err(&spi->dev, "%s: timeout\n", __func__);
-		goto reset;
-	}
-	dev_dbg(&spi->dev, "%s: SPI_CS wake-up sequence end, OK\n", __func__);
-	msleep(10);
-	cy8ctma300_setup(tp);
-	/* start command */
-	reg_write_byte(spi, TP_REG_SYS_CTRL, 0x30);
-	goto done;
-reset:
-	dev_err(&spi->dev, "%s: error in resuming the device\n", __func__);
-	reset_device(tp);
-done:
-	mutex_unlock(&tp->s_lock);
-	return;
-}
-
 static int cy8ctma300_touch_resume(struct spi_device *spi)
 {
+	struct cypress_touch_platform_data *pdata = spi->dev.platform_data;
 	struct cy8ctma300_touch *tp = dev_get_drvdata(&spi->dev);
+	long t = msecs_to_jiffies(100);
 
 	mutex_lock(&tp->s_lock);
 	tp->mode &= ~TP_MODE_SUSPEND;
@@ -1086,11 +959,27 @@ static int cy8ctma300_touch_resume(struct spi_device *spi)
 	if (tp->bl_data.app_ver >= 0x14 && tp->bl_data.app_ver < 0x23) {
 		goto reset;
 	} else if (tp->bl_data.app_ver >= 0x23) {
-		mutex_unlock(&tp->s_lock);
-		/* Let the resume worker process the resume sequence */
-		schedule_work(&tp->resume_worker);
-		return 0;
+		if (!pdata->spi_cs_set)
+			goto reset;
+		dev_dbg(&spi->dev, "%s: SPI_CS wakeup\n", __func__);
+		if (pdata->spi_cs_set(0))
+			goto reset;
+		set_bit(GOING_TO_RESUME, &tp->sflag);
+		clear_bit(READY_TO_RESUME, &tp->sflag);
+		t = wait_event_interruptible_timeout(tp->wq,
+				test_bit(READY_TO_RESUME, &tp->sflag), t);
+		clear_bit(READY_TO_RESUME, &tp->sflag);
+		clear_bit(GOING_TO_RESUME, &tp->sflag);
+		if (pdata->spi_cs_set(1))
+			goto reset;
+		if (t <= 0) {
+			dev_dbg(&spi->dev, "%s: timeout\n", __func__);
+			goto reset;
+		}
+		dev_dbg(&spi->dev, "%s: SPI_CS ready IRQ OK\n", __func__);
+		cy8ctma300_setup(tp);
 	}
+	goto done;
 reset:
 	reset_device(tp);
 done:
@@ -1508,7 +1397,7 @@ static void cy8ctma300_bl_start(struct spi_device *spi)
 	dev_dbg(&spi->dev, "%s: start\n", __func__);
 
 	if (tp->mode & TP_MODE_BL) {
-		dev_err(&spi->dev, "%s: bl already started\n", __func__);
+		dev_dbg(&spi->dev, "%s: bl already started\n", __func__);
 		return;
 	}
 
@@ -1537,7 +1426,7 @@ static void cy8ctma300_bl_start(struct spi_device *spi)
 			goto err;
 
 		if ((read_buf[0] != 0x01) || (read_buf[1] != 0x00)) {
-			dev_err(&spi->dev, "%s: BootloaderEnter error "
+			dev_dbg(&spi->dev, "%s: BootloaderEnter error "
 					"read_buf=%x,%x\n", __func__,
 					read_buf[0], read_buf[1]);
 			reset++;
@@ -1580,9 +1469,8 @@ static void cy8ctma300_bl_end(struct spi_device *spi)
 
 	dev_dbg(&spi->dev, "%s: start\n", __func__);
 
-	if (!(tp->mode & TP_MODE_BL) &&
-		!(tp->bl_data.info_ready & TP_READY_BL)) {
-		dev_err(&spi->dev, "%s: bl not started\n", __func__);
+	if (!(tp->mode & TP_MODE_BL)) {
+		dev_dbg(&spi->dev, "%s: bl not started\n", __func__);
 		return;
 	}
 
@@ -1590,11 +1478,9 @@ static void cy8ctma300_bl_end(struct spi_device *spi)
 	err = reg_write_then_read_bl(spi, bl_exit_cmd,
 			ARRAY_SIZE(bl_exit_cmd), NULL, 0);
 	if (err) {
-		dev_err(&spi->dev, "%s: write/read error\n", __func__);
+		dev_dbg(&spi->dev, "%s: write/read error\n", __func__);
 		goto end;
 	}
-	/* need to wait after issuing EXIT bootloader mode command */
-	msleep(900);
 	dev_dbg(&spi->dev, "%s: BootloaderExit OK\n", __func__);
 end:
 	mutex_lock(&tp->s_lock);
@@ -1651,14 +1537,14 @@ static ssize_t cy8ctma300_bl_fw_write(struct kobject *kobj,
 
 	mutex_lock(&tp->touch_lock);
 	if (!(tp->mode & TP_MODE_BL)) {
-		dev_err(&spi->dev, "%s: bl not started\n", __func__);
+		dev_dbg(&spi->dev, "%s: bl not started\n", __func__);
 		goto end;
 	}
 
 	err = reg_write_then_read_bl(spi, buf, size, NULL, 0);
 
 	if (err)
-		dev_err(&spi->dev, "%s: write/read error\n", __func__);
+		dev_dbg(&spi->dev, "%s: write/read error\n", __func__);
 
 end:
 	mutex_unlock(&tp->touch_lock);
@@ -1681,7 +1567,7 @@ static ssize_t cy8ctma300_bl_fw_read(struct kobject *kobj,
 
 	mutex_lock(&tp->touch_lock);
 	if (!(tp->mode & TP_MODE_BL)) {
-		dev_err(&spi->dev, "%s: bl not started\n", __func__);
+		dev_dbg(&spi->dev, "%s: bl not started\n", __func__);
 		goto end;
 	}
 
@@ -1742,38 +1628,32 @@ static ssize_t cy8ctma300_cmd_store(struct device *dev,
 
 	ret_val = sscanf(buf, "%s", cmdstr);
 	if (ret_val != 1) {
-		dev_err(&spi->dev, "%s: cmd read error\n", __func__);
+		dev_dbg(&spi->dev, "%s: cmd read error\n", __func__);
 			ret_val = -EINVAL;
 			goto end;
 	}
 
 	if (strcmp(cmdstr, "blstart") == 0) {
-		err = sysfs_create_bin_file(&dev->kobj, &cy8ctma300_firmware);
-		if (err) {
-			dev_err(&spi->dev, "%s: cannot create file\n",
-				__func__);
-			ret_val = -EINVAL;
-			goto end;
-		}
 		cy8ctma300_bl_start(spi);
 		if (!(tp->mode & TP_MODE_BL)) {
 			ret_val = -EINVAL;
-			sysfs_remove_bin_file(&dev->kobj, &cy8ctma300_firmware);
+			goto end;
+		}
+		err = sysfs_create_bin_file(&dev->kobj, &cy8ctma300_firmware);
+		if (err) {
+			dev_dbg(&spi->dev, "%s: cannot create fiel\n",
+				__func__);
+			ret_val = -EINVAL;
 			goto end;
 		}
 	} else if (strcmp(cmdstr, "blend") == 0) {
 		dev_dbg(&spi->dev, "%s: cmd blend\n", __func__);
 		cy8ctma300_bl_end(spi);
-		sysfs_remove_bin_file(&dev->kobj, &cy8ctma300_firmware);
 	} else if (strcmp(cmdstr, "blcheck") == 0) {
 		cy8ctma300_bl_check(spi);
-	} else if (strcmp(cmdstr, "cmstart") == 0) {
-		cy8ctma300_charger_status_update(tp, true);
-	} else if (strcmp(cmdstr, "cmend") == 0) {
-		cy8ctma300_charger_status_update(tp, false);
 	} else {
 		/* not supported command */
-		dev_err(&spi->dev, "%s: cmd not supported\n", __func__);
+		dev_dbg(&spi->dev, "%s: cmd not supported\n", __func__);
 	}
 
 	ret_val = strlen(buf);
@@ -1797,7 +1677,7 @@ static const struct file_operations cy8ctma300_touch_fops = {
 static int cy8ctma300_touch_probe(struct spi_device *spi)
 {
 	struct cypress_touch_platform_data *pdata = spi->dev.platform_data;
-	struct cy8ctma300_touch *tp = NULL;
+	struct cy8ctma300_touch *tp;
 	int err = 0;
 	struct input_dev *dev;
 	dev_t device_t = MKDEV(0, 0);
@@ -1877,15 +1757,9 @@ static int cy8ctma300_touch_probe(struct spi_device *spi)
 	tp->esd_timer.data = (unsigned long)tp;
 	tp->esd_timer.expires = (unsigned long) (jiffies + (2*HZ));
 	init_timer(&tp->esd_timer);
-
-	/* initialize workers */
 	INIT_WORK(&tp->esd_worker, cy8ctma300_esd_worker);
-	/*
-	 * The resume sequence of this device requires huge delay,
-	 * resume worker is added to prevent the kernel's thread
-	 * (resume thread) from blocking.
-	 */
-	INIT_WORK(&tp->resume_worker, cy8ctma300_resume_worker);
+
+	/* initialize the work queue */
 	INIT_WORK(&tp->irq_worker, cy8ctma300_touch_worker);
 	init_waitqueue_head(&tp->wq);
 
@@ -1911,7 +1785,7 @@ static int cy8ctma300_touch_probe(struct spi_device *spi)
 
 	err = input_register_device(dev);
 	if (err)
-		goto err_cleanup_device_mem;
+		goto err_cleanup_mem;
 
 	dev_dbg(&spi->dev, "%s: Registered input device\n", __func__);
 
@@ -1950,7 +1824,7 @@ static int cy8ctma300_touch_probe(struct spi_device *spi)
 	/* sysfs */
 	err = device_create_file(&spi->dev, &dev_attr_touch_cmd);
 	if (err)
-		goto err_cleanup_device;
+		goto err_cleanup_class;
 
 #ifdef CONFIG_EARLYSUSPEND
 	/* register early suspend */
@@ -1966,7 +1840,7 @@ static int cy8ctma300_touch_probe(struct spi_device *spi)
 
 	if (err) {
 		dev_err(&spi->dev, "irq %d busy?\n", tp->spi->irq);
-		goto err_cleanup_file;
+		goto err_cleanup_device;
 	}
 
 	dev_dbg(&spi->dev, "%s: Registered IRQ\n", __func__);
@@ -1977,31 +1851,27 @@ static int cy8ctma300_touch_probe(struct spi_device *spi)
 
 	return 0;
 
-err_cleanup_file:
-	device_remove_file(&spi->dev, &dev_attr_touch_cmd);
+err_cleanup_device:
 #ifdef CONFIG_EARLYSUSPEND
 	unregister_early_suspend(&tp->early_suspend);
 #endif
-err_cleanup_device:
-	device_destroy(tp->device_class, MKDEV(tp->device_major, 0));
 err_cleanup_class:
 	class_destroy(tp->device_class);
 err_cleanup_cdev:
 	cdev_del(&(tp->device_cdev));
 err_cleanup_chrdev:
+	cdev_del(&(tp->device_cdev));
 	unregister_chrdev_region(device_t, 1);
 err_cleanup_input:
 	input_unregister_device(dev);
-	goto err_cleanup_mem;
-err_cleanup_device_mem:
-	input_free_device(dev);
 err_cleanup_mem:
-	mutex_destroy(&tp->touch_lock);
-	mutex_destroy(&tp->s_lock);
+	if (dev)
+		input_free_device(dev);
 	kfree(tp);
 err_gpio_setup:
 	gpio_free(pdata->gpio_reset_pin);
 	gpio_free(pdata->gpio_irq_pin);
+	mutex_destroy(&tp->touch_lock);
 	dev_err(&spi->dev, "%s: probe() fail: %d\n", __func__, err);
 	return err;
 }
@@ -2023,12 +1893,10 @@ static int __devexit cy8ctma300_touch_remove(struct spi_device *spi)
 		return -EBUSY;
 	}
 
+	gpio_free(pdata->gpio_reset_pin);
+	gpio_free(pdata->gpio_irq_pin);
+
 	cy8ctma300_touch_suspend(spi, PMSG_SUSPEND);
-	device_remove_file(&spi->dev, &dev_attr_touch_cmd);
-	if (tp->device_class && !IS_ERR(tp->device_class)){
-		device_destroy(tp->device_class, device_t);
-		class_destroy(tp->device_class);
-	}
 
 #ifdef CONFIG_EARLYSUSPEND
 	unregister_early_suspend(&tp->early_suspend);
@@ -2044,8 +1912,6 @@ static int __devexit cy8ctma300_touch_remove(struct spi_device *spi)
 	mutex_destroy(&tp->touch_lock);
 	mutex_destroy(&tp->s_lock);
 	kfree(tp);
-	gpio_free(pdata->gpio_reset_pin);
-	gpio_free(pdata->gpio_irq_pin);
 	dev_dbg(&spi->dev, "%s: unregistered touchscreen\n", __func__);
 
 	return 0;

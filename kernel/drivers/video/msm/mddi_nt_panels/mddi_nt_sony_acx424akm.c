@@ -52,13 +52,12 @@ static const struct novatek_reg_set novatek_display_on_regs[] = {
 
 static const struct novatek_reg_set novatek_display_off_regs[] = {
 	{ 0x2800, 0x0000 },	/* SET_DISPLAY_OFF */
-	{ 0x0000,     30 },	/* sleep_ms(30) */
 	{ 0, 0 }
 };
 
 static const struct novatek_reg_set novatek_takedown_regs[] = {
 	{ 0x1000, 0x0000 },
-	{ 0x0000,    180 },	/* sleep_ms(180) */
+	{ 0x0000,     70 },	/* sleep_ms(70) */
 	{ 0, 0 }
 };
 
@@ -84,7 +83,7 @@ static struct msm_fb_panel_data *get_panel_info(void)
 	novatek_panel_data.panel_info.bl_min = 1;
 	novatek_panel_data.panel_info.fb_num = 2;
 	novatek_panel_data.panel_info.mddi.vdopkt = MDDI_DEFAULT_PRIM_PIX_ATTR;
-	novatek_panel_data.panel_info.lcd.refx100 = 6000;
+	novatek_panel_data.panel_info.lcd.refx100 = 6500;
 	novatek_panel_data.panel_info.lcd.v_back_porch = 12;
 	novatek_panel_data.panel_info.lcd.v_front_porch = 14;
 	novatek_panel_data.panel_info.lcd.v_pulse_width = 0;
@@ -109,10 +108,8 @@ const struct panel_id novatek_panel_id_sony_acx424akm_type1 = {
 	.regs = { {0xDB00, 0x80}, {0xDC00, 0x02} },
 	.pinfo = &novatek_controller_panel,
 	.mddi_type = 1,
-	.width = 46,
-	.height = 82,
 	.suspend_support = 1,
-	.esd_support = 0,
+	.esd_support = 1,
 };
 
 const struct panel_id novatek_panel_id_sony_acx424akm = {
@@ -120,8 +117,6 @@ const struct panel_id novatek_panel_id_sony_acx424akm = {
 	.reg_count = 2,
 	.regs = { {0xDA00, 0x01}, {0xDC00, 0x02} },
 	.pinfo = &novatek_controller_panel,
-	.width = 46,
-	.height = 82,
 	.mddi_type = 2,
 	.suspend_support = 1,
 	.esd_support = 1,

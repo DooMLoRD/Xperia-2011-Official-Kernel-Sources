@@ -16,7 +16,6 @@
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
-#include <linux/delay.h>
 
 #define AS3676_NAME "as3676"
 
@@ -320,8 +319,6 @@ static const u8 as3676_i2c_registers[] = {
 #define AS3676_SLOW_PATTERN_BIT_DURATION_MS  250
 #define AS3676_FAST_PATTERN_BIT_DURATION_MS  31
 
-#define AS3676_REG_CTRL_WAIT_US  5000
-
 /* You can not possibly (probably?) have more interfaces than sinks.... Well,
  * you *could* but it would be really really stupid */
 #define AS3676_INTERFACE_MAX AS3676_SINK_MAX
@@ -381,16 +378,15 @@ struct as3676_record {
 	struct as3676_interface interfaces[AS3676_INTERFACE_MAX];
 	int n_interfaces;
 	struct work_struct work;
-	struct delayed_work delayed_work;
 	u8 registers[AS3676_REG_MAX];
 	u64 dcdcbit;
 	u64 regbit;
 	int als_connected;
-	int als_wait;
 	int dls_connected;
 	enum as3676_cmode cmode;
 	struct as3676_als_config als;
 	struct mutex lock;
+	int als_enabled;
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
 #endif
@@ -399,15 +395,13 @@ struct as3676_record {
 #define as3676_lock(rd) mutex_lock(&(rd)->lock)
 #define as3676_unlock(rd) mutex_unlock(&(rd)->lock)
 
-static void as3676_als_set_enable(struct as3676_record *rd, u8 enable);
-static void as3676_als_set_params(struct as3676_record *rd,
-				struct as3676_als_config *param);
-
 static inline u8 reg_get(struct as3676_record *rd, enum as3676_register reg)
 {
 	u8 ret;
 
+	as3676_lock(rd);
 	ret = rd->registers[reg];
+	as3676_unlock(rd);
 
 	return ret;
 }
@@ -432,8 +426,10 @@ static inline void reg_set(struct as3676_record *rd,
 		i2c_master_send(rd->client, (u8 *)&data, sizeof(data));
 		rd->registers[reg] = val;
 	} else {
+		as3676_lock(rd);
 		rd->regbit |= ((u64)1 << reg);
 		rd->registers[reg] = val;
+		as3676_unlock(rd);
 	}
 }
 
@@ -467,22 +463,6 @@ static void as3676_worker(struct work_struct *work)
 	rd->regbit = 0;
 
 	as3676_unlock(rd);
-}
-
-static void as3676_als_delayed_worker(struct work_struct *work)
-{
-	struct as3676_record *rd;
-	u8 val;
-
-	rd = container_of(work, struct as3676_record, delayed_work.work);
-	val = reg_get(rd, AS3676_REG_CTRL);
-
-	if (val) {
-		as3676_als_set_enable(rd, 1);
-		reg_set(rd, AS3676_ADC_CTRL, rd->als.source);
-	}
-
-	schedule_work(&rd->work);
 }
 
 static void as3676_set_amb(struct as3676_record *rd, enum as3676_register reg,
@@ -616,6 +596,28 @@ static void as3676_set_brightness(struct as3676_record *rd,
 	if (value < LED_OFF)
 		value = LED_OFF;
 
+	if (as3676_sink[reg].flags & AS3676_FLAG_DCDC_CTRL) {
+		u8 ctrl_val = reg_get(rd, AS3676_REG_CTRL);
+		u64 dcdcbit = rd->dcdcbit;
+		if (value == LED_OFF)
+			dcdcbit &= ~((u64)1 << reg);
+		else
+			dcdcbit |= ((u64)1 << reg);
+		if (dcdcbit != rd->dcdcbit) {
+			if (!dcdcbit) /* Disable Step-up */
+				reg_set(rd, AS3676_REG_CTRL, ctrl_val & ~0x08);
+			else if (!rd->dcdcbit) { /* Enable Step-up */
+				reg_set(rd, AS3676_REG_CTRL, ctrl_val | 0x08);
+				reg_set(rd, AS3676_DCDC_CTRL_1, 0xc2);
+				reg_set(rd, AS3676_DCDC_CTRL_2, 0x84);
+			}
+			rd->dcdcbit = dcdcbit;
+		}
+
+	}
+
+	reg_set(rd, reg, value);
+
 	if (rd->dls_connected && flags & AS3676_FLAG_DLS) {
 		ctrl_reg = as3676_sink[reg].dls;
 		off_bits = as3676_sink[reg].dls_bit;
@@ -632,8 +634,7 @@ static void as3676_set_brightness(struct as3676_record *rd,
 	ctrl_val &= ~(AS3676_CTRL_MASK << off_bits);
 	if (value == LED_OFF)
 		ctrl_val |= (AS3676_CTRL_OFF << off_bits);
-	else if ((flags & AS3676_FLAG_PWM_INIT) ||
-			(flags & AS3676_FLAG_PWM_CTRL))
+	else if (flags & AS3676_FLAG_PWM_INIT)
 		ctrl_val |= (AS3676_CTRL_PWM << off_bits);
 	else if (as3676_sink[reg].flags & AS3676_FLAG_EXT_CURR)
 		ctrl_val |= (AS3676_CTRL_EXT_CURR << off_bits);
@@ -642,63 +643,37 @@ static void as3676_set_brightness(struct as3676_record *rd,
 	else
 		ctrl_val |= (AS3676_CTRL_ON << off_bits);
 	reg_set(rd, ctrl_reg, ctrl_val);
-
-	if (as3676_sink[reg].flags & AS3676_FLAG_DCDC_CTRL) {
-		u8 ctrl_val = reg_get(rd, AS3676_REG_CTRL);
-		u64 dcdcbit = rd->dcdcbit;
-		if (value == LED_OFF)
-			dcdcbit &= ~((u64)1 << reg);
-		else
-			dcdcbit |= ((u64)1 << reg);
-		if (dcdcbit != rd->dcdcbit) {
-			if (!dcdcbit) { /* Disable Step-up */
-				reg_set(rd, AS3676_REG_CTRL, ctrl_val & ~0x08);
-			} else if (!rd->dcdcbit) { /* Enable Step-up */
-				reg_set(rd, AS3676_REG_CTRL, ctrl_val | 0x08);
-				usleep(AS3676_REG_CTRL_WAIT_US);
-			}
-			rd->dcdcbit = dcdcbit;
-		}
-	}
-
-	reg_set(rd, reg, value);
 }
 
 static void as3676_set_interface_brightness(struct as3676_interface *intf,
 		enum led_brightness value)
 {
 	int i;
-	enum as3676_cmode cmode;
 	struct as3676_record *rd;
 	rd = container_of(intf, struct as3676_record, interfaces[intf->index]);
 
-	cmode = rd->cmode;
-	rd->cmode = AS3676_CMODE_IMMEDIATE;
-
 	intf->cdev.brightness = value;
 
+	as3676_lock(rd);
 	if (intf->max_current)
 		value = (value * intf->max_current) / AS3676_MAX_CURRENT;
+	as3676_unlock(rd);
 
 	for (i = 0; i < ARRAY_SIZE(as3676_sink); ++i) {
 		if (intf->regs & ((u64)1 << i))
 			as3676_set_brightness(rd, i, value, intf->flags);
 	}
-	rd->cmode = cmode;
+	schedule_work(&rd->work);
 }
 
 static void as3676_brightness(struct led_classdev *led_cdev,
 		enum led_brightness value)
 {
 	struct as3676_interface *intf;
-	struct as3676_record *rd;
 
 	intf = container_of(led_cdev, struct as3676_interface, cdev);
-	rd = container_of(intf, struct as3676_record, interfaces[intf->index]);
 	dev_dbg(led_cdev->dev, "brightness i=%d, on=%d\n", intf->index, value);
-	as3676_lock(rd);
 	as3676_set_interface_brightness(intf, value);
-	as3676_unlock(rd);
 }
 
 
@@ -831,8 +806,10 @@ static void as3676_set_interface_blink(struct as3676_interface *intf,
 	if (value == LED_OFF)
 		value = LED_FULL;
 
+	as3676_lock(rd);
 	if (intf->max_current)
 		value = (value * intf->max_current) / AS3676_MAX_CURRENT;
+	as3676_unlock(rd);
 
 	if (*on == 0 && *off == 0)
 		*on = 500, *off = 500;
@@ -849,15 +826,11 @@ static int as3676_blink(struct led_classdev *led_cdev,
 		unsigned long *on, unsigned long *off)
 {
 	struct as3676_interface *intf;
-	struct as3676_record *rd;
 
 	intf = container_of(led_cdev, struct as3676_interface, cdev);
-	rd = container_of(intf, struct as3676_record, interfaces[intf->index]);
 	dev_dbg(led_cdev->dev, "blink i=%d, on=%ld, off=%ld\n",
 			intf->index, *on, *off);
-	as3676_lock(rd);
 	as3676_set_interface_blink(intf, on, off);
-	as3676_unlock(rd);
 	return 0;
 }
 #endif
@@ -887,22 +860,58 @@ static ssize_t as3676_als_value_show(struct kobject *kobj,
 	return ret;
 }
 
-static void as3676_als_set_adc_ctrl(struct as3676_record *rd)
+static void as3676_als_set_enable_internal(struct as3676_record *rd, u8 enable)
 {
-	u8 val;
+	u8 amb_ctrl = reg_get(rd, AS3676_AMB_CTRL);
 
-	/* Sometimes AS3676 has increased 200uA current consumption in standby
-	 * and need to handle it by sw. */
-	reg_set(rd, AS3676_ADC_CTRL, 0x80);
-	i2c_smbus_read_i2c_block_data(rd->client, AS3676_ADC_CTRL, 1, &val);
+	if (enable)
+		reg_set(rd, AS3676_AMB_CTRL, amb_ctrl | 0x01);
+	else
+		reg_set(rd, AS3676_AMB_CTRL, amb_ctrl & ~0x01);
+
+	/* Make sure it happens! */
+	if (rd->cmode != AS3676_CMODE_IMMEDIATE)
+		schedule_work(&rd->work);
 }
 
-static void as3676_als_set_enable(struct as3676_record *rd, u8 enable)
+/*
+ * Only to be controlled by user. No exceptions!
+ * Use as3676_als_set_enable_internal() if you need to control this inside
+ * the driver.
+ */
+static void as3676_als_set_enable(struct as3676_record *rd,
+		struct as3676_interface *intf, u8 enable)
 {
-	if (enable)
-		reg_set(rd, AS3676_AMB_CTRL, (rd->als.gain << 1) | 0x01);
-	else
-		reg_set(rd, AS3676_AMB_CTRL, 0x00);
+	as3676_als_set_enable_internal(rd, enable);
+
+	rd->als_enabled = (int)enable;
+
+	if (enable) {
+		enum as3676_amb_value group;
+
+		switch (intf->flags & AS3676_FLAG_ALS_MASK) {
+		case AS3676_FLAG_ALS_GROUP1:
+			group = AS3676_AMB_GROUP_1;
+			break;
+		case AS3676_FLAG_ALS_GROUP2:
+			group = AS3676_AMB_GROUP_2;
+			break;
+		case AS3676_FLAG_ALS_GROUP3:
+			group = AS3676_AMB_GROUP_3;
+			break;
+		default:
+			group = AS3676_AMB_OFF;
+			break;
+		}
+
+		as3676_set_interface_amb(rd, intf, group);
+	} else {
+		/* Turn off the curve */
+		as3676_set_interface_amb(rd, intf, AS3676_AMB_OFF);
+	}
+
+	/* Make it happen! */
+	schedule_work(&rd->work);
 }
 
 static ssize_t as3676_als_enable_store(struct kobject *kobj,
@@ -921,25 +930,11 @@ static ssize_t as3676_als_enable_store(struct kobject *kobj,
 	if (ret < 0 || (enable != 1 && enable != 0))
 		return -EINVAL;
 
-	as3676_lock(rd);
 	val = reg_get(rd, AS3676_AMB_CTRL) & 0x01;
 
-	if (enable != val) {
-		as3676_als_set_enable(rd, enable);
+	if (enable != val)
+		as3676_als_set_enable(rd, intf, enable);
 
-		if (enable) {
-			as3676_als_set_params(rd, &rd->als);
-			reg_set(rd, AS3676_ADC_CTRL, rd->als.source);
-		} else {
-			struct as3676_als_config param;
-
-			memset(&param, 0x00, sizeof(struct as3676_als_config));
-			as3676_als_set_params(rd, &param);
-			as3676_als_set_adc_ctrl(rd);
-		}
-	}
-
-	as3676_unlock(rd);
 	return strlen(buf);
 }
 
@@ -954,9 +949,7 @@ static ssize_t as3676_als_enable_show(struct kobject *kobj,
 	intf = container_of(kobj, struct as3676_interface, kobj);
 	rd = container_of(intf, struct as3676_record, interfaces[intf->index]);
 
-	as3676_lock(rd);
 	val = reg_get(rd, AS3676_AMB_CTRL);
-	as3676_unlock(rd);
 
 	return sprintf(buf, "%u\n", (val & 0x01) ? 1 : 0);
 }
@@ -989,7 +982,6 @@ static ssize_t as3676_als_curve_store(struct kobject *kobj,
 	if ((curve.x1 | curve.x2) & ~0xff)
 		return -EINVAL;
 
-	as3676_lock(rd);
 	intf->flags &= ~AS3676_FLAG_ALS_MASK;
 	switch (als_group) {
 	case AS3676_AMB_GROUP_1:
@@ -1009,7 +1001,6 @@ static ssize_t as3676_als_curve_store(struct kobject *kobj,
 				sizeof(struct as3676_als_curve));
 
 	as3676_set_als_config(rd, &rd->als, intf);
-	as3676_unlock(rd);
 
 	return count;
 }
@@ -1027,7 +1018,6 @@ static ssize_t as3676_als_curve_show(struct kobject *kobj,
 	intf = container_of(kobj, struct as3676_interface, kobj);
 	rd = container_of(intf, struct as3676_record, interfaces[intf->index]);
 
-	as3676_lock(rd);
 	length = sprintf(curve_str, "curve,y0,y3,k1,k2,x1,x2\n");
 	curve_str += length;
 
@@ -1041,7 +1031,6 @@ static ssize_t as3676_als_curve_show(struct kobject *kobj,
 			curve.k2, curve.x1, curve.x2);
 		curve_str += length;
 	}
-	as3676_unlock(rd);
 
 	return strlen(buf);
 }
@@ -1085,14 +1074,12 @@ static ssize_t as3676_als_params_store(struct kobject *kobj,
 		(param.offset >= 0xFF))
 		return -EINVAL;
 
-	as3676_lock(rd);
 	rd->als.gain = param.gain;
 	rd->als.filter_up = param.filter_up;
 	rd->als.filter_down = param.filter_down;
 	rd->als.offset = param.offset;
 
 	as3676_als_set_params(rd, &rd->als);
-	as3676_unlock(rd);
 
 	return strlen(buf);
 }
@@ -1145,18 +1132,17 @@ static ssize_t as3676_max_current_store(struct device *dev,
 
 	intf = container_of(led_cdev, struct as3676_interface, cdev);
 	rd = container_of(intf, struct as3676_record, interfaces[intf->index]);
+	pdata = rd->client->dev.platform_data;
 
 	ret = strict_strtoul(buf, 10, &curr_val);
 
 	if (ret != 0 || curr_val == 0)
 		return -EINVAL;
 
-	as3676_lock(rd);
-	pdata = rd->client->dev.platform_data;
-
 	if (curr_val > pdata->leds[intf->index].max_current)
 		curr_val = pdata->leds[intf->index].max_current;
 
+	as3676_lock(rd);
 	intf->max_current = (int)curr_val;
 	as3676_unlock(rd);
 
@@ -1191,19 +1177,13 @@ static ssize_t as3676_mode_store(struct device *dev,
 
 	ret = strict_strtoul(buf, 10, &mode);
 
-	if ((ret != 0) || (mode > AS3676_CTRL_PWM))
+	if ((ret != 0) || (mode > 3))
 		return -EINVAL;
-
-	as3676_lock(rd);
-	intf->flags &= ~AS3676_FLAG_PWM_CTRL;
-	if (mode == AS3676_CTRL_PWM)
-		intf->flags |= AS3676_FLAG_PWM_CTRL;
 
 	for (i = 0; i < ARRAY_SIZE(as3676_sink); ++i) {
 		if (intf->regs & ((u64)1 << i))
 			as3676_als_set_mode(rd, i, (u8)mode);
 	}
-	as3676_unlock(rd);
 
 	return size;
 }
@@ -1255,17 +1235,11 @@ static int as3676_pm_suspend(struct device *dev)
 	struct as3676_record *rd = i2c_get_clientdata(client);
 
 	dev_info(dev, "Suspending AS3676\n");
-
-	as3676_lock(rd);
 	rd->cmode = AS3676_CMODE_IMMEDIATE;
 	reg_set(rd, AS3676_REG_CTRL, 0x00);
 
-	if (rd->als_connected) {
-		as3676_als_set_enable(rd, 0);
-		as3676_als_set_adc_ctrl(rd);
-	}
-
-	as3676_unlock(rd);
+	if (rd->als_connected && rd->als_enabled)
+		as3676_als_set_enable_internal(rd, 0);
 
 	return 0;
 }
@@ -1276,22 +1250,12 @@ static int as3676_pm_resume(struct device *dev)
 	struct as3676_record *rd = i2c_get_clientdata(client);
 
 	dev_info(dev, "Resuming AS3676\n");
-
-	as3676_lock(rd);
 	reg_set(rd, AS3676_REG_CTRL, 0x0d);
 
-	if (rd->als_connected) {
-		if (rd->als_wait) {
-			schedule_delayed_work(&rd->delayed_work,
-					msecs_to_jiffies(rd->als_wait));
-		} else {
-			as3676_als_set_enable(rd, 1);
-			reg_set(rd, AS3676_ADC_CTRL, rd->als.source);
-		}
-	}
-	rd->cmode = AS3676_CMODE_SCHEDULED;
+	if (rd->als_connected && rd->als_enabled)
+		as3676_als_set_enable_internal(rd, 1);
 
-	as3676_unlock(rd);
+	rd->cmode = AS3676_CMODE_SCHEDULED;
 
 	return 0;
 }
@@ -1307,17 +1271,11 @@ static void as3676_early_suspend(struct early_suspend *handler)
 		container_of(handler, struct as3676_record, early_suspend);
 
 	dev_info(&rd->client->dev, "%s\n", __func__);
-
-	as3676_lock(rd);
 	rd->cmode = AS3676_CMODE_IMMEDIATE;
 	reg_set(rd, AS3676_REG_CTRL, 0x00);
 
-	if (rd->als_connected) {
-		as3676_als_set_enable(rd, 0);
-		as3676_als_set_adc_ctrl(rd);
-	}
-
-	as3676_unlock(rd);
+	if (rd->als_connected && rd->als_enabled)
+		as3676_als_set_enable_internal(rd, 0);
 }
 
 static void as3676_late_resume(struct early_suspend *handler)
@@ -1326,23 +1284,12 @@ static void as3676_late_resume(struct early_suspend *handler)
 		container_of(handler, struct as3676_record, early_suspend);
 
 	dev_info(&rd->client->dev, "%s\n", __func__);
-
-	as3676_lock(rd);
 	reg_set(rd, AS3676_REG_CTRL, 0x0d);
 
-	if (rd->als_connected) {
-		if (rd->als_wait) {
-			schedule_delayed_work(&rd->delayed_work,
-					msecs_to_jiffies(rd->als_wait));
-		} else {
-			as3676_als_set_enable(rd, 1);
-			reg_set(rd, AS3676_ADC_CTRL, rd->als.source);
-		}
-	}
+	if (rd->als_connected && rd->als_enabled)
+		as3676_als_set_enable_internal(rd, 1);
 
 	rd->cmode = AS3676_CMODE_SCHEDULED;
-
-	as3676_unlock(rd);
 }
 #endif
 
@@ -1353,7 +1300,6 @@ static void as3676_shutdown(struct i2c_client *client)
 
 	dev_info(&client->dev, "Shutting down AS3676\n");
 
-	as3676_lock(rd);
 	rd->cmode = AS3676_CMODE_IMMEDIATE;
 
 	for (i = 0; i < rd->n_interfaces; ++i)
@@ -1365,8 +1311,6 @@ static void as3676_shutdown(struct i2c_client *client)
 	reg_set(rd, AS3676_OVERTEMP_CTRL, 0x10);
 	if (rd->als_connected)
 		reg_set(rd, AS3676_AMB_CTRL, 0x0);
-
-	as3676_unlock(rd);
 }
 
 static int __devexit as3676_remove(struct i2c_client *client)
@@ -1387,7 +1331,6 @@ static int __devexit as3676_remove(struct i2c_client *client)
 	unregister_early_suspend(&rd->early_suspend);
 #endif
 
-	cancel_delayed_work_sync(&rd->delayed_work);
 	rd->cmode = AS3676_CMODE_IMMEDIATE;
 	reg_set(rd, AS3676_REG_CTRL, 0x00);
 
@@ -1451,20 +1394,40 @@ static int __devinit as3676_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	rd->als_connected = pdata->als_connected;
-	rd->als_wait = pdata->als_wait;
 	rd->dls_connected = pdata->dls_connected;
 
 	client->driver = &as3676_driver;
 
 	mutex_init(&rd->lock);
 	INIT_WORK(&rd->work, as3676_worker);
-	INIT_DELAYED_WORK(&rd->delayed_work, as3676_als_delayed_worker);
 
 	/* We will need the i2c device later */
 	rd->client = client;
 
-	rd->cmode = AS3676_CMODE_IMMEDIATE;
+	rd->cmode = AS3676_CMODE_SCHEDULED;
 
+	/* Enable charge pump and connect all leds to it */
+	/* TODO: double check that these are appropriate according to pdata */
+	reg_set(rd, AS3676_REG_CTRL, 0x0d);
+
+	if (pdata->ldo_mV <= 0) {
+		ldo_val = 0x1f;
+	} else if ((pdata->ldo_mV < AS3676_LDO_MIN) ||
+			(pdata->ldo_mV > AS3676_LDO_MAX)) {
+		dev_err(&client->dev, "ldo_mV in pdata is out-of-range\n");
+		err = -EINVAL;
+		goto error;
+	} else {
+		ldo_val = (pdata->ldo_mV - AS3676_LDO_MIN) / 50;
+	}
+
+	reg_set(rd, AS3676_LDO_VOLTAGE, ldo_val);
+
+	reg_set(rd, AS3676_MODE_SWITCH, 0x70);
+	reg_set(rd, AS3676_MODE_SWITCH_2, 0xe0);
+	/* Allow dimming up */
+	reg_set(rd, AS3676_REG_PWM_CODE, 0);
+	reg_set(rd, AS3676_REG_PWM_CTRL, 0<<3 | 1<<1);
 	i2c_set_clientdata(client, rd);
 	dev_set_drvdata(&client->dev, rd);
 
@@ -1485,14 +1448,8 @@ static int __devinit as3676_probe(struct i2c_client *client,
 		intf->index = i;
 
 		for (j = 0; j < AS3676_SINK_MAX; ++j) {
-			if (led->sinks & BIT(j)) {
+			if (led->sinks & BIT(j))
 				intf->regs |= ((u64)1 << as3676_sink_map[j]);
-				if (as3676_sink[as3676_sink_map[j]].flags &
-						AS3676_FLAG_DCDC_CTRL) {
-					reg_set(rd, AS3676_DCDC_CTRL_1, 0xc2);
-					reg_set(rd, AS3676_DCDC_CTRL_2, 0x8C);
-				}
-			}
 		}
 		err = led_classdev_register(&client->dev, &intf->cdev);
 		if (err < 0) {
@@ -1512,28 +1469,6 @@ static int __devinit as3676_probe(struct i2c_client *client,
 				"create dev_attr_mode failed\n");
 	}
 
-	/* Enable charge pump and connect all leds to it */
-	/* TODO: double check that these are appropriate according to pdata */
-	reg_set(rd, AS3676_REG_CTRL, 0x05);
-
-	if (pdata->ldo_mV <= 0) {
-		ldo_val = 0x1f;
-	} else if ((pdata->ldo_mV < AS3676_LDO_MIN) ||
-			(pdata->ldo_mV > AS3676_LDO_MAX)) {
-		dev_err(&client->dev, "ldo_mV in pdata is out-of-range\n");
-		err = -EINVAL;
-		goto error;
-	} else {
-		ldo_val = (pdata->ldo_mV - AS3676_LDO_MIN) / 50;
-	}
-
-	reg_set(rd, AS3676_LDO_VOLTAGE, ldo_val);
-
-	reg_set(rd, AS3676_MODE_SWITCH, 0x70);
-	/* Allow dimming up */
-	reg_set(rd, AS3676_REG_PWM_CODE, 0);
-	reg_set(rd, AS3676_REG_PWM_CTRL, 0<<3 | 1<<1);
-
 	if (pdata->als_config) {
 		memcpy(&rd->als, pdata->als_config,
 				sizeof(struct as3676_als_config));
@@ -1544,7 +1479,10 @@ static int __devinit as3676_probe(struct i2c_client *client,
 
 	if (rd->als_connected) {
 		as3676_als_set_params(rd, &rd->als);
-		as3676_als_set_enable(rd, 1);
+
+		/* By default, ALS should be enabled */
+		rd->als_enabled = 1;
+		as3676_als_set_enable_internal(rd, rd->als_enabled);
 	}
 
 	if (rd->dls_connected)
@@ -1557,8 +1495,6 @@ static int __devinit as3676_probe(struct i2c_client *client,
 		if ((rd->als_connected) && (intf->flags & AS3676_FLAG_ALS_MASK))
 			as3676_set_als_config(rd, &rd->als, intf);
 	}
-
-	rd->cmode = AS3676_CMODE_SCHEDULED;
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	rd->early_suspend.suspend = as3676_early_suspend;

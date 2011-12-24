@@ -97,8 +97,7 @@ enum as3676_led_flags {
 	AS3676_FLAG_ALS_GROUP2	= (1 << 3), /* connected to the ALS group2 */
 	AS3676_FLAG_ALS_GROUP3	= (1 << 4), /* connected to the ALS group3 */
 	AS3676_FLAG_PWM_INIT	= (1 << 5), /* should turn on slowly once */
-	AS3676_FLAG_PWM_CTRL	= (1 << 6),
-	AS3676_FLAG_DLS	= (1 << 7), /* should be connected to the DLS */
+	AS3676_FLAG_DLS		= (1 << 6), /* should be connected to the DLS */
 
 	AS3676_FLAG_ALS	= AS3676_FLAG_ALS_GROUP1,
 	AS3676_FLAG_ALS_MASK	= (AS3676_FLAG_ALS_GROUP1 |
@@ -122,7 +121,6 @@ enum as3676_ldo {
 struct as3676_platform_data {
 	struct as3676_platform_led *leds;
 	int als_connected;
-	int als_wait;
 	int dls_connected;
 	int num_leds;
 	struct as3676_als_config *als_config;

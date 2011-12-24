@@ -631,19 +631,6 @@ static void bq24185_stop_watchdog_reset(struct bq24185_data *bd)
 		MUTEX_UNLOCK(&bd->lock);
 		return;
 	}
-
-	/* Clear the 'disabled_by_xxx' flags.
-	 * If asic HW watchdog has been timed out, as it can from this
-	 * function, then asic will be resetted to default mode.
-	 * In default mode it will start charging as soon as VBUS goes high
-	 * again. Clearing these flags will allow this driver to set initial
-	 * settings that will put asic in non-charging mode when external
-	 * turns on the charger again.
-	 */
-	bd->chg_disabled_by_voltage = 0;
-	bd->chg_disabled_by_current = 0;
-	bd->chg_disabled_by_input_current = 0;
-	bd->chg_disable_vote = 0;
 	MUTEX_UNLOCK(&bd->lock);
 
 	cancel_delayed_work(&bd->work);
@@ -719,7 +706,7 @@ static void bq24185_set_init_values(struct bq24185_data *bd)
 	data = i2c_smbus_read_byte_data(bd->clientp, REG_DPM);
 	if (bd->usb_compliant_mode)
 		data = SET_MASK(REG_DPM_VINDPM_MASK,
-				DATA_MASK(REG_DPM_VINDPM_MASK, VINDPM_4550MV),
+				DATA_MASK(REG_DPM_VINDPM_MASK, VINDPM_4710MV),
 				data);
 	else
 		data = SET_MASK(REG_DPM_VINDPM_MASK,

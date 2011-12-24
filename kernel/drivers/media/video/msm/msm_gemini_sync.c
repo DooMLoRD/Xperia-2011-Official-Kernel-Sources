@@ -680,7 +680,6 @@ int msm_gemini_ioctl_hw_cmds(struct msm_gemini_device *pgmn_dev,
 
 	if (copy_from_user(hw_cmds_p, arg, len)) {
 		GMN_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
-		kfree(hw_cmds_p);
 		return -EFAULT;
 	}
 
@@ -691,11 +690,10 @@ int msm_gemini_ioctl_hw_cmds(struct msm_gemini_device *pgmn_dev,
 	if (is_copy_to_user >= 0) {
 		if (copy_to_user(arg, hw_cmds_p, len)) {
 			GMN_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
-			kfree(hw_cmds_p);
 			return -EFAULT;
 		}
 	}
-	kfree(hw_cmds_p);
+
 	return 0;
 }
 

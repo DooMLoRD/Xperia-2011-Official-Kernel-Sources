@@ -43,6 +43,7 @@
 #define DOUT_VALUE_IF_DETECTED  0
 
 #define APDS9702_NUM_TRIES      5
+#define APDS9702_WAIT_TIME      5
 
 struct apds9702data {
 	struct input_dev *input_dev;
@@ -65,6 +66,7 @@ static int apds9702_write_byte(struct i2c_client *i2c_client, u8 reg, u8 val)
 			dev_err(&i2c_client->dev,
 					"i2c_smbus write failed, %d\n", rc);
 			pdata->hw_config(0);
+			msleep(APDS9702_WAIT_TIME);
 			pdata->hw_config(1);
 		} else
 			return 0;
