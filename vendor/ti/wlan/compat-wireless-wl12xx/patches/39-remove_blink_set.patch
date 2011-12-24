@@ -1,0 +1,56 @@
+--- a/drivers/net/wireless/iwlegacy/iwl-led.c
++++ b/drivers/net/wireless/iwlegacy/iwl-led.c
+@@ -146,6 +146,7 @@ static void iwl_legacy_led_brightness_se
+ 	iwl_legacy_led_cmd(priv, on, 0);
+ }
+ 
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,25))
+ static int iwl_legacy_led_blink_set(struct led_classdev *led_cdev,
+ 			     unsigned long *delay_on,
+ 			     unsigned long *delay_off)
+@@ -154,6 +155,7 @@ static int iwl_legacy_led_blink_set(stru
+ 
+ 	return iwl_legacy_led_cmd(priv, *delay_on, *delay_off);
+ }
++#endif
+ 
+ void iwl_legacy_leds_init(struct iwl_priv *priv)
+ {
+@@ -166,7 +168,9 @@ void iwl_legacy_leds_init(struct iwl_pri
+ 	priv->led.name = kasprintf(GFP_KERNEL, "%s-led",
+ 				   wiphy_name(priv->hw->wiphy));
+ 	priv->led.brightness_set = iwl_legacy_led_brightness_set;
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,25))
+ 	priv->led.blink_set = iwl_legacy_led_blink_set;
++#endif
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
+ 	priv->led.max_brightness = 1;
+ #endif
+--- a/drivers/net/wireless/iwlwifi/iwl-led.c
++++ b/drivers/net/wireless/iwlwifi/iwl-led.c
+@@ -170,6 +170,7 @@ static void iwl_led_brightness_set(struc
+ 	iwl_led_cmd(priv, on, 0);
+ }
+ 
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,25))
+ static int iwl_led_blink_set(struct led_classdev *led_cdev,
+ 			     unsigned long *delay_on,
+ 			     unsigned long *delay_off)
+@@ -178,6 +179,7 @@ static int iwl_led_blink_set(struct led_
+ 
+ 	return iwl_led_cmd(priv, *delay_on, *delay_off);
+ }
++#endif
+ 
+ void iwl_leds_init(struct iwl_priv *priv)
+ {
+@@ -190,7 +192,9 @@ void iwl_leds_init(struct iwl_priv *priv
+ 	priv->led.name = kasprintf(GFP_KERNEL, "%s-led",
+ 				   wiphy_name(priv->hw->wiphy));
+ 	priv->led.brightness_set = iwl_led_brightness_set;
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,25))
+ 	priv->led.blink_set = iwl_led_blink_set;
++#endif
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
+ 	priv->led.max_brightness = 1;
+ #endif

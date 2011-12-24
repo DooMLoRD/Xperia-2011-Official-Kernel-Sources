@@ -42,8 +42,6 @@
 #include <sys/un.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 #include <bluetooth/rfcomm.h>
@@ -133,26 +131,6 @@ static void proxy_free(struct serial_proxy *prx)
 	g_free(prx);
 }
 
-static inline DBusMessage *does_not_exist(DBusMessage *msg,
-					const char *description)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".DoesNotExist",
-				description);
-}
-
-static inline DBusMessage *invalid_arguments(DBusMessage *msg,
-					const char *description)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".InvalidArguments",
-				description);
-}
-
-static inline DBusMessage *failed(DBusMessage *msg, const char *description)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-				description);
-}
-
 static void add_lang_attr(sdp_record_t *r)
 {
 	sdp_lang_attr_t base_lang;
@@ -222,25 +200,24 @@ static sdp_record_t *proxy_record_new(const char *uuid128, uint8_t channel)
 	return record;
 }
 
-static GIOError channel_write(GIOChannel *chan, char *buf, size_t size)
+static int channel_write(GIOChannel *chan, char *buf, size_t size)
 {
-	GIOError err = G_IO_ERROR_NONE;
-	gsize wbytes, written;
+	size_t wbytes;
+	ssize_t written;
+	int fd;
 
-	wbytes = written = 0;
+	fd = g_io_channel_unix_get_fd(chan);
+
+	wbytes = 0;
 	while (wbytes < size) {
-		err = g_io_channel_write(chan,
-				buf + wbytes,
-				size - wbytes,
-				&written);
-
-		if (err != G_IO_ERROR_NONE)
-			return err;
+		written = write(fd, buf + wbytes, size - wbytes);
+		if (written < 0)
+			return -errno;
 
 		wbytes += written;
 	}
 
-	return err;
+	return 0;
 }
 
 static gboolean forward_data(GIOChannel *chan, GIOCondition cond, gpointer data)
@@ -248,24 +225,25 @@ static gboolean forward_data(GIOChannel *chan, GIOCondition cond, gpointer data)
 	char buf[BUF_SIZE];
 	struct serial_proxy *prx = data;
 	GIOChannel *dest;
-	GIOError err;
-	size_t rbytes;
+	ssize_t rbytes;
+	int fd, err;
 
 	if (cond & G_IO_NVAL)
 		return FALSE;
 
 	dest = (chan == prx->rfcomm) ? prx->local : prx->rfcomm;
 
+	fd = g_io_channel_unix_get_fd(chan);
+
 	if (cond & (G_IO_HUP | G_IO_ERR)) {
 		/* Try forward remaining data */
 		do {
-			rbytes = 0;
-			err = g_io_channel_read(chan, buf, sizeof(buf), &rbytes);
-			if (err != G_IO_ERROR_NONE || rbytes == 0)
+			rbytes = read(fd, buf, sizeof(buf));
+			if (rbytes <= 0)
 				break;
 
 			err = channel_write(dest, buf, rbytes);
-		} while (err == G_IO_ERROR_NONE);
+		} while (err == 0);
 
 		g_io_channel_shutdown(prx->local, TRUE, NULL);
 		g_io_channel_unref(prx->local);
@@ -278,13 +256,12 @@ static gboolean forward_data(GIOChannel *chan, GIOCondition cond, gpointer data)
 		return FALSE;
 	}
 
-	rbytes = 0;
-	err = g_io_channel_read(chan, buf, sizeof(buf), &rbytes);
-	if (err != G_IO_ERROR_NONE)
+	rbytes = read(fd, buf, sizeof(buf));
+	if (rbytes < 0)
 		return FALSE;
 
 	err = channel_write(dest, buf, rbytes);
-	if (err != G_IO_ERROR_NONE)
+	if (err != 0)
 		return FALSE;
 
 	return TRUE;
@@ -334,8 +311,7 @@ static inline int unix_socket_connect(const char *address)
 static int tcp_socket_connect(const char *address)
 {
 	struct sockaddr_in addr;
-	int err, sk;
-	unsigned short int port;
+	int err, sk, port;
 
 	memset(&addr, 0, sizeof(addr));
 
@@ -567,13 +543,8 @@ static DBusMessage *proxy_enable(DBusConnection *conn,
 	int err;
 
 	err = enable_proxy(prx);
-	if (err == -EALREADY)
-		return failed(msg, "Already enabled");
-	else if (err == -ENOMEM)
-		return failed(msg, "Unable to allocate new service record");
-	else if (err < 0)
-		return g_dbus_create_error(msg, ERROR_INTERFACE "Failed",
-				"Proxy enable failed (%s)", strerror(-err));
+	if (err < 0)
+		return btd_error_failed(msg, strerror(-err));
 
 	return dbus_message_new_method_return(msg);
 }
@@ -584,7 +555,7 @@ static DBusMessage *proxy_disable(DBusConnection *conn,
 	struct serial_proxy *prx = data;
 
 	if (!prx->io)
-		return failed(msg, "Not enabled");
+		return btd_error_failed(msg, "Not enabled");
 
 	/* Remove the watches and unregister the record */
 	disable_proxy(prx);
@@ -744,7 +715,7 @@ static DBusMessage *proxy_set_serial_params(DBusConnection *conn,
 
 	/* Don't allow change TTY settings if it is open */
 	if (prx->local)
-		return failed(msg, "Not allowed");
+		return btd_error_not_authorized(msg);
 
 	if (!dbus_message_get_args(msg, NULL,
 				DBUS_TYPE_STRING, &ratestr,
@@ -755,17 +726,17 @@ static DBusMessage *proxy_set_serial_params(DBusConnection *conn,
 		return NULL;
 
 	if (str2speed(ratestr, &speed)  == B0)
-		return invalid_arguments(msg, "Invalid baud rate");
+		return btd_error_invalid_args(msg);
 
 	ctrl = prx->proxy_ti.c_cflag;
 	if (set_databits(databits, &ctrl) < 0)
-		return invalid_arguments(msg, "Invalid data bits");
+		return btd_error_invalid_args(msg);
 
 	if (set_stopbits(stopbits, &ctrl) < 0)
-		return invalid_arguments(msg, "Invalid stop bits");
+		return btd_error_invalid_args(msg);
 
 	if (set_parity(paritystr, &ctrl) < 0)
-		return invalid_arguments(msg, "Invalid parity");
+		return btd_error_invalid_args(msg);
 
 	prx->proxy_ti.c_cflag = ctrl;
 	prx->proxy_ti.c_cflag |= (CLOCAL | CREAD);
@@ -1057,19 +1028,17 @@ static DBusMessage *create_proxy(DBusConnection *conn,
 
 	uuid_str = bt_name2string(pattern);
 	if (!uuid_str)
-		return invalid_arguments(msg, "Invalid UUID");
+		return btd_error_invalid_args(msg);
 
 	err = register_proxy(adapter, uuid_str, address, &proxy);
 	g_free(uuid_str);
 
 	if (err == -EINVAL)
-		return invalid_arguments(msg, "Invalid address");
+		return btd_error_invalid_args(msg);
 	else if (err == -EALREADY)
-		return g_dbus_create_error(msg, ERROR_INTERFACE ".AlreadyExist",
-						"Proxy already exists");
+		return btd_error_already_exists(msg);
 	else if (err < 0)
-		return g_dbus_create_error(msg, ERROR_INTERFACE "Failed",
-				"Proxy creation failed (%s)", strerror(-err));
+		return btd_error_failed(msg, strerror(-err));
 
 	proxy->owner = g_strdup(dbus_message_get_sender(msg));
 	proxy->watch = g_dbus_add_disconnect_watch(conn, proxy->owner,
@@ -1123,13 +1092,13 @@ static DBusMessage *remove_proxy(DBusConnection *conn,
 
 	l = g_slist_find_custom(adapter->proxies, path, proxy_pathcmp);
 	if (!l)
-		return does_not_exist(msg, "Invalid proxy path");
+		return btd_error_does_not_exist(msg);
 
 	prx = l->data;
 
 	sender = dbus_message_get_sender(msg);
 	if (g_strcmp0(prx->owner, sender) != 0)
-		return failed(msg, "Permission denied");
+		return btd_error_not_authorized(msg);
 
 	unregister_proxy(prx);
 
@@ -1176,10 +1145,8 @@ static GDBusSignalTable manager_signals[] = {
 static struct serial_adapter *find_adapter(GSList *list,
 					struct btd_adapter *btd_adapter)
 {
-	GSList *l;
-
-	for (l = list; l; l = l->next) {
-		struct serial_adapter *adapter = l->data;
+	for (; list; list = list->next) {
+		struct serial_adapter *adapter = list->data;
 
 		if (adapter->btd_adapter == btd_adapter)
 			return adapter;

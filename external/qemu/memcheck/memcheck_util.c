@@ -14,20 +14,14 @@
  * Contains implementation of utility routines for memchecker framework.
  */
 
-/* This file should compile iff qemu is built with memory checking
- * configuration turned on. */
-#ifndef CONFIG_MEMCHECK
-#error CONFIG_MEMCHECK is not defined.
-#endif  // CONFIG_MEMCHECK
-
 #include "stdio.h"
 #include "qemu-common.h"
 #include "android/utils/path.h"
 #include "cpu.h"
-#include "softmmu_outside_jit.h"
+#include "memcheck_util.h"
 #include "memcheck_proc_management.h"
 #include "memcheck_logging.h"
-#include "memcheck_util.h"
+//#include "softmmu_outside_jit.h"
 
 /* Gets symblos file path for the given module.
  * Param:
@@ -102,7 +96,7 @@ memcheck_get_guest_buffer(void* qemu_address,
      * read / write guest's memory. */
     while (buffer_size) {
         *(uint8_t*)qemu_address = ldub_user(guest_address);
-        (uint32_t)qemu_address++;
+        qemu_address = (uint8_t*)qemu_address + 1;
         guest_address++;
         buffer_size--;
     }
@@ -116,7 +110,7 @@ memcheck_set_guest_buffer(target_ulong guest_address,
     while (buffer_size) {
         stb_user(guest_address, *(uint8_t*)qemu_address);
         guest_address++;
-        (uint32_t)qemu_address++;
+        qemu_address = (uint8_t*)qemu_address + 1;
         buffer_size--;
     }
 }

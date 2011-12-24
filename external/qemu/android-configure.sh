@@ -26,9 +26,15 @@ OPTION_DEBUG=no
 OPTION_STATIC=no
 OPTION_MINGW=no
 
-if [ -z "$CC" ] ; then
-  CC=gcc
-fi
+GLES_INCLUDE=
+GLES_LIBS=
+GLES_SUPPORT=no
+GLES_PROBE=yes
+
+HOST_CC=${CC:-gcc}
+OPTION_CC=
+
+TARGET_ARCH=arm
 
 for opt do
   optarg=`expr "x$opt" : 'x[^=]*=\(.*\)'`
@@ -50,7 +56,7 @@ for opt do
   ;;
   --mingw) OPTION_MINGW=yes
   ;;
-  --cc=*) CC="$optarg" ; HOSTCC=$CC
+  --cc=*) OPTION_CC="$optarg"
   ;;
   --no-strip) OPTION_NO_STRIP=yes
   ;;
@@ -63,6 +69,16 @@ for opt do
   --try-64) OPTION_TRY_64=yes
   ;;
   --static) OPTION_STATIC=yes
+  ;;
+  --arch=*) TARGET_ARCH=$optarg
+  ;;
+  --gles-include=*) GLES_INCLUDE=$optarg
+  GLES_SUPPORT=yes
+  ;;
+  --gles-libs=*) GLES_LIBS=$optarg
+  GLES_SUPPORT=yes
+  ;;
+  --no-gles) GLES_PROBE=no
   ;;
   *)
     echo "unknown option '$opt', use --help"
@@ -81,7 +97,8 @@ EOF
     echo "Standard options:"
     echo "  --help                   print this message"
     echo "  --install=FILEPATH       copy emulator executable to FILEPATH [$TARGETS]"
-    echo "  --cc=PATH                specify C compiler [$CC]"
+    echo "  --cc=PATH                specify C compiler [$HOST_CC]"
+    echo "  --arch=ARM               specify target architecture [$TARGET_ARCH]"
     echo "  --sdl-config=FILE        use specific sdl-config script [$SDL_CONFIG]"
     echo "  --no-strip               do not strip emulator executable"
     echo "  --debug                  enable debug (-O0 -g) build"
@@ -92,8 +109,27 @@ EOF
     echo "  --static                 build a completely static executable"
     echo "  --verbose                verbose configuration"
     echo "  --debug                  build debug version of the emulator"
+    echo "  --gles-include=PATH      specify path to GLES emulation headers"
+    echo "  --gles-libs=PATH         specify path to GLES emulation host libraries"
+    echo "  --no-gles                disable GLES emulation support"
     echo ""
     exit 1
+fi
+
+# On Linux, try to use our 32-bit prebuilt toolchain to generate binaries
+# that are compatible with Ubuntu 8.04
+if [ -z "$CC" -a -z "$OPTION_CC" -a "$HOST_OS" = linux -a "$OPTION_TRY_64" != "yes" ] ; then
+    HOST_CC=`dirname $0`/../../prebuilt/linux-x86/toolchain/i686-linux-glibc2.7-4.4.3/bin/i686-linux-gcc
+    if [ -f "$HOST_CC" ] ; then
+        echo "Using prebuilt 32-bit toolchain: $HOST_CC"
+        CC="$HOST_CC"
+    fi
+fi
+
+echo "OPTION_CC='$OPTION_CC'"
+if [ -n "$OPTION_CC" ]; then
+    echo "Using specified C compiler: $OPTION_CC"
+    CC="$OPTION_CC"
 fi
 
 # we only support generating 32-bit binaris on 64-bit systems.
@@ -104,10 +140,22 @@ if [ "$OPTION_TRY_64" != "yes" ] ; then
     force_32bit_binaries
 fi
 
+case $OS in
+    linux-*)
+        TARGET_DLL_SUFFIX=.so
+        ;;
+    darwin-*)
+        TARGET_DLL_SUFFIX=.dylib
+        ;;
+    windows*)
+        TARGET_DLL_SUFFIX=.dll
+esac
+
 TARGET_OS=$OS
-if [ "$OPTION_MINGW" == "yes" ] ; then
+if [ "$OPTION_MINGW" = "yes" ] ; then
     enable_linux_mingw
     TARGET_OS=windows
+    TARGET_DLL_SUFFIX=.dll
 else
     enable_cygwin
 fi
@@ -125,6 +173,14 @@ check_android_build
 if [ "$OPTION_NO_PREBUILTS" = "yes" ] ; then
     IN_ANDROID_BUILD=no
 fi
+
+# This is the list of static and shared host libraries we need to link
+# against in order to support OpenGLES emulation properly. Note that in
+# the case of a standalone build, we will find these libraries inside the
+# platform build tree and copy them into objs/lib/ automatically, unless
+# you use --gles-libs to point explicitely to a different directory.
+#
+GLES_SHARED_LIBRARIES="libOpenglRender libGLES_CM_translator libGLES_V2_translator libEGL_translator"
 
 if [ "$IN_ANDROID_BUILD" = "yes" ] ; then
     locate_android_prebuilt
@@ -149,6 +205,9 @@ if [ "$IN_ANDROID_BUILD" = "yes" ] ; then
     # finally ensure that our new binary is copied to the 'out'
     # subdirectory as 'emulator'
     HOST_BIN=$(get_android_abs_build_var HOST_OUT_EXECUTABLES)
+    if [ "$TARGET_OS" = "windows" ]; then
+        HOST_BIN=$(echo $HOST_BIN | sed "s%$OS/bin%windows/bin%")
+    fi
     if [ -n "$HOST_BIN" ] ; then
         OPTION_TARGETS="$OPTION_TARGETS $HOST_BIN/emulator$EXE"
         log "Targets    : TARGETS=$OPTION_TARGETS"
@@ -162,8 +221,70 @@ if [ "$IN_ANDROID_BUILD" = "yes" ] ; then
     else
         log "Tools      : Could not locate $TOOLS_PROPS !?"
     fi
+
+    # Try to find the GLES emulation headers and libraries automatically
+    if [ "$GLES_PROBE" = "yes" ]; then
+        GLES_SUPPORT=yes
+        if [ -z "$GLES_INCLUDE" ]; then
+            log "GLES       : Probing for headers"
+            GLES_INCLUDE=$ANDROID_TOP/development/tools/emulator/opengl/host/include
+            if [ -d "$GLES_INCLUDE" ]; then
+                log "GLES       : Headers in $GLES_INCLUDE"
+            else
+                echo "Warning: Could not find OpenGLES emulation include dir: $GLES_INCLUDE"
+                echo "Disabling GLES emulation from this build!"
+                GLES_SUPPORT=no
+            fi
+        fi
+        if [ -z "$GLES_LIBS" ]; then
+            log "GLES       : Probing for host libraries"
+            GLES_LIBS=$(dirname "$HOST_BIN")/lib
+            if [ -d "$GLES_LIBS" ]; then
+                echo "GLES       : Libs in $GLES_LIBS"
+            else
+                echo "Warning: Could nof find OpenGLES emulation libraries in: $GLES_LIBS"
+                echo "Disabling GLES emulation from this build!"
+                GLES_SUPPORT=no
+            fi
+        fi
+    fi
 fi  # IN_ANDROID_BUILD = no
 
+if [ "$GLES_SUPPORT" = "yes" ]; then
+    if [ -z "$GLES_INCLUDE" -o -z "$GLES_LIBS" ]; then
+        echo "ERROR: You must use both --gles-include and --gles-libs at the same time!"
+        echo "       Or use --no-gles to disable its support from this build."
+        exit 1
+    fi
+
+    GLES_HEADER=$GLES_INCLUDE/libOpenglRender/render_api.h
+    if [ ! -f "$GLES_HEADER" ]; then
+        echo "ERROR: Missing OpenGLES emulation header file: $GLES_HEADER"
+        echo "Please fix this by using --gles-include to point to the right directory!"
+        exit 1
+    fi
+
+    mkdir -p objs/lib
+
+    for lib in $GLES_SHARED_LIBRARIES; do
+        GLES_LIB=$GLES_LIBS/${lib}$TARGET_DLL_SUFFIX
+        if [ ! -f "$GLES_LIB" ]; then
+            echo "ERROR: Missing OpenGLES emulation host library: $GLES_LIB"
+            echo "Please fix this by using --gles-libs to point to the right directory!"
+            if [ "$IN_ANDROID_BUILD" = "true" ]; then
+                echo "You might also be missing the library because you forgot to rebuild the whole platform!"
+            fi
+            exit 1
+        fi
+        cp $GLES_LIB objs/lib
+        if [ $? != 0 ]; then
+            echo "ERROR: Could not find required OpenGLES emulation library: $GLES_LIB"
+            exit 1
+        else
+            log "GLES       : Copying $GLES_LIB"
+        fi
+    done
+fi
 
 # we can build the emulator with Cygwin, so enable it
 enable_cygwin
@@ -182,7 +303,7 @@ if [ -n "$SDL_CONFIG" ] ; then
 	SDL_LIBS=`$SDL_CONFIG --static-libs`
 
 	# quick hack, remove the -D_GNU_SOURCE=1 of some SDL Cflags
-	# since they break recent Mingw releases
+7	# since they break recent Mingw releases
 	SDL_CFLAGS=`echo $SDL_CFLAGS | sed -e s/-D_GNU_SOURCE=1//g`
 
 	log "SDL-probe  : SDL_CFLAGS = $SDL_CFLAGS"
@@ -202,7 +323,7 @@ if [ -n "$SDL_CONFIG" ] ; then
 #include <SDL.h>
 #undef main
 int main( int argc, char** argv ) {
-   return SDL_Init (SDL_INIT_VIDEO); 
+   return SDL_Init (SDL_INIT_VIDEO);
 }
 EOF
 	feature_check_link  SDL_LINKING
@@ -229,7 +350,7 @@ int main( int argc, char** argv ) {
 	SDL_WM_SetPos(x, y);
 	SDL_WM_GetMonitorDPI(&x, &y);
 	SDL_WM_GetMonitorRect(&r);
-	return SDL_Init (SDL_INIT_VIDEO); 
+	return SDL_Init (SDL_INIT_VIDEO);
 }
 EOF
 	feature_check_link  SDL_LINKING
@@ -258,12 +379,13 @@ PROBE_COREAUDIO=no
 PROBE_ALSA=no
 PROBE_OSS=no
 PROBE_ESD=no
+PROBE_PULSEAUDIO=no
 PROBE_WINAUDIO=no
 
 case "$TARGET_OS" in
     darwin*) PROBE_COREAUDIO=yes;
     ;;
-    linux-*) PROBE_ALSA=yes; PROBE_OSS=yes; PROBE_ESD=yes;
+    linux-*) PROBE_ALSA=yes; PROBE_OSS=yes; PROBE_ESD=yes; PROBE_PULSEAUDIO=yes;
     ;;
     freebsd-*) PROBE_OSS=yes;
     ;;
@@ -274,45 +396,45 @@ esac
 ORG_CFLAGS=$CFLAGS
 ORG_LDFLAGS=$LDFLAGS
 
-if [ "$PROBE_ESD" = yes ] ; then
-    CFLAGS="$ORG_CFLAGS"
-    LDFLAGS="$ORG_LDFLAGS -ldl"
-    cp -f android/config/check-esd.c $TMPC
-    compile && link && $TMPE
-    if [ $? = 0 ] ; then
-        log "AudioProbe : ESD seems to be usable on this system"
-    else
-        if [ "$OPTION_IGNORE_AUDIO" = no ] ; then
-            echo "the EsounD development files do not seem to be installed on this system"
-            echo "Are you missing the libesd-dev package ?"
-            echo "Correct the errors below and try again:"
-            cat $TMPL
-            clean_exit
-        fi
-        PROBE_ESD=no
-        log "AudioProbe : ESD seems to be UNUSABLE on this system !!"
-    fi
+if [ "$OPTION_IGNORE_AUDIO" = "yes" ] ; then
+PROBE_ESD_ESD=no
+PROBE_ALSA=no
+PROBE_PULSEAUDIO=no
 fi
 
-if [ "$PROBE_ALSA" = yes ] ; then
-    CFLAGS="$ORG_CFLAGS"
-    LDFLAGS="$ORG_CFLAGS -ldl"
-    cp -f android/config/check-alsa.c $TMPC
-    compile && link && $TMPE
-    if [ $? = 0 ] ; then
-        log "AudioProbe : ALSA seems to be usable on this system"
-    else
-        if [ "$OPTION_IGNORE_AUDIO" = no ] ; then
-            echo "the ALSA development files do not seem to be installed on this system"
-            echo "Are you missing the libasound-dev package ?"
-            echo "Correct the erros below and try again"
-            cat $TMPL
-            clean_exit
+# Probe a system library
+#
+# $1: Variable name (e.g. PROBE_ESD)
+# $2: Library name (e.g. "Alsa")
+# $3: Path to source file for probe program (e.g. android/config/check-alsa.c)
+# $4: Package name (e.g. libasound-dev)
+#
+probe_system_library ()
+{
+    if [ `var_value $1` = yes ] ; then
+        CFLAGS="$ORG_CFLAGS"
+        LDFLAGS="$ORG_LDFLAGS -ldl"
+        cp -f android/config/check-esd.c $TMPC
+        compile
+        if [ $? = 0 ] ; then
+            log "AudioProbe : $2 seems to be usable on this system"
+        else
+            if [ "$OPTION_IGNORE_AUDIO" = no ] ; then
+                echo "The $2 development files do not seem to be installed on this system"
+                echo "Are you missing the $4 package ?"
+                echo "Correct the errors below and try again:"
+                cat $TMPL
+                clean_exit
+            fi
+            eval $1=no
+            log "AudioProbe : $2 seems to be UNUSABLE on this system !!"
         fi
-        PROBE_ALSA=no
-        log "AudioProbe : ALSA seems to be UNUSABLE on this system !!"
     fi
-fi
+}
+
+probe_system_library PROBE_ESD        ESounD     android/config/check-esd.c libesd-dev
+probe_system_library PROBE_ALSA       Alsa       android/config/check-alsa.c libasound-dev
+probe_system_library PROBE_PULSEAUDIO PulseAudio android/config/check-pulseaudio.c libpulse-dev
 
 CFLAGS=$ORG_CFLAGS
 LDFLAGS=$ORG_LDFLAGS
@@ -341,7 +463,7 @@ cat > $TMPC << EOF
 #include <inttypes.h>
 int main(int argc, char ** argv){
         volatile uint32_t i=0x01234567;
-        return (*((uint8_t*)(&i))) == 0x67;
+        return (*((uint8_t*)(&i))) == 0x01;
 }
 EOF
 feature_run_exec HOST_BIGENDIAN
@@ -360,27 +482,47 @@ fi
 
 # check whether we have <byteswap.h>
 #
-feature_check_header HAVE_BYTESWAP_H "<byteswap.h>"
+feature_check_header HAVE_BYTESWAP_H      "<byteswap.h>"
+feature_check_header HAVE_MACHINE_BSWAP_H "<machine/bswap.h>"
+feature_check_header HAVE_FNMATCH_H       "<fnmatch.h>"
 
 # Build the config.make file
 #
 
+case $TARGET_OS in
+    windows)
+        TARGET_EXEEXT=.exe
+        ;;
+    *)
+        TARGET_EXEEXT=
+        ;;
+esac
+
 create_config_mk
 echo "" >> $config_mk
+if [ $TARGET_ARCH = arm ] ; then
 echo "TARGET_ARCH       := arm" >> $config_mk
+fi
+
+if [ $TARGET_ARCH = x86 ] ; then
+echo "TARGET_ARCH       := x86" >> $config_mk
+fi
+
 echo "HOST_PREBUILT_TAG := $TARGET_OS" >> $config_mk
+echo "HOST_EXEEXT       := $TARGET_EXEEXT" >> $config_mk
 echo "PREBUILT          := $ANDROID_PREBUILT" >> $config_mk
 
 PWD=`pwd`
 echo "SRC_PATH          := $PWD" >> $config_mk
 if [ -n "$SDL_CONFIG" ] ; then
-echo "SDL_CONFIG         := $SDL_CONFIG" >> $config_mk
+echo "QEMU_SDL_CONFIG   := $SDL_CONFIG" >> $config_mk
 fi
 echo "CONFIG_COREAUDIO  := $PROBE_COREAUDIO" >> $config_mk
 echo "CONFIG_WINAUDIO   := $PROBE_WINAUDIO" >> $config_mk
 echo "CONFIG_ESD        := $PROBE_ESD" >> $config_mk
 echo "CONFIG_ALSA       := $PROBE_ALSA" >> $config_mk
 echo "CONFIG_OSS        := $PROBE_OSS" >> $config_mk
+echo "CONFIG_PULSEAUDIO := $PROBE_PULSEAUDIO" >> $config_mk
 echo "BUILD_STANDALONE_EMULATOR := true" >> $config_mk
 if [ $OPTION_DEBUG = yes ] ; then
     echo "BUILD_DEBUG_EMULATOR := true" >> $config_mk
@@ -399,6 +541,11 @@ if [ "$OPTION_MINGW" = "yes" ] ; then
     echo "HOST_OS   := windows" >> $config_mk
 fi
 
+if [ "$GLES_INCLUDE" -a "$GLES_LIBS" ]; then
+    echo "QEMU_OPENGLES_INCLUDE    := $GLES_INCLUDE" >> $config_mk
+    echo "QEMU_OPENGLES_LIBS       := $GLES_LIBS"    >> $config_mk
+fi
+
 # Build the config-host.h file
 #
 config_h=objs/config-host.h
@@ -406,17 +553,44 @@ echo "/* This file was autogenerated by '$PROGNAME' */" > $config_h
 echo "#define CONFIG_QEMU_SHAREDIR   \"/usr/local/share/qemu\"" >> $config_h
 echo "#define HOST_LONG_BITS  $HOST_LONGBITS" >> $config_h
 if [ "$HAVE_BYTESWAP_H" = "yes" ] ; then
-  echo "#define HAVE_BYTESWAP_H 1" >> $config_h
+  echo "#define CONFIG_BYTESWAP_H 1" >> $config_h
+fi
+if [ "$HAVE_MACHINE_BYTESWAP_H" = "yes" ] ; then
+  echo "#define CONFIG_MACHINE_BSWAP_H 1" >> $config_h
+fi
+if [ "$HAVE_FNMATCH_H" = "yes" ] ; then
+  echo "#define CONFIG_FNMATCH  1" >> $config_h
 fi
 echo "#define CONFIG_GDBSTUB  1" >> $config_h
 echo "#define CONFIG_SLIRP    1" >> $config_h
 echo "#define CONFIG_SKINS    1" >> $config_h
 echo "#define CONFIG_TRACE    1" >> $config_h
 
+case "$TARGET_OS" in
+    windows)
+        echo "#define CONFIG_WIN32  1" >> $config_h
+        ;;
+    *)
+        echo "#define CONFIG_POSIX  1" >> $config_h
+        ;;
+esac
+
+case "$TARGET_OS" in
+    linux-*)
+        echo "#define CONFIG_KVM_GS_RESTORE 1" >> $config_h
+        ;;
+esac
+
 # only Linux has fdatasync()
 case "$TARGET_OS" in
     linux-*)
         echo "#define CONFIG_FDATASYNC    1" >> $config_h
+        ;;
+esac
+
+case "$TARGET_OS" in
+    linux-*|darwin-*)
+        echo "#define CONFIG_MADVISE  1" >> $config_h
         ;;
 esac
 
@@ -437,6 +611,9 @@ case "$CPU" in
     ;;
 esac
 echo "#define HOST_$CONFIG_CPU    1" >> $config_h
+if [ "$HOST_BIGENDIAN" = "1" ] ; then
+  echo "#define HOST_WORDS_BIGENDIAN 1" >> $config_h
+fi
 BSD=0
 case "$TARGET_OS" in
     linux-*) CONFIG_OS=LINUX
@@ -468,6 +645,12 @@ if [ $BSD = 1 ] ; then
     echo "#define CONFIG_BSD       1" >> $config_h
     echo "#define O_LARGEFILE      0" >> $config_h
     echo "#define MAP_ANONYMOUS    MAP_ANON" >> $config_h
+fi
+
+echo "#define CONFIG_ANDROID       1" >> $config_h
+
+if [ "$GLES_INCLUDE" -a "$GLES_LIBS" ]; then
+    echo "#define CONFIG_ANDROID_OPENGLES 1" >> $config_h
 fi
 
 log "Generate   : $config_h"

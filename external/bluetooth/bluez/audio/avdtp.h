@@ -4,8 +4,6 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010, Code Aurora Forum
- *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -25,11 +23,6 @@
  */
 
 typedef enum {
-	AVDTP_ERROR_ERRNO,
-	AVDTP_ERROR_ERROR_CODE
-} avdtp_error_type_t;
-
-typedef enum {
 	AVDTP_SESSION_STATE_DISCONNECTED,
 	AVDTP_SESSION_STATE_CONNECTING,
 	AVDTP_SESSION_STATE_CONNECTED
@@ -40,7 +33,7 @@ struct avdtp_stream;
 struct avdtp_local_sep;
 struct avdtp_remote_sep;
 struct avdtp_error {
-	avdtp_error_type_t type;
+	uint8_t category;
 	union {
 		uint8_t error_code;
 		int posix_errno;
@@ -56,6 +49,7 @@ struct avdtp_error {
 #define AVDTP_MULTIPLEXING			0x06
 #define AVDTP_MEDIA_CODEC			0x07
 #define AVDTP_DELAY_REPORTING			0x08
+#define AVDTP_ERRNO				0xff
 
 /* AVDTP error definitions */
 #define AVDTP_BAD_HEADER_FORMAT			0x01
@@ -100,11 +94,6 @@ struct avdtp_service_capability {
 	uint8_t data[0];
 } __attribute__ ((packed));
 
-struct avdtp_content_protection_capability {
-	uint8_t cp_type_lsb;
-	uint8_t cp_type_msb;
-} __attribute__ ((packed));
-
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 
 struct avdtp_media_codec_capability {
@@ -138,6 +127,10 @@ typedef void (*avdtp_stream_state_cb) (struct avdtp_stream *stream,
 					avdtp_state_t new_state,
 					struct avdtp_error *err,
 					void *user_data);
+
+typedef void (*avdtp_set_configuration_cb) (struct avdtp *session,
+						struct avdtp_stream *stream,
+						struct avdtp_error *err);
 
 /* Callbacks for when a reply is received to a command that we sent */
 struct avdtp_sep_cfm {
@@ -186,8 +179,9 @@ struct avdtp_sep_ind {
 	gboolean (*set_configuration) (struct avdtp *session,
 					struct avdtp_local_sep *lsep,
 					struct avdtp_stream *stream,
-					GSList *caps, uint8_t *err,
-					uint8_t *category, void *user_data);
+					GSList *caps,
+					avdtp_set_configuration_cb cb,
+					void *user_data);
 	gboolean (*get_configuration) (struct avdtp *session,
 					struct avdtp_local_sep *lsep,
 					uint8_t *err, void *user_data);
@@ -237,10 +231,6 @@ uint8_t avdtp_get_seid(struct avdtp_remote_sep *sep);
 uint8_t avdtp_get_type(struct avdtp_remote_sep *sep);
 
 struct avdtp_service_capability *avdtp_get_codec(struct avdtp_remote_sep *sep);
-
-struct avdtp_service_capability *avdtp_get_protection(struct avdtp_stream *stream);
-
-struct avdtp_service_capability *avdtp_get_remote_sep_protection(struct avdtp_remote_sep *sep);
 
 gboolean avdtp_get_delay_reporting(struct avdtp_remote_sep *sep);
 
@@ -303,9 +293,8 @@ struct avdtp_local_sep *avdtp_register_sep(const bdaddr_t *src, uint8_t type,
 						void *user_data);
 
 /* Find a matching pair of local and remote SEP ID's */
-int avdtp_get_seps(struct avdtp *session, uint8_t type, uint8_t media,
-			uint8_t codec, struct avdtp_local_sep **lsep,
-			struct avdtp_remote_sep **rsep);
+struct avdtp_remote_sep *avdtp_find_remote_sep(struct avdtp *session,
+						struct avdtp_local_sep *lsep);
 
 int avdtp_unregister_sep(struct avdtp_local_sep *sep);
 
@@ -313,7 +302,7 @@ avdtp_state_t avdtp_sep_get_state(struct avdtp_local_sep *sep);
 
 void avdtp_error_init(struct avdtp_error *err, uint8_t type, int id);
 const char *avdtp_strerror(struct avdtp_error *err);
-avdtp_error_type_t avdtp_error_type(struct avdtp_error *err);
+uint8_t avdtp_error_category(struct avdtp_error *err);
 int avdtp_error_error_code(struct avdtp_error *err);
 int avdtp_error_posix_errno(struct avdtp_error *err);
 

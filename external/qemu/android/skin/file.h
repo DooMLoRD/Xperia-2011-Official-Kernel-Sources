@@ -14,7 +14,7 @@
 
 #include "android/skin/image.h"
 #include "android/config.h"
-#include "framebuffer.h"
+#include "android/framebuffer.h"
 
 /**  Layout
  **/
@@ -28,6 +28,7 @@ typedef struct SkinBackground {
 typedef struct SkinDisplay {
     SkinRect      rect;      /* display rectangle    */
     SkinRotation  rotation;  /* framebuffer rotation */
+    int           bpp;       /* bits per pixel, 32 or 16 */
     char          valid;
     QFrameBuffer  qfbuff[1];
 } SkinDisplay;
@@ -98,6 +99,7 @@ extern SkinDisplay*   skin_layout_get_display( SkinLayout*  layout );
 extern SkinRotation   skin_layout_get_dpad_rotation( SkinLayout*  layout );
 
 typedef struct SkinFile {
+    int             version;  /* 1, 2 or 3 */
     SkinPart*       parts;
     SkinLayout*     layouts;
     int             num_parts;

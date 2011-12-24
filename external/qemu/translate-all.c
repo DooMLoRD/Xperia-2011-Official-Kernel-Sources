@@ -29,6 +29,7 @@
 #include "exec-all.h"
 #include "disas.h"
 #include "tcg.h"
+#include "qemu-timer.h"
 
 /* code generation context */
 TCGContext tcg_ctx;
@@ -58,8 +59,8 @@ uint32_t gen_opc_hflags[OPC_BUF_SIZE];
 /* Array of (tb_pc, guest_pc) pairs, big enough for all translations. This
  * array is used to obtain guest PC address from a translated PC address.
  * tcg_gen_code_common will fill it up when memchecker is enabled. */
-static target_ulong gen_opc_tpc2gpc[OPC_BUF_SIZE * 2];
-target_ulong* gen_opc_tpc2gpc_ptr = &gen_opc_tpc2gpc[0];
+static void* gen_opc_tpc2gpc[OPC_BUF_SIZE * 2];
+void** gen_opc_tpc2gpc_ptr = &gen_opc_tpc2gpc[0];
 /* Number of (tb_pc, guest_pc) pairs stored in gen_opc_tpc2gpc array. */
 unsigned int gen_opc_tpc2gpc_pairs;
 #endif  // CONFIG_MEMCHECK
@@ -71,9 +72,11 @@ unsigned long code_gen_max_block_size(void)
 
     if (max == 0) {
         max = TCG_MAX_OP_SIZE;
-#define DEF(s, n, copy_size) max = copy_size > max? copy_size : max;
+#define DEF(name, iarg, oarg, carg, flags) DEF2((iarg) + (oarg) + (carg))
+#define DEF2(copy_size) max = (copy_size > max) ? copy_size : max;
 #include "tcg-opc.h"
 #undef DEF
+#undef DEF2
         max *= OPC_MAX_SIZE;
     }
 
@@ -168,8 +171,7 @@ int cpu_gen_code(CPUState *env, TranslationBlock *tb, int *gen_code_size_ptr)
 /* The cpu state corresponding to 'searched_pc' is restored.
  */
 int cpu_restore_state(TranslationBlock *tb,
-                      CPUState *env, unsigned long searched_pc,
-                      void *puc)
+                      CPUState *env, unsigned long searched_pc)
 {
     TCGContext *s = &tcg_ctx;
     int j;
@@ -213,7 +215,7 @@ int cpu_restore_state(TranslationBlock *tb,
         j--;
     env->icount_decr.u16.low -= gen_opc_icount[j];
 
-    gen_pc_load(env, tb, searched_pc, j, puc);
+    restore_state_to_opc(env, tb, j);
 
 #ifdef CONFIG_PROFILER
     s->restore_time += profile_getclock() - ti;

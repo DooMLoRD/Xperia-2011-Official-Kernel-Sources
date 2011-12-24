@@ -24,10 +24,9 @@
 
 
 #include "qemu-common.h"
-#include "sysemu.h"
 #include "acl.h"
 
-#ifdef HAVE_FNMATCH_H
+#ifdef CONFIG_FNMATCH
 #include <fnmatch.h>
 #endif
 
@@ -79,7 +78,7 @@ int qemu_acl_party_is_allowed(qemu_acl *acl,
     qemu_acl_entry *entry;
 
     QTAILQ_FOREACH(entry, &acl->entries, next) {
-#ifdef HAVE_FNMATCH_H
+#ifdef CONFIG_FNMATCH
         if (fnmatch(entry->match, party, 0) == 0)
             return entry->deny ? 0 : 1;
 #else

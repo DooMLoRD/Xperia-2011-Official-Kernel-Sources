@@ -75,10 +75,32 @@ typedef struct {
 #define  ARGB_SCALE_GENERIC       scale_generic
 #define  ARGB_SCALE_05_TO_10      scale_05_to_10
 #define  ARGB_SCALE_UP_BILINEAR   scale_up_bilinear
-#define  ARGB_SCALE_UP_QUICK_4x4  scale_up_quick_4x4
+/* #define  ARGB_SCALE_UP_QUICK_4x4  scale_up_quick_4x4 UNUSED */
 
 #include "android/skin/argb.h"
 
+
+void
+skin_scaler_get_scaled_rect( SkinScaler*  scaler,
+                             SkinRect*    srect,
+                             SkinRect*    drect )
+{
+    int sx = srect->pos.x;
+    int sy = srect->pos.y;
+    int sw = srect->size.w;
+    int sh = srect->size.h;
+    double scale = scaler->scale;
+
+    if (!scaler->valid) {
+        drect[0] = srect[0];
+        return;
+    }
+
+    drect->pos.x = (int)(sx * scale + scaler->xdisp);
+    drect->pos.y = (int)(sy * scale + scaler->ydisp);
+    drect->size.w = (int)(ceil((sx + sw) * scale + scaler->xdisp)) - drect->pos.x;
+    drect->size.h = (int)(ceil((sy + sh) * scale + scaler->ydisp)) - drect->pos.y;
+}
 
 void
 skin_scaler_scale( SkinScaler*   scaler,

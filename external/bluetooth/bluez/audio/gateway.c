@@ -39,9 +39,6 @@
 #include <gdbus.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
-#include <bluetooth/sco.h>
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
@@ -250,18 +247,18 @@ static void rfcomm_connect_cb(GIOChannel *chan, GError *err,
 	if (ret)
 		reply = dbus_message_new_method_return(gw->msg);
 	else
-		reply = g_dbus_create_error(gw->msg, ERROR_INTERFACE ".Failed",
-					"Can not pass file descriptor");
+		reply = btd_error_failed(gw->msg, "Can't pass file descriptor");
 
 	g_dbus_send_message(dev->conn, reply);
 
 	return;
 
 fail:
-	if (gw->msg)
-		error_common_reply(dev->conn, gw->msg,
-						ERROR_INTERFACE ".Failed",
-						"Connection attempt failed");
+	if (gw->msg) {
+		DBusMessage *reply;
+		reply = btd_error_failed(gw->msg, "Connect failed");
+		g_dbus_send_message(dev->conn, reply);
+	}
 
 	change_state(dev, GATEWAY_STATE_DISCONNECTED);
 }
@@ -337,10 +334,11 @@ static void get_record_cb(sdp_list_t *recs, int err, gpointer user_data)
 	return;
 
 fail:
-	if (gw->msg)
-		error_common_reply(dev->conn, gw->msg,
-					ERROR_INTERFACE ".NotSupported",
-					"Not supported");
+	if (gw->msg) {
+		DBusMessage *reply = btd_error_failed(gw->msg,
+					gerr ? gerr->message : strerror(-err));
+		g_dbus_send_message(dev->conn, reply);
+	}
 
 	change_state(dev, GATEWAY_STATE_DISCONNECTED);
 
@@ -368,15 +366,14 @@ static DBusMessage *ag_connect(DBusConnection *conn, DBusMessage *msg,
 {
 	struct audio_device *au_dev = (struct audio_device *) data;
 	struct gateway *gw = au_dev->gateway;
+	int err;
 
 	if (!gw->agent)
-		return g_dbus_create_error(msg, ERROR_INTERFACE
-				".Failed", "Agent not assigned");
+		return btd_error_agent_not_available(msg);
 
-	if (get_records(au_dev) < 0)
-		return g_dbus_create_error(msg, ERROR_INTERFACE
-					".ConnectAttemptFailed",
-					"Connect Attempt Failed");
+	err = get_records(au_dev);
+	if (err < 0)
+		return btd_error_failed(msg, strerror(-err));
 
 	gw->msg = dbus_message_ref(msg);
 
@@ -426,9 +423,7 @@ static DBusMessage *ag_disconnect(DBusConnection *conn, DBusMessage *msg,
 		return NULL;
 
 	if (!gw->rfcomm)
-		return g_dbus_create_error(msg, ERROR_INTERFACE
-						".NotConnected",
-						"Device not Connected");
+		return  btd_error_not_connected(msg);
 
 	gateway_close(device);
 	ba2str(&device->dst, gw_addr);
@@ -488,15 +483,11 @@ static DBusMessage *register_agent(DBusConnection *conn,
 	const char *path, *name;
 
 	if (gw->agent)
-		return g_dbus_create_error(msg,
-					ERROR_INTERFACE ".AlreadyExists",
-					"Agent already exists");
+		return btd_error_already_exists(msg);
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &path,
 						DBUS_TYPE_INVALID))
-		return g_dbus_create_error(msg,
-					ERROR_INTERFACE ".InvalidArguments",
-					"Invalid argument");
+		return btd_error_invalid_args(msg);
 
 	name = dbus_message_get_sender(msg);
 	agent = g_new0(struct hf_agent, 1);
@@ -523,20 +514,15 @@ static DBusMessage *unregister_agent(DBusConnection *conn,
 		goto done;
 
 	if (strcmp(gw->agent->name, dbus_message_get_sender(msg)) != 0)
-		return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-							"Permission denied");
+		return btd_error_not_authorized(msg);
 
 	if (!dbus_message_get_args(msg, NULL,
 				DBUS_TYPE_OBJECT_PATH, &path,
 				DBUS_TYPE_INVALID))
-		return g_dbus_create_error(msg,
-				ERROR_INTERFACE ".InvalidArguments",
-				"Invalid argument");
+		return btd_error_invalid_args(msg);
 
 	if (strcmp(gw->agent->path, path) != 0)
-		return g_dbus_create_error(msg,
-				ERROR_INTERFACE ".Failed",
-				"Unknown object path");
+		return btd_error_does_not_exist(msg);
 
 	g_dbus_remove_watch(device->conn, gw->agent->watch);
 
@@ -721,4 +707,5 @@ void gateway_suspend_stream(struct audio_device *dev)
 	gw->sco = NULL;
 	gw->sco_start_cb = NULL;
 	gw->sco_start_cb_data = NULL;
+	change_state(dev, GATEWAY_STATE_CONNECTED);
 }

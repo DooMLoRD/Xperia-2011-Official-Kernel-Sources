@@ -64,6 +64,9 @@ extern ABool  path_is_absolute( const char*  path );
 extern ABool  path_can_read( const char*  path );
 extern ABool  path_can_write( const char*  path );
 
+/* checks that one can execute a given file */
+extern ABool  path_can_exec( const char* path );
+
 /* try to make a directory */
 extern APosixStatus   path_mkdir( const char*  path, int  mode );
 
@@ -108,6 +111,18 @@ extern char*  path_dirname( const char*  path );
  * the result must be freed by the caller.
  */
 extern char*  path_basename( const char*  path );
+
+/* look for a given executable in the system path and return its full path.
+ * Returns NULL if not found. Note that on Windows this doesn't not append
+ * an .exe prefix, or other magical thing like Cygwin usually does.
+ */
+extern char*  path_search_exec( const char* filename );
+
+/* Return the absolute version of a path. If 'path' is already absolute,
+ * this will be a simple copy. Otherwise, this function will prepend the
+ * current working directory to the result.
+ */
+extern char*  path_get_absolute( const char* path );
 
 /** OTHER FILE UTILITIES
  **

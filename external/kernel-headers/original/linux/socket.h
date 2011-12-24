@@ -187,7 +187,8 @@ struct ucred {
 #define AF_LLC		26	/* Linux LLC			*/
 #define AF_TIPC		30	/* TIPC sockets			*/
 #define AF_BLUETOOTH	31	/* Bluetooth sockets 		*/
-#define AF_MAX		32	/* For now.. */
+#define AF_CAIF		38	/* CAIF sockets			*/
+#define AF_MAX		39	/* For now.. */
 
 /* Protocol families, same as address families. */
 #define PF_UNSPEC	AF_UNSPEC
@@ -220,6 +221,7 @@ struct ucred {
 #define PF_LLC		AF_LLC
 #define PF_TIPC		AF_TIPC
 #define PF_BLUETOOTH	AF_BLUETOOTH
+#define PF_CAIF		AF_CAIF
 #define PF_MAX		AF_MAX
 
 /* Maximum queue length specifiable by listen.  */

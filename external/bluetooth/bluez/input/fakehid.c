@@ -33,7 +33,6 @@
 #include <sys/types.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/l2cap.h>
 #include <bluetooth/hidp.h>
 #include <bluetooth/sdp.h>
 
@@ -215,8 +214,9 @@ static gboolean ps3remote_event(GIOChannel *chan, GIOCondition cond,
 	struct fake_input *fake = data;
 	struct uinput_event event;
 	unsigned int key, value = 0;
-	gsize size;
+	ssize_t size;
 	char buff[50];
+	int fd;
 
 	if (cond & G_IO_NVAL)
 		return FALSE;
@@ -226,10 +226,11 @@ static gboolean ps3remote_event(GIOChannel *chan, GIOCondition cond,
 		goto failed;
 	}
 
-	memset(buff, 0, sizeof(buff));
+	fd = g_io_channel_unix_get_fd(chan);
 
-	if (g_io_channel_read(chan, buff, sizeof(buff), &size) !=
-							G_IO_ERROR_NONE) {
+	memset(buff, 0, sizeof(buff));
+	size = read(fd, buff, sizeof(buff));
+	if (size < 0) {
 		error("IO Channel read error");
 		goto failed;
 	}
@@ -272,7 +273,7 @@ failed:
 }
 
 static int ps3remote_setup_uinput(struct fake_input *fake,
-				  struct fake_hid *fake_hid)
+						struct fake_hid *fake_hid)
 {
 	struct uinput_dev dev;
 	int i;
@@ -348,6 +349,7 @@ static struct fake_hid fake_hid_table[] = {
 		.disconnect	= fake_hid_common_disconnect,
 		.event		= ps3remote_event,
 		.setup_uinput	= ps3remote_setup_uinput,
+		.devices	= NULL,
 	},
 
 	{ },
@@ -370,12 +372,34 @@ struct fake_hid *get_fake_hid(uint16_t vendor, uint16_t product)
 	return NULL;
 }
 
-int fake_hid_connadd(struct fake_input *fake, GIOChannel *intr_io,
+struct fake_input *fake_hid_connadd(struct fake_input *fake,
+						GIOChannel *intr_io,
 						struct fake_hid *fake_hid)
 {
-	if (fake_hid->setup_uinput(fake, fake_hid)) {
-		error("Error setting up uinput");
-		return ENOMEM;
+	GList *l;
+	struct fake_input *old = NULL;
+
+	/* Look for an already setup device */
+	for (l = fake_hid->devices; l != NULL; l = l->next) {
+		old = l->data;
+		if (old->idev == fake->idev) {
+			g_free(fake);
+			fake = old;
+			fake_hid->connect(fake, NULL);
+			break;
+		}
+		old = NULL;
+	}
+
+	/* New device? Add it to the list of known devices,
+	 * and create the uinput necessary */
+	if (old == NULL) {
+		if (fake_hid->setup_uinput(fake, fake_hid)) {
+			error("Error setting up uinput");
+			g_free(fake);
+			return NULL;
+		}
+		fake_hid->devices = g_list_append(fake_hid->devices, fake);
 	}
 
 	fake->io = g_io_channel_ref(intr_io);
@@ -383,5 +407,5 @@ int fake_hid_connadd(struct fake_input *fake, GIOChannel *intr_io,
 	g_io_add_watch(fake->io, G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL,
 					(GIOFunc) fake_hid->event, fake);
 
-	return 0;
+	return fake;
 }

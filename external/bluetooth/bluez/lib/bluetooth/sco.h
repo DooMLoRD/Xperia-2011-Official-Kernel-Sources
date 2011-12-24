@@ -43,6 +43,7 @@ struct sockaddr_sco {
 	bdaddr_t	sco_bdaddr;
 	/* for use with eSCO masks such as SCO_ESCO_MASK */
 	uint16_t	sco_pkt_type;
+
 };
 
 /* set/get sockopt defines */

@@ -126,7 +126,7 @@
 #include "libslirp.h"
 #endif
 
-#if defined(CONFIG_SHAPER)
+#if defined(CONFIG_ANDROID)
 #include "shaper.h"
 #endif
 
@@ -146,6 +146,8 @@ const NetworkSpeed  android_netspeeds[] = {
     { "full", "no limit", 0, 0 },
     { NULL, NULL, 0, 0 }
 };
+const size_t android_netspeeds_count =
+    sizeof(android_netspeeds) / sizeof(android_netspeeds[0]);
 
 const NetworkLatency  android_netdelays[] = {
     /* FIXME: these numbers are totally imaginary */
@@ -155,6 +157,8 @@ const NetworkLatency  android_netdelays[] = {
     { "none", "no latency", 0, 0 },
     { NULL, NULL, 0, 0 }
 };
+const size_t android_netdelays_count =
+    sizeof(android_netdelays) / sizeof(android_netdelays[0]);
 
 /***********************************************************/
 /* network device redirectors */
@@ -194,7 +198,7 @@ static int parse_macaddr(uint8_t *macaddr, const char *p)
     long int offset;
 
     errno = 0;
-    offset = strtol(p, &last_char, 0);    
+    offset = strtol(p, &last_char, 0);
     if (0 == errno && '\0' == *last_char &&
             offset >= 0 && offset <= 0xFFFFFF) {
         macaddr[3] = (offset & 0xFF0000) >> 16;
@@ -213,7 +217,7 @@ static int parse_macaddr(uint8_t *macaddr, const char *p)
                 p++;
             }
         }
-        return 0;    
+        return 0;
     }
 
     return -1;
@@ -726,7 +730,7 @@ ip_packet_is_internal( const uint8_t*  data, size_t  size )
     return ( data[12] == 10 && data[16] == 10);
 }
 
-#ifdef CONFIG_SHAPER
+#ifdef CONFIG_ANDROID
 
 NetShaper  slirp_shaper_in;
 NetShaper  slirp_shaper_out;
@@ -769,12 +773,12 @@ slirp_init_shapers( void )
     netshaper_set_rate( slirp_shaper_in,  qemu_net_upload_speed  );
 }
 
-#endif /* CONFIG_SHAPER */
+#endif /* CONFIG_ANDROID */
 
 
 int slirp_can_output(void)
 {
-#ifdef CONFIG_SHAPER
+#ifdef CONFIG_ANDROID
     return !slirp_vc ||
            ( netshaper_can_send(slirp_shaper_out) &&
              qemu_can_send_packet(slirp_vc) );
@@ -795,7 +799,7 @@ void slirp_output(const uint8_t *pkt, int pkt_len)
     if (!slirp_vc)
         return;
 
-#ifdef CONFIG_SHAPER
+#ifdef CONFIG_ANDROID
     netshaper_send(slirp_shaper_out, (void*)pkt, pkt_len);
 #else
     qemu_send_packet(slirp_vc, pkt, pkt_len);
@@ -816,7 +820,7 @@ static ssize_t slirp_receive(VLANClientState *vc, const uint8_t *buf, size_t siz
     if (qemu_tcpdump_active)
         qemu_tcpdump_packet(buf, size);
 
-#ifdef CONFIG_SHAPER
+#ifdef CONFIG_ANDROID
     netshaper_send(slirp_shaper_in, (char*)buf, size);
 #else
     slirp_input(buf, size);

@@ -1,0 +1,17 @@
+#
+# Suppressions for Bionic libc on Android.
+#
+
+##----------------------------------------------------------------------##
+# Memcheck
+##----------------------------------------------------------------------##
+
+{
+  bionic_dlopen
+  Memcheck:Addr4
+  fun:__dl_strlen
+  ...
+  fun:__dl_find_library
+  fun:__dl_dlopen
+}
+

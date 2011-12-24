@@ -78,7 +78,8 @@ void extractor::extract(T & targ, void const * src_,
 	unsigned char const * src = static_cast<unsigned char const *>(src_)
 		+ theabi.need(off);
 	size_t nbytes = theabi.need(sz);
-	
+
+	targ = 0;
 	if (nbytes == 0)
 		return;
 	
@@ -91,7 +92,6 @@ void extractor::extract(T & targ, void const * src_,
 		     << " bytes @ " << off << " = " << (src - begin)
 		     << " : ";
 
-	targ = 0;
 	if (little_endian)
 		while(nbytes--)
 			targ = (targ << 8) | src[nbytes];
@@ -200,10 +200,12 @@ int main(int argc, char const ** argv)
 	odb_t dest;
 	int rc;
 
-	assert((in_fd = open(inputs[0].c_str(), O_RDONLY)) > 0);		
-	assert(fstat(in_fd, &statb) == 0);
-	assert((in = mmap(0, statb.st_size, PROT_READ,
-			  MAP_PRIVATE, in_fd, 0)) != (void *)-1);
+	in_fd = open(inputs[0].c_str(), O_RDONLY);
+	assert(in_fd > 0);
+	rc = fstat(in_fd, &statb);
+	assert(rc == 0);
+	in = mmap(0, statb.st_size, PROT_READ, MAP_PRIVATE, in_fd, 0);
+	assert(in != (void *)-1);
 
 	rc = odb_open(&dest, output_filename.c_str(), ODB_RDWR,
 		      sizeof(struct opd_header));
@@ -221,5 +223,6 @@ int main(int argc, char const ** argv)
 
 	odb_close(&dest);
 
-	assert(munmap(in, statb.st_size) == 0);
+	rc = munmap(in, statb.st_size);
+	assert(rc == 0);
 }

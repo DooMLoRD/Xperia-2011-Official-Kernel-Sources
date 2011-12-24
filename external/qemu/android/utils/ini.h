@@ -43,25 +43,15 @@ void      iniFile_free( IniFile*  f );
 /* returns the number of (key.value) pairs in an IniFile */
 int       iniFile_getPairCount( IniFile*  f );
 
-/* return a specific (key,value) pair from an IniFile.
- * if the index is not correct, both '*pKey' and '*pValue' will be
- * set to NULL.
- *
- * you should probably use iniFile_getValue() and its variants instead
- */
-void      iniFile_getPair( IniFile*     f,
-                           int          index,
-                           const char* *pKey,
-                           const char* *pValue );
-
 /* returns the value of a given key from an IniFile.
  * NULL if the key is not assigned in the corresponding configuration file
  */
 const char*  iniFile_getValue( IniFile*  f, const char*  key );
 
-/* returns a copy of the value of a given key, or NULL
+/* returns a copy of the value of a given key, or NULL if defaultValue is NULL.
+ * caller must free() it.
  */
-char*   iniFile_getString( IniFile*  f, const char*  key );
+char*   iniFile_getString( IniFile*  f, const char*  key, const char* defaultValue );
 
 /* returns an integer value, or a default in case the value string is
  * missing or badly formatted
@@ -78,10 +68,6 @@ int64_t iniFile_getInt64( IniFile*  f, const char*  key, int64_t  defaultValue )
  */
 double  iniFile_getDouble( IniFile*  f, const char*  key, double  defaultValue );
 
-/* returns a copy of a given key's value, if any, or NULL if it is missing
- * caller must call free() to release it */
-char*   iniFile_getString( IniFile*  f, const char*  key );
-
 /* parses a key value as a boolean. Accepted values are "1", "0", "yes", "YES",
  * "no" and "NO". Returns either 1 or 0.
  * note that the default value must be provided as a string too
@@ -95,6 +81,14 @@ int     iniFile_getBoolean( IniFile*  f, const char*  key, const char*  defaultV
  * NOTE: we consider that 1K = 1024, not 1000.
  */
 int64_t  iniFile_getDiskSize( IniFile*  f, const char*  key, const char*  defaultValue );
+
+/* These functions are used to set values in an IniFile */
+void iniFile_setValue( IniFile* f, const char* key, const char* value );
+void iniFile_setInteger( IniFile* f, const char* key, int value );
+void iniFile_setInt64( IniFile* f, const char* key, int64_t value );
+void iniFile_setDouble( IniFile* f, const char* key, double value );
+void iniFile_setBoolean( IniFile* f, const char* key, int value );
+void iniFile_setDiskSize( IniFile* f, const char* key, int64_t size );
 
 /* */
 

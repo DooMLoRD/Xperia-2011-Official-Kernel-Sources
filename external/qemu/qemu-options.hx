@@ -1350,6 +1350,8 @@ ETEXI
 #ifdef CONFIG_KVM
 DEF("enable-kvm", 0, QEMU_OPTION_enable_kvm, \
     "-enable-kvm     enable KVM full virtualization support\n")
+DEF("disable-kvm", 0, QEMU_OPTION_disable_kvm, \
+    "-disable-kvm    disable KVM full virtualization support\n")
 #endif
 STEXI
 @item -enable-kvm
@@ -1439,6 +1441,95 @@ Set the initial date of the real time clock. Valid formats for
 @var{date} are: @code{now} or @code{2006-06-17T16:01:21} or
 @code{2006-06-17}. The default value is @code{now}.
 ETEXI
+
+/* Start user mode network stack restrictions */
+DEF("drop-udp", 0, QEMU_OPTION_drop_udp, \
+    "-drop-udp       starts filtering all UDP packets\n")
+STEXI
+
+@item -drop-udp
+Enable dropping of all UDP packets.
+ETEXI
+
+
+DEF("drop-tcp", 0, QEMU_OPTION_drop_tcp, \
+    "-drop-tcp       starts filtering all TCP packets\n")
+STEXI
+
+@item -drop-tcp
+Enable dropping of all TCP packets.
+ETEXI
+
+
+DEF("allow-tcp", HAS_ARG, QEMU_OPTION_allow_tcp, \
+    "-allow-tcp      Only allows TCP packets for host:port\n")
+STEXI
+
+@item -allow-tcp @var{host}:@var{port}
+Allows communication with the host named @code{host} and with
+the port @code{port}.
+ETEXI
+
+
+DEF("drop-log", 0, QEMU_OPTION_drop_log, \
+    "-drop-log       Creates a log for dropped connections\n")
+STEXI
+
+@item -drop-log @var{file}
+Creates a log for dropped connections in the file @code{file}.
+ETEXI
+
+/* Additional network restriction options */
+
+DEF("max-dns-conns", HAS_ARG, QEMU_OPTION_max_dns_conns, \
+    "-max-dns-conns limit \n"
+    "                Limits the maximum DNS connections\n")
+STEXI
+@item -max-dns-conns @var{limit}
+Limits the maximum DNS connections to @var{limit}.
+ETEXI
+
+DEF("allow-udp", HAS_ARG, QEMU_OPTION_allow_udp, \
+    "-allow-udp host:port \n"
+    "                Allows udp connections to go through to host:port\n")
+STEXI
+@item -allow-udp @var{host}:@var{port}
+Allows udp connections to go through to @var{host}:@var{port}.
+ETEXI
+
+DEF("dns-log", HAS_ARG, QEMU_OPTION_dns_log, \
+    "-dns-log file   Creates a log of DNS lookups\n")
+STEXI
+@item -dns-log @var{file}
+Creates a log of DNS lookups as @var{file}.
+ETEXI
+
+
+DEF("net-forward", HAS_ARG, QEMU_OPTION_net_forward, \
+"-net-forward dst_net:dst_mask:dst_port:redirect_ip:redirect_port:\n"
+"                Forwards guest network traffic sent to dst_net(dst_mask):dst_port\n"
+"                to redirect_ip:redirect_port\n")
+
+STEXI
+@item -net-forward @var{settings}
+Forwards network traffic using the settings @code{settings}.
+ETEXI
+
+
+DEF("net-forward-tcp2sink", HAS_ARG, QEMU_OPTION_net_forward_tcp2sink, \
+"-net-forward-tcp2sink sink_ip:sink_port\n"
+"                Forwards all dropped and non-forwarded guest network traffic\n"
+"                to specified ip:port. \n")
+
+STEXI
+@item -net-forward-tcp2sink @var{settings}
+Forwards all dropped and non-forwarded network traffic to sink ip:port.
+ETEXI
+
+
+
+/* End User mode network stack restrictions */
+
 
 DEF("icount", HAS_ARG, QEMU_OPTION_icount, \
     "-icount [N|auto]\n" \
@@ -1598,7 +1689,15 @@ DEF("nand", HAS_ARG, QEMU_OPTION_nand, \
 
 #endif /* CONFIG_TRACE */
 
-#if 1 /* ANDROID */
+#ifdef CONFIG_ANDROID
+
+DEF("savevm-on-exit", HAS_ARG, QEMU_OPTION_savevm_on_exit, \
+    "savevm-on-exit [tag|id]\n" \
+    "                save state automatically on exit\n")
+STEXI
+@item -savevm-on-exit @var{file}
+Save state automatically on exit (as @code{savevm} in monitor)
+ETEXI
 
 DEF("mic", HAS_ARG, QEMU_OPTION_mic, \
     "-mic <file>     read audio input from wav file\n")
@@ -1619,4 +1718,76 @@ DEF("http-proxy", HAS_ARG, QEMU_OPTION_http_proxy, \
     "-http-proxy <proxy>"
     " make TCP connections through a HTTP/HTTPS proxy\n")
 
-#endif
+DEF("charmap", HAS_ARG, QEMU_OPTION_charmap, \
+    "-charmap <file>"
+    " use specific key character map\n")
+
+DEF("android-hw", HAS_ARG, QEMU_OPTION_android_hw, \
+    "-android-hw <file> read hardware initialization from ini file\n")
+
+DEF("android-memcheck", HAS_ARG, QEMU_OPTION_android_memcheck, \
+    "-android-memcheck <options> enable memory access checking on the emulated system\n")
+
+DEF("dns-server", HAS_ARG, QEMU_OPTION_dns_server, \
+    "-dns-server <servers> use this DNS server(s) in the emulated system\n")
+
+DEF("timezone", HAS_ARG, QEMU_OPTION_timezone, \
+    "-timezone <timezone> use this timezone instead of the host's default\n")
+
+DEF("android-avdname", HAS_ARG, QEMU_OPTION_android_avdname, \
+    "-android-avdname <avdname> names the virtual device\n")
+
+DEF("radio", HAS_ARG, QEMU_OPTION_radio, \
+    "-radio <device> redirect radio modem interface to character device\n")
+
+DEF("gps", HAS_ARG, QEMU_OPTION_gps, \
+    "-gps <device> redirect NMEA GPS to character device\n")
+
+DEF("audio", HAS_ARG, QEMU_OPTION_audio, \
+    "-audio <backend> use specific audio backend\n")
+
+DEF("cpu-delay", HAS_ARG, QEMU_OPTION_cpu_delay, \
+    "-cpu-delay <cpudelay> throttle CPU emulation\n")
+
+DEF("show-kernel", 0, QEMU_OPTION_show_kernel, \
+    "-show-kernel display kernel messages\n")
+
+#ifdef CONFIG_NAND_LIMITS
+DEF("nand-limits", HAS_ARG, QEMU_OPTION_nand_limits, \
+    "-nand-limits <nlimits> enforce NAND/Flash read/write thresholds\n")
+#endif  // CONFIG_NAND_LIMITS
+
+DEF("netspeed", HAS_ARG, QEMU_OPTION_netspeed, \
+    "-netspeed <speed> maximum network download/upload speeds\n")
+
+DEF("netdelay", HAS_ARG, QEMU_OPTION_netdelay, \
+    "-netdelay <delay> network latency emulation\n")
+
+DEF("netfast", 0, QEMU_OPTION_netfast, \
+    "-netfast disable network shaping\n")
+
+DEF("tcpdump", HAS_ARG, QEMU_OPTION_tcpdump, \
+    "-tcpdump <file> capture network packets to file\n")
+
+DEF("boot-property", HAS_ARG, QEMU_OPTION_boot_property, \
+    "-boot-property <name>=<value> set system property on boot\n")
+
+DEF("lcd-density", HAS_ARG, QEMU_OPTION_lcd_density, \
+    "-lcd-density <density> sets LCD density system property on boot\n")
+
+DEF("ui-port", HAS_ARG, QEMU_OPTION_ui_port, \
+    "-ui-port <port> socket port to report initialization completion\n")
+
+DEF("ui-settings", HAS_ARG, QEMU_OPTION_ui_settings, \
+    "-ui-settings <string> opaque string containing persitent UI settings\n")
+
+DEF("audio-test-out", 0, QEMU_OPTION_audio_test_out, \
+   "-audio-test-out Test audio output\n")
+
+DEF("snapshot-no-time-update", 0, QEMU_OPTION_snapshot_no_time_update, \
+    "-snapshot-no-time-update Disable time update when restoring snapshots\n")
+
+DEF("list-webcam", 0, QEMU_OPTION_list_webcam, \
+    "-list-webcam List web cameras available for emulation\n")
+
+#endif /* ANDROID */

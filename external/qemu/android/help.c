@@ -10,6 +10,7 @@
 #include "audio/audio.h"
 #include <string.h>
 #include <stdlib.h>
+#include "android/protocol/core-commands-api.h"
 
 /* XXX: TODO: put most of the help stuff in auto-generated files */
 
@@ -165,6 +166,7 @@ help_disk_images( stralloc_t*  out )
     "    system-qemu.img    an *optional* persistent system image\n"
     "    cache.img          an *optional* cache partition image\n"
     "    sdcard.img         an *optional* SD Card partition image\n\n"
+    "    snapshots.img      an *optional* state snapshots image\n\n"
 
     "  If you use a virtual device, its content directory should store\n"
     "  all writable images, and read-only ones will be found from the\n"
@@ -180,7 +182,7 @@ help_disk_images( stralloc_t*  out )
     "  can still run the emulator by explicitely providing the paths to\n"
     "  *all* required disk images through a combination of the following\n"
     "  options: -sysdir, -datadir, -kernel, -ramdisk, -system, -data, -cache\n"
-    "  and -sdcard\n\n"
+    "  -sdcard and -snapstorage.\n\n"
 
     "  The actual logic being that the emulator should be able to find all\n"
     "  images from the options you give it.\n\n"
@@ -189,13 +191,16 @@ help_disk_images( stralloc_t*  out )
 
     "  Other related options are:\n\n"
 
-    "      -init-data   Specify an alernative *initial* user data image\n\n"
+    "      -init-data       Specify an alternative *initial* user data image\n\n"
 
-    "      -wipe-data   Copy the content of the *initial* user data image\n"
-    "                   (userdata.img) into the writable one (userdata-qemu.img)\n\n"
+    "      -wipe-data       Copy the content of the *initial* user data image\n"
+"                           (userdata.img) into the writable one (userdata-qemu.img)\n\n"
 
-    "      -no-cache    do not use a cache partition, even if one is\n"
-    "                   available.\n\n"
+    "      -no-cache        do not use a cache partition, even if one is\n"
+    "                       available.\n\n"
+
+    "      -no-snapstorage  do not use a state snapshot image, even if one is\n"
+    "                       available.\n\n"
     ,
     datadir );
 }
@@ -544,19 +549,6 @@ help_image(stralloc_t*  out)
 }
 
 static void
-help_init_data(stralloc_t*  out)
-{
-    PRINTF(
-    "  use '-init-data <file>' to specify an *init* /data partition file.\n"
-    "  it is only used when creating a new writable /data image file, or\n"
-    "  when you use '-wipe-data' to reset it. the default is 'userdata.img'\n"
-    "  from the system directory.\n\n"
-
-    "  see '-help-disk-images' for more information about disk image files\n\n"
-    );
-}
-
-static void
 help_data(stralloc_t*  out)
 {
     PRINTF(
@@ -620,6 +612,119 @@ help_sdcard(stralloc_t*  out)
 }
 
 static void
+help_snapstorage(stralloc_t*  out)
+{
+    PRINTF(
+    "  Use '-snapstorage <file>' to specify a repository file for snapshots.\n"
+    "  All snapshots made during execution will be saved in this file, and only\n"
+    "  snapshots in this file can be restored during the emulator run.\n\n"
+
+    "  If the option is not specified, it defaults to 'snapshots.img' in the\n"
+    "  data directory. If the specified file does not exist, the emulator will\n"
+    "  start, but without support for saving or loading state snapshots.\n\n"
+
+    "  see '-help-disk-images' for more information about disk image files\n"
+    "  see '-help-snapshot' for more information about snapshots\n\n"
+    );
+}
+
+static void
+help_no_snapstorage(stralloc_t*  out)
+{
+    PRINTF(
+    "  This starts the emulator without mounting a file to store or load state\n"
+    "  snapshots, forcing a full boot and disabling state snapshot functionality.\n\n"
+    ""
+    "  This command overrides the configuration specified by the parameters\n"
+    "  '-snapstorage' and '-snapshot'. A warning will be raised if either\n"
+    "  of those parameters was specified anyway.\n\n"
+     );
+ }
+
+static void
+help_snapshot(stralloc_t*  out)
+{
+    PRINTF(
+    "  Rather than executing a full boot sequence, the Android emulator can\n"
+    "  resume execution from an earlier state snapshot (which is usually\n"
+    "  significantly faster). When the parameter '-snapshot <name>' is given,\n"
+    "  the emulator loads the snapshot of that name from the snapshot image,\n"
+    "  and saves it back under the same name on exit.\n\n"
+
+    "  If the option is not specified, it defaults to 'default-boot'. If the\n"
+    "  specified snapshot does not exist, the emulator will perform a full boot\n"
+    "  sequence instead, but will still save.\n\n"
+
+    "  WARNING: In the process of loading, all contents of the system, userdata\n"
+    "           and SD card images will be OVERWRITTEN with the contents they\n"
+    "           held when the snapshot was made. Unless saved in a different\n"
+    "           snapshot, any changes since will be lost!\n\n"
+
+    "  If you want to create a snapshot manually, connect to the emulator console:\n\n"
+
+    "      telnet localhost <port>\n\n"
+
+    "  Then execute the command 'avd snapshot save <name>'. See '-help-port' for\n"
+    "  information on obtaining <port>.\n\n"
+    );
+}
+
+static void
+help_no_snapshot(stralloc_t*  out)
+{
+    PRINTF(
+    "  This inhibits both the autoload and autosave operations, forcing\n"
+    "  emulator to perform a full boot sequence and losing state on close.\n"
+    "  It overrides the '-snapshot' parameter.\n"
+    "  If '-snapshot' was specified anyway, a warning is raised.\n\n"
+    );
+}
+
+static void
+help_no_snapshot_load(stralloc_t*  out)
+{
+    PRINTF(
+    "  Prevents the emulator from loading the AVD's state from the snapshot\n"
+    "  storage on start.\n\n"
+    );
+}
+
+static void
+help_no_snapshot_save(stralloc_t*  out)
+{
+    PRINTF(
+    "  Prevents the emulator from saving the AVD's state to the snapshot\n"
+    "  storage on exit, meaning that all changes will be lost.\n\n"
+    );
+}
+
+static void
+help_no_snapshot_update_time(stralloc_t*  out)
+{
+    PRINTF(
+    "  Prevent the emulator from sending an unsolicited time update\n"
+    "  in response to the first signal strength query after loadvm,\n"
+    "  to avoid a sudden time jump that might upset testing. (Signal\n"
+    "  strength is queried approximately every 15 seconds)\n\n"
+    );
+}
+
+static void
+help_snapshot_list(stralloc_t*  out)
+{
+    PRINTF(
+    "  This prints a table of snapshots that are stored in the snapshot storage\n"
+    "  file that the emulator was started with, then exits. Values from the 'ID'\n"
+    "  and 'TAG' columns can be used as arguments for the '-snapshot' parameter.\n\n"
+
+    "  If '-snapstorage <file>' was specified as well, this command prints a "
+    "  table of the snapshots stored in <file>.\n\n"
+
+    "  See '-help-snapshot' for more information on snapshots.\n\n"
+    );
+}
+
+static void
 help_skindir(stralloc_t*  out)
 {
     PRINTF(
@@ -653,7 +758,8 @@ static void
 help_shaper(stralloc_t*  out)
 {
     int  n;
-
+    NetworkSpeed* android_netspeed;
+    NetworkLatency* android_netdelay;
     PRINTF(
     "  the Android emulator supports network throttling, i.e. slower network\n"
     "  bandwidth as well as higher connection latencies. this is done either through\n"
@@ -661,22 +767,24 @@ help_shaper(stralloc_t*  out)
 
     "  the format of -netspeed is one of the following (numbers are kbits/s):\n\n" );
 
-    for (n = 0; android_netspeeds[n].name != NULL; n++) {
+    for (n = 0; !corecmd_get_netspeed(n, &android_netspeed); n++) {
         PRINTF( "    -netspeed %-12s %-15s  (up: %.1f, down: %.1f)\n",
-                        android_netspeeds[n].name,
-                        android_netspeeds[n].display,
-                        android_netspeeds[n].upload/1000.,
-                        android_netspeeds[n].download/1000. );
+                        android_netspeed->name,
+                        android_netspeed->display,
+                        android_netspeed->upload/1000.,
+                        android_netspeed->download/1000. );
+        free(android_netspeed);
     }
     PRINTF( "\n" );
     PRINTF( "    -netspeed %-12s %s", "<num>", "select both upload and download speed\n");
     PRINTF( "    -netspeed %-12s %s", "<up>:<down>", "select individual up and down speed\n");
 
     PRINTF( "\n  The format of -netdelay is one of the following (numbers are msec):\n\n" );
-    for (n = 0; android_netdelays[n].name != NULL; n++) {
+    for (n = 0; !corecmd_get_netdelay(n, &android_netdelay); n++) {
         PRINTF( "    -netdelay %-10s   %-15s  (min %d, max %d)\n",
-                        android_netdelays[n].name, android_netdelays[n].display,
-                        android_netdelays[n].min_ms, android_netdelays[n].max_ms );
+                        android_netdelay->name, android_netdelay->display,
+                        android_netdelay->min_ms, android_netdelay->max_ms );
+        free(android_netdelay);
     }
     PRINTF( "    -netdelay %-10s   %s", "<num>", "select exact latency\n");
     PRINTF( "    -netdelay %-10s   %s", "<min>:<max>", "select min and max latencies\n\n");
@@ -759,65 +867,9 @@ help_audio(stralloc_t*  out)
     "  the '-audio <backend>' option allows you to select a specific backend\n"
     "  to be used to both play and record audio in the Android emulator.\n\n"
 
-    "  this is equivalent to calling both '-audio-in <backend>' and\n"
-    "  '-audio-out <backend>' at the same time.\n\n"
-
-    "  use '-help-audio-out' to see a list of valid output <backend> values.\n"
-    "  use '-help-audio-in'  to see a list of valid input <backend> values.\n"
     "  use '-audio none' to disable audio completely.\n\n"
     );
 }
-
-static void
-help_audio_out(stralloc_t*  out)
-{
-    int  nn;
-
-    PRINTF(
-        "  the  '-audio-out <backend>' option allows you to select a specific\n"
-        "  backend to play audio in the Android emulator. this is mostly useful\n"
-        "  on Linux\n\n"
-
-        "  on this system, output <backend> can be one of the following:\n\n"
-    );
-    for ( nn = 0; ; nn++ ) {
-        const char*  descr;
-        const char*  name = audio_get_backend_name( 0, nn, &descr );
-        if (name == NULL)
-            break;
-        PRINTF( "    %-10s %s\n", name, descr );
-    }
-    PRINTF( "\n" );
-}
-
-static void
-help_audio_in(stralloc_t*  out)
-{
-    int  nn;
-
-    PRINTF(
-        "  the  '-audio-in <backend>' option allows you to select a specific\n"
-        "  backend to play audio in the Android emulator. this is mostly useful\n"
-        "  on Linux\n\n"
-
-        "  IMPORTANT NOTE:\n"
-        "     on some Linux systems, broken Esd/ALSA/driver implementations will\n"
-        "     make your emulator freeze and become totally unresponsive when\n"
-        "     using audio recording. the only way to avoid this is to use\n"
-        "     '-audio-in none' to disable it\n\n"
-
-        "  on this system, input <backend> can be one of:\n\n"
-    );
-    for ( nn = 0; ; nn++ ) {
-        const char*  descr;
-        const char*  name = audio_get_backend_name( 1, nn, &descr );
-        if (name == NULL)
-            break;
-        PRINTF( "    %-10s %s\n", name, descr );
-    }
-    PRINTF( "\n" );
-}
-
 
 static void
 help_scale(stralloc_t*  out)
@@ -906,6 +958,33 @@ help_memcheck(stralloc_t*  out)
     );
 }
 #endif  // CONFIG_MEMCHECK
+
+#ifdef CONFIG_STANDALONE_UI
+static void
+help_list_cores(stralloc_t*  out)
+{
+    PRINTF(
+    "  use '-list-cores localhost to list emulator core processes running on this machine.\n"
+    "  use '-list-cores host_name, or IP address to list emulator core processes running on\n"
+    "  a remote machine.\n"
+    );
+}
+
+static void
+help_attach_core(stralloc_t*  out)
+{
+    PRINTF(
+    "  the -attach-core <console socket> options attaches the UI to a running emulator core process.\n\n"
+
+    "  the <console socket> parameter must be in the form [host:]port, where 'host' addresses the\n"
+    "  machine on which the core process is running, and 'port' addresses the console port number for\n"
+    "  the running core process. Note that 'host' value must be in the form that can be resolved\n"
+    "  into an IP address.\n\n"
+
+    "  Use -list-cores to enumerate console ports for all currently running core processes.\n"
+    );
+}
+#endif  // CONFIG_STANDALONE_UI
 
 static void
 help_show_kernel(stralloc_t*  out)
@@ -1254,20 +1333,6 @@ help_keyset(stralloc_t*  out)
     );
 }
 
-static void
-help_old_system(stralloc_t*  out)
-{
-    PRINTF(
-    "  use '-old-system' if you want to use a recent emulator binary to run\n"
-    "  an old version of the Android SDK system images. Here, 'old' means anything\n"
-    "  older than version 1.4 of the emulator.\n\n"
-
-    "  NOTE: using '-old-system' with recent system images is likely to not work\n"
-    "        properly, though you may not notice it immediately (e.g. failure to\n"
-    "        start the emulated GPS hardware)\n\n"
-    );
-}
-
 #ifdef CONFIG_NAND_LIMITS
 static void
 help_nand_limits(stralloc_t*  out)
@@ -1363,6 +1428,65 @@ help_shared_net_id(stralloc_t*  out)
     );
 }
 
+static void
+help_gpu(stralloc_t* out)
+{
+    PRINTF(
+    "  Use -gpu <mode> to force the mode of hardware OpenGLES emulation.\n"
+    "  Valid values for <mode> are:\n\n"
+
+    "     on       -> enable GPU emulation\n"
+    "     off      -> disable GPU emulation\n"
+    "     auto     -> automatic detection\n"
+    "     enabled  -> same as 'on'\n"
+    "     disabled -> same as 'off'\n\n"
+
+    "  Note that enabling GPU emulation if the system image does not support it\n"
+    "  will prevent the proper display of the emulated framebuffer.\n\n"
+
+    "  You can always disable GPU emulation (i.e. '-gpu off'), and this will\n"
+    "  force the virtual device to use the slow software renderer instead.\n"
+    "  Note that OpenGLES 2.0 is _not_ supported by it.\n\n"
+
+    "  The 'auto' mode is the default. It will only enable GPU emulation if the\n"
+    "  virtual device supports it, and the host-side OpenGLES emulation library\n"
+    "  could be properly initialized (this can fail when you run the emulator\n"
+    "  under certain restricted environments where the program can't access the\n"
+    "  graphics sub-system (e.g. head-less servers).\n"
+    );
+}
+
+static void
+help_fake_camera(stralloc_t* out)
+{
+    PRINTF(
+    "  Use -fake-camera <mode> to control fake camera emulation.\n"
+    "  Valid values for <mode> are:\n\n"
+
+    "     off   -> disable fake camera emulation\n"
+    "     back  -> fake camera is facing back\n"
+    "     front -> fake camera is facing front\n\n"
+    );
+}
+
+static void
+help_webcam(stralloc_t* out)
+{
+    PRINTF(
+    "  Use -webcam off to disable web camera emulation.\n"
+    "  Use -webcam list to list web cameras available for emulation.\n"
+    "  Use -webcam name=<name>[,dir=<direction>] to setup parameters for web camera emulation.\n"
+
+    "  <name> platform-independent name identifying emulated camera device.\n"
+    "  use '-webcam list' to obtain the list of emulated camera devices.\n"
+    "  <direction> defines direction the camera is facing. Valid values are:\n\n"
+
+    "     front -> emulate camera as facing front\n"
+    "     back  -> emulate camera as facing back\n\n"
+
+    "  Default direction value for emulated web camera is 'front'\n\n"
+    );
+}
 
 #define  help_no_skin   NULL
 #define  help_netspeed  help_shaper

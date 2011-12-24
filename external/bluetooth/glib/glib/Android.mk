@@ -34,7 +34,8 @@ LOCAL_SRC_FILES:= \
 	grand.c \
 	gunidecomp.c \
 	gqsort.c \
-	gstdio.c
+	gstdio.c \
+	gqueue.c \
 
 LOCAL_C_INCLUDES:= \
 	$(LOCAL_PATH)/../ \
@@ -43,6 +44,6 @@ LOCAL_C_INCLUDES:= \
 LOCAL_CFLAGS:= \
 	-DANDROID_STUB
 
-LOCAL_MODULE:=libglib_static
+LOCAL_MODULE:=libglib
 
-include $(BUILD_STATIC_LIBRARY)
+include $(BUILD_SHARED_LIBRARY)

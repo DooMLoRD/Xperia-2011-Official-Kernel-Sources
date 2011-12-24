@@ -20,6 +20,8 @@
 #include "audio/audio.h"
 #include "arm-misc.h"
 #include "console.h"
+#include "blockdev.h"
+#include "goldfish_pipe.h"
 #ifdef CONFIG_MEMCHECK
 #include "memcheck/memcheck_api.h"
 #endif  // CONFIG_MEMCHECK
@@ -70,15 +72,13 @@ static void android_arm_init_(ram_addr_t ram_size,
     int i;
     struct arm_boot_info  info;
     ram_addr_t ram_offset;
-    DisplayState*  ds = get_displaystate();
 
     if (!cpu_model)
         cpu_model = "arm926";
 
     env = cpu_init(cpu_model);
-    register_savevm( "cpu", 0, ARM_CPU_SAVE_VERSION, cpu_save, cpu_load, env );
 
-    ram_offset = qemu_ram_alloc(ram_size);
+    ram_offset = qemu_ram_alloc(NULL,"android_arm",ram_size);
     cpu_register_physical_memory(0, ram_size, ram_offset | IO_MEM_RAM);
 
     cpu_pic = arm_pic_init_cpu(env);
@@ -116,14 +116,15 @@ static void android_arm_init_(ram_addr_t ram_size,
         }
     }
 
-    goldfish_fb_init(ds, 0);
+    goldfish_fb_init(0);
 #ifdef HAS_AUDIO
     goldfish_audio_init(0xff004000, 0, audio_input_source);
 #endif
     {
-        int  idx = drive_get_index( IF_IDE, 0, 0 );
-        if (idx >= 0)
-            goldfish_mmc_init(0xff005000, 0, drives_table[idx].bdrv);
+        DriveInfo* info = drive_get( IF_IDE, 0, 0 );
+        if (info != NULL) {
+            goldfish_mmc_init(0xff005000, 0, info->bdrv);
+        }
     }
 
     goldfish_memlog_init(0xff006000);
@@ -154,6 +155,8 @@ static void android_arm_init_(ram_addr_t ram_size,
         D("Trace file name is not set\n");
     }
 #endif
+
+    pipe_dev_init();
 
 #if TEST_SWITCH
     {

@@ -18,9 +18,15 @@
 #include "qemu-queue.h"
 
 #ifdef CONFIG_KVM
+
+#ifdef TARGET_I386
 extern int kvm_allowed;
 
 #define kvm_enabled() (kvm_allowed)
+#else
+#define kvm_enabled() (0)
+#endif
+
 #else
 #define kvm_enabled() (0)
 #endif
@@ -78,6 +84,8 @@ int kvm_put_mp_state(CPUState *env);
 /* Arch specific hooks */
 
 int kvm_arch_post_run(CPUState *env, struct kvm_run *run);
+
+int kvm_arch_vcpu_run(CPUState *env);
 
 int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run);
 

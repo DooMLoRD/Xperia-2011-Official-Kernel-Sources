@@ -10,7 +10,7 @@ LOCAL_SRC_FILES:= \
 	avinfo.c
 
 LOCAL_CFLAGS:= \
-	-DVERSION=\"4.69\"
+	-DVERSION=\"4.93\"
 
 LOCAL_C_INCLUDES:=\
 	$(LOCAL_PATH)/../lib \
@@ -35,7 +35,7 @@ LOCAL_SRC_FILES:= \
 	sdptool.c
 
 LOCAL_CFLAGS:= \
-	-DVERSION=\"4.69\" -fpermissive
+	-DVERSION=\"4.93\" -fpermissive
 
 LOCAL_C_INCLUDES:=\
 	$(LOCAL_PATH)/../lib \
@@ -61,7 +61,7 @@ LOCAL_SRC_FILES:= \
 
 LOCAL_CFLAGS:= \
 	-DSTORAGEDIR=\"/tmp\" \
-	-DVERSION=\"4.69\"
+	-DVERSION=\"4.93\"
 
 LOCAL_C_INCLUDES:=\
 	$(LOCAL_PATH)/../lib \
@@ -87,7 +87,7 @@ LOCAL_SRC_FILES:= \
 
 LOCAL_CFLAGS:= \
 	-DSTORAGEDIR=\"/tmp\" \
-	-DVERSION=\"4.69\"
+	-DVERSION=\"4.93\"
 
 LOCAL_C_INCLUDES:=\
 	$(LOCAL_PATH)/../lib \
@@ -132,13 +132,17 @@ include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:= \
 	hciattach.c \
+	hciattach_ath3k.c \
+	hciattach_qualcomm.c \
 	hciattach_st.c \
 	hciattach_ti.c \
-	hciattach_tialt.c
+	hciattach_tialt.c \
 
 LOCAL_CFLAGS:= \
-	-DVERSION=\"4.69\" \
-	-D__BSD_VISIBLE=1
+	-DVERSION=\"4.93\" \
+	-D__BSD_VISIBLE=1 \
+	-DCONFIGDIR=\"/etc/bluetooth\" \
+        -DNEED_PPOLL
 
 LOCAL_C_INCLUDES:=\
 	$(LOCAL_PATH)/../lib \
@@ -159,12 +163,12 @@ include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:= \
         kword.c \
-        main.c \
+        rfcomm.c \
         parser.c \
         lexer.c
 
 LOCAL_CFLAGS:= \
-        -DVERSION=\"4.69\" \
+        -DVERSION=\"4.93\" \
 	-DCONFIGDIR=\"/etc/bluetooth\" \
         -DNEED_PPOLL
 
@@ -180,3 +184,34 @@ LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE:=rfcomm
 
 include $(BUILD_EXECUTABLE)
+
+ifeq ($(BOARD_HAVE_BLUETOOTH_CSR),true)
+#
+# bccmd
+#
+
+include $(CLEAR_VARS)
+
+LOCAL_SRC_FILES:= \
+	bccmd.c \
+	csr.c \
+	csr_hci.c \
+	csr_bcsp.c \
+	csr_h4.c \
+	csr_3wire.c \
+	ubcsp.c
+
+LOCAL_CFLAGS:= \
+	-DVERSION=\"4.93\"
+
+LOCAL_C_INCLUDES:=\
+	$(LOCAL_PATH)/../lib \
+	$(LOCAL_PATH)/../src \
+
+LOCAL_SHARED_LIBRARIES := \
+	libbluetooth libbluetoothd
+
+LOCAL_MODULE:=bccmd
+
+include $(BUILD_EXECUTABLE)
+endif

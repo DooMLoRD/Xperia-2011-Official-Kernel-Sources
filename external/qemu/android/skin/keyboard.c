@@ -25,6 +25,7 @@
 #  define  D(...)  ((void)0)
 #endif
 
+#define DEFAULT_ANDROID_CHARMAP  "qwerty2"
 
 /** LAST PRESSED KEYS
  ** a small buffer of last pressed keys, this is used to properly
@@ -70,15 +71,6 @@ skin_keyboard_set_keyset( SkinKeyboard*  keyboard, SkinKeyset*  kset )
     keyboard->kset = kset;
 }
 
-
-const char*
-skin_keyboard_charmap_name( SkinKeyboard*  keyboard )
-{
-    if (keyboard && keyboard->charmap)
-        return keyboard->charmap->name;
-
-    return "qwerty";
-}
 
 void
 skin_keyboard_set_rotation( SkinKeyboard*     keyboard,
@@ -520,8 +512,8 @@ skin_keyboard_create_from_charmap_name(const char*  charmap_name,
 
     kb->charmap = android_get_charmap_by_name(charmap_name);
     if (!kb->charmap) {
-        // Charmap name was not found. Default to the first charmap in the array.
-        kb->charmap = android_get_charmap_by_index(0);
+        // Charmap name was not found. Default to "qwerty2" */
+        kb->charmap = android_get_charmap_by_name(DEFAULT_ANDROID_CHARMAP);
         fprintf(stderr, "### warning, skin requires unknown '%s' charmap, reverting to '%s'\n",
                 charmap_name, kb->charmap->name );
     }
@@ -538,22 +530,15 @@ skin_keyboard_create_from_charmap_name(const char*  charmap_name,
 }
 
 SkinKeyboard*
-skin_keyboard_create_from_aconfig( AConfig*  aconfig, int  use_raw_keys )
+skin_keyboard_create( const char*  kcm_file_path, int  use_raw_keys )
 {
-    const char*    charmap_name = "qwerty";
-    AConfig*       node = aconfig_find( aconfig, "keyboard" );
-    if (node != NULL) {
-        charmap_name = aconfig_str(node, "charmap", charmap_name);
-    }
-    return skin_keyboard_create_from_charmap_name(charmap_name, use_raw_keys);
-}
+    const char* charmap_name = DEFAULT_ANDROID_CHARMAP;
+    char        cmap_buff[AKEYCHARMAP_NAME_SIZE];
 
-SkinKeyboard*
-skin_keyboard_create_from_kcm( const char*  kcm_file_path, int  use_raw_keys )
-{
-    char charmap_name[AKEYCHARMAP_NAME_SIZE];
-    kcm_extract_charmap_name(kcm_file_path, charmap_name,
-                             sizeof(charmap_name));
+    if (kcm_file_path != NULL) {
+        kcm_extract_charmap_name(kcm_file_path, cmap_buff, sizeof cmap_buff);
+        charmap_name = cmap_buff;
+    }
     return skin_keyboard_create_from_charmap_name(charmap_name, use_raw_keys);
 }
 

@@ -57,7 +57,8 @@ static void print_dev_list(int ctl, int flags)
 	struct hci_dev_req *dr;
 	int i;
 
-	if (!(dl = malloc(HCI_MAX_DEV * sizeof(struct hci_dev_req) + sizeof(uint16_t)))) {
+	if (!(dl = malloc(HCI_MAX_DEV * sizeof(struct hci_dev_req) +
+		sizeof(uint16_t)))) {
 		perror("Can't allocate memory");
 		exit(1);
 	}
@@ -119,6 +120,51 @@ static void print_dev_features(struct hci_dev_info *di, int format)
 	}
 }
 
+static void print_le_states(uint64_t states)
+{
+	int i;
+	const char *le_states[] = {
+		"Non-connectable Advertising State" ,
+		"Scannable Advertising State",
+		"Connectable Advertising State",
+		"Directed Advertising State",
+		"Passive Scanning State",
+		"Active Scanning State",
+		"Initiating State/Connection State in Master Role",
+		"Connection State in the Slave Role",
+		"Non-connectable Advertising State and Passive Scanning State combination",
+		"Scannable Advertising State and Passive Scanning State combination",
+		"Connectable Advertising State and Passive Scanning State combination",
+		"Directed Advertising State and Passive Scanning State combination",
+		"Non-connectable Advertising State and Active Scanning State combination",
+		"Scannable Advertising State and Active Scanning State combination",
+		"Connectable Advertising State and Active Scanning State combination",
+		"Directed Advertising State and Active Scanning State combination",
+		"Non-connectable Advertising State and Initiating State combination",
+		"Scannable Advertising State and Initiating State combination",
+		"Non-connectable Advertising State and Master Role combination",
+		"Scannable Advertising State and Master Role combination",
+		"Non-connectable Advertising State and Slave Role combination",
+		"Scannable Advertising State and Slave Role combination",
+		"Passive Scanning State and Initiating State combination",
+		"Active Scanning State and Initiating State combination",
+		"Passive Scanning State and Master Role combination",
+		"Active Scanning State and Master Role combination",
+		"Passive Scanning State and Slave Role combination",
+		"Active Scanning State and Slave Role combination",
+		"Initiating State and Master Role combination/Master Role and Master Role combination",
+		NULL
+	};
+
+	printf("Supported link layer states:\n");
+	for (i = 0; le_states[i]; i++) {
+		const char *status;
+
+		status = states & (1 << i) ? "YES" : "NO ";
+		printf("\t%s %s\n", status, le_states[i]);
+	}
+}
+
 static void cmd_rstat(int ctl, int hdev, char *opt)
 {
 	/* Reset HCI device stat counters */
@@ -147,6 +193,139 @@ static void cmd_scan(int ctl, int hdev, char *opt)
 						hdev, strerror(errno), errno);
 		exit(1);
 	}
+}
+
+static void cmd_le_addr(int ctl, int hdev, char *opt)
+{
+	struct hci_request rq;
+	le_set_random_address_cp cp;
+	uint8_t status;
+	int dd, err, ret;
+
+	if (!opt)
+		return;
+
+	if (hdev < 0)
+		hdev = hci_get_route(NULL);
+
+	dd = hci_open_dev(hdev);
+	if (dd < 0) {
+		err = errno;
+		fprintf(stderr, "Could not open device: %s(%d)\n",
+							strerror(err), err);
+		exit(1);
+	}
+
+	memset(&cp, 0, sizeof(cp));
+
+	str2ba(opt, &cp.bdaddr);
+
+	memset(&rq, 0, sizeof(rq));
+	rq.ogf = OGF_LE_CTL;
+	rq.ocf = OCF_LE_SET_RANDOM_ADDRESS;
+	rq.cparam = &cp;
+	rq.clen = LE_SET_RANDOM_ADDRESS_CP_SIZE;
+	rq.rparam = &status;
+	rq.rlen = 1;
+
+	ret = hci_send_req(dd, &rq, 1000);
+	if (status || ret < 0) {
+		err = errno;
+		fprintf(stderr, "Can't set random address for hci%d: "
+					"%s (%d)\n", hdev, strerror(err), err);
+	}
+
+	hci_close_dev(dd);
+}
+
+static void cmd_le_adv(int ctl, int hdev, char *opt)
+{
+	struct hci_request rq;
+	le_set_advertise_enable_cp advertise_cp;
+	uint8_t status;
+	int dd, ret;
+
+	if (hdev < 0)
+		hdev = hci_get_route(NULL);
+
+	dd = hci_open_dev(hdev);
+	if (dd < 0) {
+		perror("Could not open device");
+		exit(1);
+	}
+
+	memset(&advertise_cp, 0, sizeof(advertise_cp));
+	if (strcmp(opt, "noleadv") == 0)
+		advertise_cp.enable = 0x00;
+	else
+		advertise_cp.enable = 0x01;
+
+	memset(&rq, 0, sizeof(rq));
+	rq.ogf = OGF_LE_CTL;
+	rq.ocf = OCF_LE_SET_ADVERTISE_ENABLE;
+	rq.cparam = &advertise_cp;
+	rq.clen = LE_SET_ADVERTISE_ENABLE_CP_SIZE;
+	rq.rparam = &status;
+	rq.rlen = 1;
+
+	ret = hci_send_req(dd, &rq, 1000);
+
+	hci_close_dev(dd);
+
+	if (ret < 0) {
+		fprintf(stderr, "Can't set advertise mode on hci%d: %s (%d)\n",
+						hdev, strerror(errno), errno);
+		exit(1);
+	}
+
+	if (status) {
+		fprintf(stderr, "LE set advertise enable on hci%d returned status %d\n",
+						hdev, status);
+		exit(1);
+	}
+}
+
+static void cmd_le_states(int ctl, int hdev, char *opt)
+{
+	le_read_supported_states_rp rp;
+	struct hci_request rq;
+	int err, dd;
+
+	if (hdev < 0)
+		hdev = hci_get_route(NULL);
+
+	dd = hci_open_dev(hdev);
+	if (dd < 0) {
+		fprintf(stderr, "Can't open device hci%d: %s (%d)\n",
+						hdev, strerror(errno), errno);
+		exit(1);
+	}
+
+	memset(&rp, 0, sizeof(rp));
+	memset(&rq, 0, sizeof(rq));
+
+	rq.ogf    = OGF_LE_CTL;
+	rq.ocf    = OCF_LE_READ_SUPPORTED_STATES;
+	rq.rparam = &rp;
+	rq.rlen   = LE_READ_SUPPORTED_STATES_RP_SIZE;
+
+	err = hci_send_req(dd, &rq, 1000);
+
+	hci_close_dev(dd);
+
+	if (err < 0) {
+		fprintf(stderr, "Can't read LE supported states on hci%d:"
+				" %s(%d)\n", hdev, strerror(errno), errno);
+		exit(1);
+	}
+
+	if (rp.status) {
+		fprintf(stderr, "Read LE supported states on hci%d"
+				" returned status %d\n", hdev, rp.status);
+		exit(1);
+	}
+
+	print_le_states(rp.states);
 }
 
 static void cmd_iac(int ctl, int hdev, char *opt)
@@ -463,7 +642,7 @@ static char *get_minor_device_name(int major, int minor)
 	case 0:	/* misc */
 		return "";
 	case 1:	/* computer */
-		switch(minor) {
+		switch (minor) {
 		case 0:
 			return "Uncategorized";
 		case 1:
@@ -481,7 +660,7 @@ static char *get_minor_device_name(int major, int minor)
 		}
 		break;
 	case 2:	/* phone */
-		switch(minor) {
+		switch (minor) {
 		case 0:
 			return "Uncategorized";
 		case 1:
@@ -501,7 +680,7 @@ static char *get_minor_device_name(int major, int minor)
 	case 3:	/* lan access */
 		if (minor == 0)
 			return "Uncategorized";
-		switch(minor / 8) {
+		switch (minor / 8) {
 		case 0:
 			return "Fully available";
 		case 1:
@@ -521,7 +700,7 @@ static char *get_minor_device_name(int major, int minor)
 		}
 		break;
 	case 4:	/* audio/video */
-		switch(minor) {
+		switch (minor) {
 		case 0:
 			return "Uncategorized";
 		case 1:
@@ -565,7 +744,7 @@ static char *get_minor_device_name(int major, int minor)
 
 		cls_str[0] = '\0';
 
-		switch(minor & 48) {
+		switch (minor & 48) {
 		case 16:
 			strncpy(cls_str, "Keyboard", sizeof(cls_str));
 			break;
@@ -576,10 +755,10 @@ static char *get_minor_device_name(int major, int minor)
 			strncpy(cls_str, "Combo keyboard/pointing device", sizeof(cls_str));
 			break;
 		}
-		if((minor & 15) && (strlen(cls_str) > 0))
+		if ((minor & 15) && (strlen(cls_str) > 0))
 			strcat(cls_str, "/");
 
-		switch(minor & 15) {
+		switch (minor & 15) {
 		case 0:
 			break;
 		case 1:
@@ -604,7 +783,7 @@ static char *get_minor_device_name(int major, int minor)
 			strncat(cls_str, "(reserved)", sizeof(cls_str) - strlen(cls_str));
 			break;
 		}
-		if(strlen(cls_str) > 0)
+		if (strlen(cls_str) > 0)
 			return cls_str;
 	}
 	case 6:	/* imaging */
@@ -618,7 +797,7 @@ static char *get_minor_device_name(int major, int minor)
 			return "Printer";
 		break;
 	case 7: /* wearable */
-		switch(minor) {
+		switch (minor) {
 		case 1:
 			return "Wrist Watch";
 		case 2:
@@ -632,7 +811,7 @@ static char *get_minor_device_name(int major, int minor)
 		}
 		break;
 	case 8: /* toy */
-		switch(minor) {
+		switch (minor) {
 		case 1:
 			return "Robot";
 		case 2:
@@ -716,10 +895,24 @@ static void cmd_class(int ctl, int hdev, char *opt)
 
 static void cmd_voice(int ctl, int hdev, char *opt)
 {
-	static char *icf[] = { "Linear", "u-Law", "A-Law", "Reserved" };
-	static char *idf[] = { "1's complement", "2's complement", "Sign-Magnitude", "Reserved" };
-	static char *iss[] = { "8 bit", "16 bit" };
-	static char *acf[] = { "CVSD", "u-Law", "A-Law", "Reserved" };
+	static char *icf[] = {	"Linear",
+				"u-Law",
+				"A-Law",
+				"Reserved" };
+
+	static char *idf[] = {	"1's complement",
+				"2's complement",
+				"Sign-Magnitude",
+				"Reserved" };
+
+	static char *iss[] = {	"8 bit",
+				"16 bit" };
+
+	static char *acf[] = {	"CVSD",
+				"u-Law",
+				"A-Law",
+				"Reserved" };
+
 	int s = hci_open_dev(hdev);
 
 	if (s < 0) {
@@ -749,15 +942,19 @@ static void cmd_voice(int ctl, int hdev, char *opt)
 			((vs & 0x03fc) == 0x0060) ? " (Default Condition)" : "");
 		printf("\tInput Coding: %s\n", icf[ic]);
 		printf("\tInput Data Format: %s\n", idf[(vs & 0xc0) >> 6]);
+
 		if (!ic) {
-			printf("\tInput Sample Size: %s\n", iss[(vs & 0x20) >> 5]);
-			printf("\t# of bits padding at MSB: %d\n", (vs & 0x1c) >> 2);
+			printf("\tInput Sample Size: %s\n",
+				iss[(vs & 0x20) >> 5]);
+			printf("\t# of bits padding at MSB: %d\n",
+				(vs & 0x1c) >> 2);
 		}
 		printf("\tAir Coding Format: %s\n", acf[vs & 0x03]);
 	}
 }
 
-static int get_link_key(const bdaddr_t *local, const bdaddr_t *peer, uint8_t *key)
+static int get_link_key(const bdaddr_t *local, const bdaddr_t *peer,
+			uint8_t *key)
 {
 	char filename[PATH_MAX + 1], addr[18], tmp[3], *str;
 	int i;
@@ -941,7 +1138,7 @@ static void cmd_version(int ctl, int hdev, char *opt)
 	}
 
 	hciver = hci_vertostr(ver.hci_ver);
-	lmpver = lmp_vertostr(ver.hci_ver);
+	lmpver = lmp_vertostr(ver.lmp_ver);
 
 	print_dev_hdr(&di);
 	printf("\tHCI Version: %s (0x%x)  Revision: 0x%x\n"
@@ -1055,7 +1252,7 @@ static void cmd_inq_data(int ctl, int hdev, char *opt)
 	}
 
 	if (opt) {
-		uint8_t fec = 0, data[240];
+		uint8_t fec = 0, data[HCI_MAX_EIR_LENGTH];
 		char tmp[3];
 		int i, size;
 
@@ -1063,8 +1260,8 @@ static void cmd_inq_data(int ctl, int hdev, char *opt)
 
 		memset(tmp, 0, sizeof(tmp));
 		size = (strlen(opt) + 1) / 2;
-		if (size > 240)
-			size = 240;
+		if (size > HCI_MAX_EIR_LENGTH)
+			size = HCI_MAX_EIR_LENGTH;
 
 		for (i = 0; i < size; i++) {
 			memcpy(tmp, opt + (i * 2), 2);
@@ -1077,7 +1274,7 @@ static void cmd_inq_data(int ctl, int hdev, char *opt)
 			exit(1);
 		}
 	} else {
-		uint8_t fec, data[240], len, type, *ptr;
+		uint8_t fec, data[HCI_MAX_EIR_LENGTH], len, type, *ptr;
 		char *str;
 
 		if (hci_read_ext_inquiry_response(dd, &fec, data, 1000) < 0) {
@@ -1088,7 +1285,7 @@ static void cmd_inq_data(int ctl, int hdev, char *opt)
 
 		print_dev_hdr(&di);
 		printf("\tFEC %s\n\t\t", fec ? "enabled" : "disabled");
-		for (i = 0; i < 240; i++)
+		for (i = 0; i < HCI_MAX_EIR_LENGTH; i++)
 			printf("%02x%s%s", data[i], (i + 1) % 8 ? "" : " ",
 				(i + 1) % 16 ? " " : (i < 239 ? "\n\t\t" : "\n"));
 
@@ -1318,8 +1515,10 @@ static void cmd_page_parms(int ctl, int hdev, char *opt)
 
 		window   = btohs(rp.window);
 		interval = btohs(rp.interval);
-		printf("\tPage interval: %u slots (%.2f ms), window: %u slots (%.2f ms)\n",
-				interval, (float)interval * 0.625, window, (float)window * 0.625);
+		printf("\tPage interval: %u slots (%.2f ms), "
+			"window: %u slots (%.2f ms)\n",
+			interval, (float)interval * 0.625,
+			window, (float)window * 0.625);
 	}
 }
 
@@ -1403,7 +1602,7 @@ static void cmd_afh_mode(int ctl, int hdev, char *opt)
 
 		if (hci_write_afh_mode(dd, mode, 2000) < 0) {
 			fprintf(stderr, "Can't set AFH mode on hci%d: %s (%d)\n",
-						hdev, strerror(errno), errno);
+					hdev, strerror(errno), errno);
 			exit(1);
 		}
 	} else {
@@ -1411,7 +1610,7 @@ static void cmd_afh_mode(int ctl, int hdev, char *opt)
 
 		if (hci_read_afh_mode(dd, &mode, 1000) < 0) {
 			fprintf(stderr, "Can't read AFH mode on hci%d: %s (%d)\n",
-						hdev, strerror(errno), errno);
+					hdev, strerror(errno), errno);
 			exit(1);
 		}
 
@@ -1436,7 +1635,7 @@ static void cmd_ssp_mode(int ctl, int hdev, char *opt)
 
 		if (hci_write_simple_pairing_mode(dd, mode, 2000) < 0) {
 			fprintf(stderr, "Can't set Simple Pairing mode on hci%d: %s (%d)\n",
-						hdev, strerror(errno), errno);
+					hdev, strerror(errno), errno);
 			exit(1);
 		}
 	} else {
@@ -1444,12 +1643,13 @@ static void cmd_ssp_mode(int ctl, int hdev, char *opt)
 
 		if (hci_read_simple_pairing_mode(dd, &mode, 1000) < 0) {
 			fprintf(stderr, "Can't read Simple Pairing mode on hci%d: %s (%d)\n",
-						hdev, strerror(errno), errno);
+					hdev, strerror(errno), errno);
 			exit(1);
 		}
 
 		print_dev_hdr(&di);
-		printf("\tSimple Pairing mode: %s\n", mode == 1 ? "Enabled" : "Disabled");
+		printf("\tSimple Pairing mode: %s\n",
+			mode == 1 ? "Enabled" : "Disabled");
 	}
 }
 
@@ -1467,7 +1667,8 @@ static void print_rev_ericsson(int dd)
 	rq.rlen   = sizeof(buf);
 
 	if (hci_send_req(dd, &rq, 1000) < 0) {
-		printf("\nCan't read revision info: %s (%d)\n", strerror(errno), errno);
+		printf("\nCan't read revision info: %s (%d)\n",
+			strerror(errno), errno);
 		return;
 	}
 
@@ -1513,7 +1714,8 @@ static void print_rev_digianswer(int dd)
 	rq.rlen   = sizeof(buf);
 
 	if (hci_send_req(dd, &rq, 1000) < 0) {
-		printf("\nCan't read revision info: %s (%d)\n", strerror(errno), errno);
+		printf("\nCan't read revision info: %s (%d)\n",
+			strerror(errno), errno);
 		return;
 	}
 
@@ -1522,7 +1724,8 @@ static void print_rev_digianswer(int dd)
 
 static void print_rev_broadcom(uint16_t hci_rev, uint16_t lmp_subver)
 {
-	printf("\tFirmware %d.%d / %d\n", hci_rev & 0xff, lmp_subver >> 8, lmp_subver & 0xff);
+	printf("\tFirmware %d.%d / %d\n",
+		hci_rev & 0xff, lmp_subver >> 8, lmp_subver & 0xff);
 }
 
 static void print_rev_avm(uint16_t hci_rev, uint16_t lmp_subver)
@@ -1728,6 +1931,10 @@ static struct {
 	{ "revision",	cmd_revision,	0,		"Display revision information" },
 	{ "block",	cmd_block,	"<bdaddr>",	"Add a device to the blacklist" },
 	{ "unblock",	cmd_unblock,	"<bdaddr>",	"Remove a device from the blacklist" },
+	{ "lerandaddr", cmd_le_addr,	"<bdaddr>",	"Set LE Random Address" },
+	{ "leadv",	cmd_le_adv,	0,		"Enable LE advertising" },
+	{ "noleadv",	cmd_le_adv,	0,		"Disable LE advertising" },
+	{ "lestates",	cmd_le_states,	0,		"Display the supported LE states" },
 	{ NULL, NULL, 0 }
 };
 
@@ -1738,9 +1945,9 @@ static void usage(void)
 	printf("hciconfig - HCI device configuration utility\n");
 	printf("Usage:\n"
 		"\thciconfig\n"
-		"\thciconfig [-a] hciX [command]\n");
+		"\thciconfig [-a] hciX [command ...]\n");
 	printf("Commands:\n");
-	for (i=0; command[i].cmd; i++)
+	for (i = 0; command[i].cmd; i++)
 		printf("\t%-10s %-8s\t%s\n", command[i].cmd,
 		command[i].opt ? command[i].opt : " ",
 		command[i].doc);
@@ -1754,10 +1961,10 @@ static struct option main_options[] = {
 
 int main(int argc, char *argv[])
 {
-	int opt, ctl, i, cmd=0;
+	int opt, ctl, i, cmd = 0;
 
-	while ((opt=getopt_long(argc, argv, "ah", main_options, NULL)) != -1) {
-		switch(opt) {
+	while ((opt = getopt_long(argc, argv, "ah", main_options, NULL)) != -1) {
+		switch (opt) {
 		case 'a':
 			all = 1;
 			break;
@@ -1801,7 +2008,8 @@ int main(int argc, char *argv[])
 
 	while (argc > 0) {
 		for (i = 0; command[i].cmd; i++) {
-			if (strncmp(command[i].cmd, *argv, 5))
+			if (strncmp(command[i].cmd,
+					*argv, strlen(command[i].cmd)))
 				continue;
 
 			if (command[i].opt) {
@@ -1812,6 +2020,11 @@ int main(int argc, char *argv[])
 			cmd = 1;
 			break;
 		}
+
+		if (command[i].cmd == 0)
+			fprintf(stderr, "Warning: unknown command - \"%s\"\n",
+					*argv);
+
 		argc--; argv++;
 	}
 

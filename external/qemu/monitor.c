@@ -36,7 +36,7 @@
 #include "monitor.h"
 #include "readline.h"
 #include "console.h"
-#include "block.h"
+#include "blockdev.h"
 #include "audio/audio.h"
 #include "disas.h"
 #include "balloon.h"
@@ -44,6 +44,7 @@
 #include "migration.h"
 #include "kvm.h"
 #include "acl.h"
+#include "exec-all.h"
 
 //#define DEBUG
 //#define DEBUG_COMPLETION
@@ -70,8 +71,12 @@ typedef struct mon_cmd_t {
     const char *help;
 } mon_cmd_t;
 
+#define MON_CMD_T_INITIALIZER { NULL, NULL, NULL, NULL, NULL }
+
 struct Monitor {
     CharDriverState *chr;
+    int mux_out;
+    int reset_seen;
     int flags;
     int suspend_cnt;
     uint8_t outbuf[1024];
@@ -81,9 +86,42 @@ struct Monitor {
     BlockDriverCompletionFunc *password_completion_cb;
     void *password_opaque;
     QLIST_ENTRY(Monitor) entry;
+    int has_quit;
+#ifdef CONFIG_ANDROID
+    void*            fake_opaque;
+    MonitorFakeFunc  fake_func;
+    int64_t          fake_count;
+
+#endif
 };
 
+#ifdef CONFIG_ANDROID
+#include "monitor-android.h"
+#endif
+
 static QLIST_HEAD(mon_list, Monitor) mon_list;
+
+#if defined(TARGET_I386)
+static void do_inject_mce(Monitor *mon,
+                          int cpu_index, int bank,
+                          unsigned status_hi, unsigned status_lo,
+                          unsigned mcg_status_hi, unsigned mcg_status_lo,
+                          unsigned addr_hi, unsigned addr_lo,
+                          unsigned misc_hi, unsigned misc_lo)
+{
+    CPUState *cenv;
+    uint64_t status = ((uint64_t)status_hi << 32) | status_lo;
+    uint64_t mcg_status = ((uint64_t)mcg_status_hi << 32) | mcg_status_lo;
+    uint64_t addr = ((uint64_t)addr_hi << 32) | addr_lo;
+    uint64_t misc = ((uint64_t)misc_hi << 32) | misc_lo;
+
+    for (cenv = first_cpu; cenv != NULL; cenv = cenv->next_cpu)
+        if (cenv->cpu_index == cpu_index && cenv->mcg_cap) {
+            cpu_inject_x86_mce(cenv, bank, status, mcg_status, addr, misc);
+            break;
+        }
+}
+#endif
 
 static const mon_cmd_t mon_cmds[];
 static const mon_cmd_t info_cmds[];
@@ -92,6 +130,24 @@ Monitor *cur_mon = NULL;
 
 static void monitor_command_cb(Monitor *mon, const char *cmdline,
                                void *opaque);
+
+static inline int qmp_cmd_mode(const Monitor *mon)
+{
+    //return (mon->mc ? mon->mc->command_mode : 0);
+    return 0;
+}
+
+/* Return true if in control mode, false otherwise */
+static inline int monitor_ctrl_mode(const Monitor *mon)
+{
+    return (mon->flags & MONITOR_USE_CONTROL);
+}
+
+/* Return non-zero iff we have a current monitor, and it is in QMP mode.  */
+int monitor_cur_is_qmp(void)
+{
+    return cur_mon && monitor_ctrl_mode(cur_mon);
+}
 
 static void monitor_read_command(Monitor *mon, int show_prompt)
 {
@@ -113,13 +169,15 @@ static int monitor_read_password(Monitor *mon, ReadLineFunc *readline_func,
     }
 }
 
+#ifndef CONFIG_ANDROID /* See monitor-android.h */
 void monitor_flush(Monitor *mon)
 {
-    if (mon && mon->outbuf_index != 0 && mon->chr->focus == 0) {
+    if (mon && mon->outbuf_index != 0 && !mon->mux_out) {
         qemu_chr_write(mon->chr, mon->outbuf, mon->outbuf_index);
         mon->outbuf_index = 0;
     }
 }
+#endif
 
 /* flush at every end of line or if the buffer is full */
 static void monitor_puts(Monitor *mon, const char *str)
@@ -184,13 +242,19 @@ void monitor_print_filename(Monitor *mon, const char *filename)
     }
 }
 
-static int monitor_fprintf(FILE *stream, const char *fmt, ...)
+static int GCC_FMT_ATTR(2, 3) monitor_fprintf(FILE *stream,
+                                              const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
     monitor_vprintf((Monitor *)stream, fmt, ap);
     va_end(ap);
     return 0;
+}
+
+void monitor_protocol_event(MonitorEvent event, QObject *data)
+{
+    /* XXX: TODO */
 }
 
 static int compare_cmd(const char *name, const char *list)
@@ -239,18 +303,6 @@ static void help_cmd(Monitor *mon, const char *name)
                 monitor_printf(mon, "%-10s %s\n", item->name, item->help);
             }
         }
-    }
-}
-
-static void do_commit(Monitor *mon, const char *device)
-{
-    int i, all_devices;
-
-    all_devices = !strcmp(device, "all");
-    for (i = 0; i < nb_drives; i++) {
-            if (all_devices ||
-                !strcmp(bdrv_get_device_name(drives_table[i].bdrv), device))
-                bdrv_commit(drives_table[i].bdrv);
     }
 }
 
@@ -409,61 +461,11 @@ static void do_info_cpu_stats(Monitor *mon)
 
 static void do_quit(Monitor *mon)
 {
-    exit(0);
-}
-
-static int eject_device(Monitor *mon, BlockDriverState *bs, int force)
-{
-    if (bdrv_is_inserted(bs)) {
-        if (!force) {
-            if (!bdrv_is_removable(bs)) {
-                monitor_printf(mon, "device is not removable\n");
-                return -1;
-            }
-            if (bdrv_is_locked(bs)) {
-                monitor_printf(mon, "device is locked\n");
-                return -1;
-            }
-        }
-        bdrv_close(bs);
+    if ((mon->flags & MONITOR_QUIT_DOESNT_EXIT) == 0) {
+        exit(0);
     }
-    return 0;
-}
-
-static void do_eject(Monitor *mon, int force, const char *filename)
-{
-    BlockDriverState *bs;
-
-    bs = bdrv_find(filename);
-    if (!bs) {
-        monitor_printf(mon, "device not found\n");
-        return;
-    }
-    eject_device(mon, bs, force);
-}
-
-static void do_change_block(Monitor *mon, const char *device,
-                            const char *filename, const char *fmt)
-{
-    BlockDriverState *bs;
-    BlockDriver *drv = NULL;
-
-    bs = bdrv_find(device);
-    if (!bs) {
-        monitor_printf(mon, "device not found\n");
-        return;
-    }
-    if (fmt) {
-        drv = bdrv_find_format(fmt);
-        if (!drv) {
-            monitor_printf(mon, "invalid format %s\n", fmt);
-            return;
-        }
-    }
-    if (eject_device(mon, bs, 0) < 0)
-        return;
-    bdrv_open2(bs, filename, 0, drv);
-    monitor_read_bdrv_key_start(mon, bs, NULL, NULL);
+    /* we cannot destroy the monitor just yet, so flag it instead */
+    mon->has_quit = 1;
 }
 
 static void change_vnc_password_cb(Monitor *mon, const char *password,
@@ -866,7 +868,7 @@ static void do_physical_memory_save(Monitor *mon, unsigned int valh,
     FILE *f;
     uint32_t l;
     uint8_t buf[1024];
-    target_phys_addr_t addr = GET_TPHYSADDR(valh, vall); 
+    target_phys_addr_t addr = GET_TPHYSADDR(valh, vall);
 
     f = fopen(filename, "wb");
     if (!f) {
@@ -1130,8 +1132,7 @@ static void do_sendkey(Monitor *mon, const char *string, int has_hold_time,
         kbd_put_keycode(keycode & 0x7f);
     }
     /* delayed key up events */
-    qemu_mod_timer(key_timer, qemu_get_clock(vm_clock) +
-                   muldiv64(get_ticks_per_sec(), hold_time, 1000));
+    qemu_mod_timer(key_timer, qemu_get_clock_ms(vm_clock) + hold_time);
 }
 
 static int mouse_button_state;
@@ -1661,7 +1662,7 @@ static void do_acl(Monitor *mon,
 
 static const mon_cmd_t mon_cmds[] = {
 #include "qemu-monitor.h"
-    { NULL, NULL, },
+    MON_CMD_T_INITIALIZER
 };
 
 /* Please update qemu-monitor.hx when adding or changing commands */
@@ -1741,7 +1742,7 @@ static const mon_cmd_t info_cmds[] = {
       "", "show balloon information" },
     { "qtree", "", do_info_qtree,
       "", "show device tree" },
-    { NULL, NULL, },
+    MON_CMD_T_INITIALIZER
 };
 
 /*******************************************************************/
@@ -1758,6 +1759,8 @@ typedef struct MonitorDef {
     target_long (*get_value)(const struct MonitorDef *md, int val);
     int type;
 } MonitorDef;
+
+#define MONITOR_DEF_INITIALIZER  { NULL, 0, NULL, 0 }
 
 #if defined(TARGET_I386)
 static target_long monitor_get_pc (const struct MonitorDef *md, int val)
@@ -2085,7 +2088,7 @@ static const MonitorDef monitor_defs[] = {
     { "fprs", offsetof(CPUState, fprs) },
 #endif
 #endif
-    { NULL },
+    MONITOR_DEF_INITIALIZER
 };
 
 static void expr_error(Monitor *mon, const char *msg)
@@ -2433,7 +2436,15 @@ static void monitor_handle_command(Monitor *mon, const char *cmdline)
                       void *arg3, void *arg4, void *arg5);
     void (*handler_7)(Monitor *mon, void *arg0, void *arg1, void *arg2,
                       void *arg3, void *arg4, void *arg5, void *arg6);
-
+    void (*handler_8)(Monitor *mon, void *arg0, void *arg1, void *arg2,
+                      void *arg3, void *arg4, void *arg5, void *arg6,
+                      void *arg7);
+    void (*handler_9)(Monitor *mon, void *arg0, void *arg1, void *arg2,
+                      void *arg3, void *arg4, void *arg5, void *arg6,
+                      void *arg7, void *arg8);
+    void (*handler_10)(Monitor *mon, void *arg0, void *arg1, void *arg2,
+                       void *arg3, void *arg4, void *arg5, void *arg6,
+                       void *arg7, void *arg8, void *arg9);
 #ifdef DEBUG
     monitor_printf(mon, "command='%s'\n", cmdline);
 #endif
@@ -2721,6 +2732,21 @@ static void monitor_handle_command(Monitor *mon, const char *cmdline)
         handler_7(mon, args[0], args[1], args[2], args[3], args[4], args[5],
                   args[6]);
         break;
+    case 8:
+        handler_8 = cmd->handler;
+        handler_8(mon, args[0], args[1], args[2], args[3], args[4], args[5],
+                  args[6], args[7]);
+        break;
+    case 9:
+        handler_9 = cmd->handler;
+        handler_9(mon, args[0], args[1], args[2], args[3], args[4], args[5],
+                  args[6], args[7], args[8]);
+        break;
+    case 10:
+        handler_10 = cmd->handler;
+        handler_10(mon, args[0], args[1], args[2], args[3], args[4], args[5],
+                   args[6], args[7], args[8], args[9]);
+        break;
     default:
         monitor_printf(mon, "unsupported number of arguments: %d\n", nb_args);
         goto fail;
@@ -2728,6 +2754,22 @@ static void monitor_handle_command(Monitor *mon, const char *cmdline)
  fail:
     for(i = 0; i < MAX_ARGS; i++)
         qemu_free(str_allocated[i]);
+}
+
+void monitor_set_error(Monitor *mon, QError *qerror)
+{
+#if 1
+    QDECREF(qerror);
+#else
+    /* report only the first error */
+    if (!mon->error) {
+        mon->error = qerror;
+    } else {
+        MON_DEBUG("Additional error report at %s:%d\n",
+                  qerror->file, qerror->linenr);
+        QDECREF(qerror);
+    }
+#endif
 }
 
 static void cmd_completion(const char *name, const char *list)
@@ -2938,6 +2980,8 @@ static int monitor_can_read(void *opaque)
     return (mon->suspend_cnt == 0) ? 128 : 0;
 }
 
+static void monitor_done(Monitor *mon); // forward
+
 static void monitor_read(void *opaque, const uint8_t *buf, int size)
 {
     Monitor *old_mon = cur_mon;
@@ -2955,6 +2999,9 @@ static void monitor_read(void *opaque, const uint8_t *buf, int size)
             monitor_handle_command(cur_mon, (char *)buf);
     }
 
+    if (cur_mon->has_quit) {
+        monitor_done(cur_mon);
+    }
     cur_mon = old_mon;
 }
 
@@ -2987,23 +3034,36 @@ static void monitor_event(void *opaque, int event)
 
     switch (event) {
     case CHR_EVENT_MUX_IN:
-        readline_restart(mon->rs);
-        monitor_resume(mon);
-        monitor_flush(mon);
+        mon->mux_out = 0;
+        if (mon->reset_seen) {
+            readline_restart(mon->rs);
+            monitor_resume(mon);
+            monitor_flush(mon);
+        } else {
+            mon->suspend_cnt = 0;
+        }
         break;
 
     case CHR_EVENT_MUX_OUT:
-        if (mon->suspend_cnt == 0)
-            monitor_printf(mon, "\n");
-        monitor_flush(mon);
-        monitor_suspend(mon);
+        if (mon->reset_seen) {
+            if (mon->suspend_cnt == 0) {
+                monitor_printf(mon, "\n");
+            }
+            monitor_flush(mon);
+            monitor_suspend(mon);
+        } else {
+            mon->suspend_cnt++;
+        }
+        mon->mux_out = 1;
         break;
 
     case CHR_EVENT_OPENED:
         monitor_printf(mon, "QEMU %s monitor - type 'help' for more "
                        "information\n", QEMU_VERSION);
-        if (mon->chr->focus == 0)
+        if (!mon->mux_out) {
             readline_show_prompt(mon->rs);
+        }
+        mon->reset_seen = 1;
         break;
     }
 }
@@ -3023,7 +3083,7 @@ void monitor_init(CharDriverState *chr, int flags)
     Monitor *mon;
 
     if (is_first_init) {
-        key_timer = qemu_new_timer(vm_clock, release_keys, NULL);
+        key_timer = qemu_new_timer_ms(vm_clock, release_keys, NULL);
         is_first_init = 0;
     }
 
@@ -3031,8 +3091,6 @@ void monitor_init(CharDriverState *chr, int flags)
 
     mon->chr = chr;
     mon->flags = flags;
-    if (mon->chr->focus != 0)
-        mon->suspend_cnt = 1; /* mux'ed monitors start suspended */
     if (flags & MONITOR_USE_READLINE) {
         mon->rs = readline_init(mon, monitor_find_completion);
         monitor_read_command(mon, 0);
@@ -3044,6 +3102,19 @@ void monitor_init(CharDriverState *chr, int flags)
     QLIST_INSERT_HEAD(&mon_list, mon, entry);
     if (!cur_mon || (flags & MONITOR_IS_DEFAULT))
         cur_mon = mon;
+}
+
+static void monitor_done(Monitor *mon)
+{
+    if (cur_mon == mon)
+        cur_mon = NULL;
+
+    QLIST_REMOVE(mon, entry);
+
+    readline_free(mon->rs);
+    qemu_chr_close(mon->chr);
+
+    qemu_free(mon);
 }
 
 static void bdrv_password_cb(Monitor *mon, const char *password, void *opaque)
@@ -3061,16 +3132,21 @@ static void bdrv_password_cb(Monitor *mon, const char *password, void *opaque)
     monitor_read_command(mon, 1);
 }
 
-void monitor_read_bdrv_key_start(Monitor *mon, BlockDriverState *bs,
-                                 BlockDriverCompletionFunc *completion_cb,
-                                 void *opaque)
+int monitor_read_bdrv_key_start(Monitor *mon, BlockDriverState *bs,
+                                BlockDriverCompletionFunc *completion_cb,
+                                void *opaque)
 {
     int err;
 
     if (!bdrv_key_required(bs)) {
         if (completion_cb)
             completion_cb(opaque, 0);
-        return;
+        return 0;
+    }
+
+    if (monitor_ctrl_mode(mon)) {
+        qerror_report(QERR_DEVICE_ENCRYPTED, bdrv_get_device_name(bs));
+        return -1;
     }
 
     monitor_printf(mon, "%s (%s) is encrypted.\n", bdrv_get_device_name(bs),
@@ -3083,4 +3159,6 @@ void monitor_read_bdrv_key_start(Monitor *mon, BlockDriverState *bs,
 
     if (err && completion_cb)
         completion_cb(opaque, err);
+
+    return err;
 }

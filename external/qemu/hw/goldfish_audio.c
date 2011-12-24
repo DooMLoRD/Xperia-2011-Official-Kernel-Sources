@@ -217,7 +217,7 @@ goldfish_audio_buff_put( struct goldfish_audio_buff*  b, QEMUFile*  f )
     qemu_put_buffer(f, b->data, b->length );
 }
 
-static int
+static void
 goldfish_audio_buff_get( struct goldfish_audio_buff*  b, QEMUFile*  f )
 {
     b->address = qemu_get_be32(f);
@@ -263,7 +263,7 @@ static int   audio_state_load( QEMUFile*  f, void*  opaque, int  version_id )
         goldfish_audio_buff_get( s->out_buff2, f );
         goldfish_audio_buff_get (s->in_buff, f);
     }
-    return -1;
+    return ret;
 }
 
 static void enable_audio(struct goldfish_audio_state *s, int enable)
@@ -439,7 +439,7 @@ static void goldfish_audio_write(void *opaque, target_phys_addr_t offset, uint32
         case AUDIO_SET_READ_BUFFER:
             /* save pointer to the read buffer */
             goldfish_audio_buff_set_address( s->in_buff, val );
-            D( "%s: AUDIO_SET_READ_BUFFER %p", __FUNCTION__, (void*)val );
+            D( "%s: AUDIO_SET_READ_BUFFER %08x", __FUNCTION__, val );
             break;
 
         case AUDIO_START_READ:
@@ -582,7 +582,7 @@ void goldfish_audio_init(uint32_t base, int id, const char* input_source)
     if (android_hw->hw_audioOutput) {
         s->voice = AUD_open_out (
             &s->card,
-            s->voice,
+            NULL,
             "goldfish_audio",
             s,
             goldfish_audio_callback,

@@ -12,7 +12,9 @@ sbin_PROGRAMS += tools/hciattach tools/hciconfig
 noinst_PROGRAMS += tools/avinfo tools/ppporc \
 				tools/hcieventmask tools/hcisecfilter
 
-tools_rfcomm_SOURCES = tools/main.c tools/parser.y tools/lexer.l \
+tools/kword.c: tools/parser.h
+
+tools_rfcomm_SOURCES = tools/rfcomm.c tools/parser.y tools/lexer.l \
 					tools/kword.h tools/kword.c
 EXTRA_tools_rfcomm_SOURCES = tools/parser.h tools/parser.c \
 							tools/lexer.c
@@ -23,7 +25,9 @@ tools_l2ping_LDADD = lib/libbluetooth.la
 tools_hciattach_SOURCES = tools/hciattach.c tools/hciattach.h \
 						tools/hciattach_st.c \
 						tools/hciattach_ti.c \
-						tools/hciattach_tialt.c
+						tools/hciattach_tialt.c \
+						tools/hciattach_ath3k.c \
+						tools/hciattach_qualcomm.c
 tools_hciattach_LDADD = lib/libbluetooth.la
 
 tools_hciconfig_SOURCES = tools/hciconfig.c tools/csr.h tools/csr.c \
@@ -44,6 +48,16 @@ tools_avinfo_LDADD = lib/libbluetooth.la
 tools_ppporc_LDADD = lib/libbluetooth.la
 
 tools_hcieventmask_LDADD = lib/libbluetooth.la
+
+if READLINE
+bin_PROGRAMS += attrib/gatttool
+
+attrib_gatttool_SOURCES = attrib/gatttool.c attrib/att.c attrib/gatt.c \
+				attrib/gattrib.c btio/btio.c \
+				attrib/gatttool.h attrib/interactive.c \
+				attrib/utils.c
+attrib_gatttool_LDADD = lib/libbluetooth.la @GLIB_LIBS@ @READLINE_LIBS@
+endif
 
 dist_man_MANS += tools/rfcomm.1 tools/l2ping.8 \
 			tools/hciattach.8 tools/hciconfig.8 \
@@ -86,9 +100,11 @@ EXTRA_DIST += tools/bccmd.8
 endif
 
 if HID2HCI
-sbin_PROGRAMS += tools/hid2hci
+udevdir = @UDEV_DIR@
 
-tools_hid2hci_LDADD = @USB_LIBS@
+udev_PROGRAMS = tools/hid2hci
+
+tools_hid2hci_LDADD = @USB_LIBS@ @UDEV_LIBS@
 
 dist_man_MANS += tools/hid2hci.8
 else
@@ -138,7 +154,8 @@ bin_PROGRAMS += test/l2test test/rctest
 noinst_PROGRAMS += test/gaptest test/sdptest test/scotest \
 			test/attest test/hstest test/avtest test/ipctest \
 					test/lmptest test/bdaddr test/agent \
-					test/btiotest test/test-textfile
+					test/btiotest test/test-textfile \
+					test/uuidtest
 
 test_hciemu_LDADD = @GLIB_LIBS@ lib/libbluetooth.la
 
@@ -168,8 +185,11 @@ test_bdaddr_LDADD = lib/libbluetooth.la
 
 test_agent_LDADD = @DBUS_LIBS@
 
-test_btiotest_SOURCES = test/btiotest.c src/btio.h src/btio.c
+test_btiotest_SOURCES = test/btiotest.c btio/btio.h btio/btio.c
 test_btiotest_LDADD = @GLIB_LIBS@ lib/libbluetooth.la
+
+test_uuidtest_SOURCES = test/uuidtest.c
+test_uuidtest_LDADD = lib/libbluetooth.la
 
 test_test_textfile_SOURCES = test/test-textfile.c src/textfile.h src/textfile.c
 
@@ -180,13 +200,14 @@ else
 EXTRA_DIST += test/rctest.1 test/hciemu.1 test/bdaddr.8
 endif
 
-EXTRA_DIST += test/apitest test/hsplay test/hsmicro test/dbusdef.py \
-		test/monitor-bluetooth test/list-devices test/test-discovery \
-		test/test-manager test/test-adapter test/test-device \
-		test/test-service test/test-serial test/test-telephony \
-		test/test-network test/simple-agent test/simple-service \
-		test/test-audio test/test-input \
-		test/service-record.dtd test/service-did.xml \
+EXTRA_DIST += test/apitest test/sap-client test/hsplay test/hsmicro \
+		test/dbusdef.py test/monitor-bluetooth test/list-devices \
+		test/test-discovery test/test-manager test/test-adapter \
+		test/test-device test/test-service test/test-serial \
+		test/test-telephony test/test-network test/simple-agent \
+		test/simple-service test/simple-endpoint test/test-audio \
+		test/test-input test/test-attrib test/test-sap-server \
+		test/test-oob test/service-record.dtd test/service-did.xml \
 		test/service-spp.xml test/service-opp.xml test/service-ftp.xml
 
 

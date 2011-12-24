@@ -25,7 +25,6 @@
 #include "qemu-char.h"
 #include "sysemu.h"
 #include "android/android.h"
-#include "sockets.h"
 #include "cpu.h"
 #include "hw/goldfish_device.h"
 #include "hw/power_supply.h"
@@ -36,8 +35,10 @@
 #include "android/utils/bufprint.h"
 #include "android/utils/debug.h"
 #include "android/utils/stralloc.h"
+#include "android/config/config.h"
 #include "tcpdump.h"
 #include "net.h"
+#include "monitor.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -47,20 +48,20 @@
 #include <fcntl.h>
 #include "android/hw-events.h"
 #include "user-events.h"
+#include "android/hw-sensors.h"
 #include "android/keycode-array.h"
 #include "android/charmap.h"
-#include "android/core-ui-protocol.h"
+#include "android/display-core.h"
+#include "android/protocol/fb-updates-proxy.h"
+#include "android/protocol/user-events-impl.h"
+#include "android/protocol/ui-commands-api.h"
+#include "android/protocol/core-commands-impl.h"
+#include "android/protocol/ui-commands-proxy.h"
+#include "android/protocol/attach-ui-proxy.h"
 
 #if defined(CONFIG_SLIRP)
 #include "libslirp.h"
 #endif
-
-/* set to 1 to use the i/o and event functions
- * defined in "telephony/sysdeps.h"
- */
-#define  USE_SYSDEPS  0
-
-#include "sysdeps.h"
 
 #define  DEBUG  1
 
@@ -88,12 +89,7 @@ typedef struct {
 } RedirRec, *Redir;
 
 
-#if USE_SYSDEPS
-typedef SysChannel  Socket;
-#else /* !USE_SYSDEPS */
-typedef int         Socket;
-#endif /* !USE_SYSDEPS */
-
+typedef int Socket;
 
 typedef struct ControlClientRec_
 {
@@ -122,6 +118,22 @@ typedef struct ControlGlobalRec_
 
 } ControlGlobalRec;
 
+#ifdef CONFIG_STANDALONE_CORE
+/* UI client currently attached to the core. */
+ControlClient attached_ui_client = NULL;
+
+/* User events service client. */
+ControlClient user_events_client = NULL;
+
+/* UI control service client (UI -> Core). */
+ControlClient ui_core_ctl_client = NULL;
+
+/* UI control service (UI -> Core. */
+// CoreUICtl* ui_core_ctl = NULL;
+
+/* UI control service client (Core-> UI). */
+ControlClient core_ui_ctl_client = NULL;
+#endif  // CONFIG_STANDALONE_CORE
 
 static int
 control_global_add_redir( ControlGlobal  global,
@@ -178,19 +190,75 @@ control_global_del_redir( ControlGlobal  global,
     return -1;
 }
 
+/* Detach the socket descriptor from a given ControlClient
+ * and return its value. This is useful either when destroying
+ * the client, or redirecting the socket to another service.
+ *
+ * NOTE: this does not close the socket.
+ */
+static int
+control_client_detach( ControlClient  client )
+{
+    int  result;
+
+    if (client->sock < 0)
+        return -1;
+
+    qemu_set_fd_handler( client->sock, NULL, NULL, NULL );
+    result = client->sock;
+    client->sock = -1;
+
+    return result;
+}
+
+static void  control_client_read( void*  _client );  /* forward */
+
+/* Reattach a control client to a given socket.
+ * Return the old socket descriptor for the client.
+ */
+static int
+control_client_reattach( ControlClient client, int fd )
+{
+    int result = control_client_detach(client);
+    client->sock = fd;
+    qemu_set_fd_handler( fd, control_client_read, NULL, client );
+    return result;
+}
+
 static void
 control_client_destroy( ControlClient  client )
 {
     ControlGlobal  global = client->global;
     ControlClient  *pnode = &global->clients;
+    int            sock;
 
     D(( "destroying control client %p\n", client ));
 
-#if USE_SYSDEPS
-    sys_channel_on( client->sock, 0, NULL, NULL );
-#else
-    qemu_set_fd_handler( client->sock, NULL, NULL, NULL );
-#endif
+#ifdef CONFIG_STANDALONE_CORE
+    if (client == attached_ui_client) {
+        attachUiProxy_destroy();
+        attached_ui_client = NULL;
+    }
+
+    if (client == user_events_client) {
+        userEventsImpl_destroy();
+        user_events_client = NULL;
+    }
+
+    if (client == ui_core_ctl_client) {
+        coreCmdImpl_destroy();
+        ui_core_ctl_client = NULL;
+    }
+
+    if (client == core_ui_ctl_client) {
+        uiCmdProxy_destroy();
+        core_ui_ctl_client = NULL;
+    }
+#endif  // CONFIG_STANDALONE_CORE
+
+    sock = control_client_detach( client );
+    if (sock >= 0)
+        socket_close(sock);
 
     for ( ;; ) {
         ControlClient  node = *pnode;
@@ -204,18 +272,9 @@ control_client_destroy( ControlClient  client )
         pnode = &node->next;
     }
 
-#if USE_SYSDEPS
-    sys_channel_close( client->sock );
-    client->sock = NULL;
-#else
-    socket_close( client->sock );
-    client->sock = -1;
-#endif
-
     free( client );
 }
 
-static void  control_client_read( void*  _client );  /* forward */
 
 
 static void  control_control_write( ControlClient  client, const char*  buff, int  len )
@@ -226,11 +285,7 @@ static void  control_control_write( ControlClient  client, const char*  buff, in
         len = strlen(buff);
 
     while (len > 0) {
-#if USE_SYSDEPS
-        ret = sys_channel_write( client->sock, buff, len );
-#else
         ret = socket_send( client->sock, buff, len);
-#endif
         if (ret < 0) {
             if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN)
                 return;
@@ -241,18 +296,25 @@ static void  control_control_write( ControlClient  client, const char*  buff, in
     }
 }
 
-static void  control_write( ControlClient  client, const char*  format, ... )
+static int  control_vwrite( ControlClient  client, const char*  format, va_list args )
 {
     static char  temp[1024];
-    va_list      args;
+    int ret = vsnprintf( temp, sizeof(temp), format, args );
+    temp[ sizeof(temp)-1 ] = 0;
+    control_control_write( client, temp, -1 );
 
+    return ret;
+}
+
+static int  control_write( ControlClient  client, const char*  format, ... )
+{
+    int ret;
+    va_list      args;
     va_start(args, format);
-    vsnprintf( temp, sizeof(temp), format, args );
+    ret = control_vwrite(client, format, args);
     va_end(args);
 
-    temp[ sizeof(temp)-1 ] = 0;
-
-    control_control_write( client, temp, -1 );
+    return ret;
 }
 
 
@@ -263,23 +325,15 @@ control_client_create( Socket         socket,
     ControlClient  client = calloc( sizeof(*client), 1 );
 
     if (client) {
-#if !USE_SYSDEPS
         socket_set_nodelay( socket );
         socket_set_nonblock( socket );
-#endif
         client->finished = 0;
         client->global  = global;
         client->sock    = socket;
         client->next    = global->clients;
         global->clients = client;
 
-#if USE_SYSDEPS
-        sys_channel_on( socket, SYS_EVENT_READ,
-                        (SysChannelCallback) control_client_read,
-                        client );
-#else
         qemu_set_fd_handler( socket, control_client_read, NULL, client );
-#endif
     }
     return client;
 }
@@ -382,8 +436,9 @@ control_client_do_command( ControlClient  client )
         CommandDef  subcmd;
 
         if (cmd->handler) {
-            if ( !cmd->handler( client, args ) )
+            if ( !cmd->handler( client, args ) ) {
                 control_write( client, "OK\r\n" );
+            }
             break;
         }
 
@@ -490,15 +545,11 @@ control_client_read( void*  _client )
     int            size;
 
     D(( "in control_client read: " ));
-#if USE_SYSDEPS
-    size = sys_channel_read( client->sock, buf, sizeof(buf) );
-#else
     size = socket_recv( client->sock, buf, sizeof(buf) );
-#endif
     if (size < 0) {
         D(( "size < 0, exiting with %d: %s\n", errno, errno_str ));
-		if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR)
-			control_client_destroy( client );
+        if (errno != EWOULDBLOCK && errno != EAGAIN)
+            control_client_destroy( client );
         return;
     }
 
@@ -547,15 +598,8 @@ control_global_accept( void*  _global )
     ControlClient       client;
     Socket              fd;
 
-    D(( "control_global_accept: just in (fd=%p)\n", (void*)global->listen_fd ));
+    D(( "control_global_accept: just in (fd=%d)\n", global->listen_fd ));
 
-#if USE_SYSDEPS
-    fd = sys_channel_create_tcp_handler( global->listen_fd );
-    if (fd == NULL) {
-        perror("accept");
-        return;
-    }
-#else
     for(;;) {
         fd = socket_accept( global->listen_fd, NULL );
         if (fd < 0 && errno != EINTR) {
@@ -569,7 +613,6 @@ control_global_accept( void*  _global )
     }
 
     socket_set_xreuseaddr( fd );
-#endif
 
     D(( "control_global_accept: creating new client\n" ));
     client = control_client_create( fd, global );
@@ -586,28 +629,11 @@ control_global_init( ControlGlobal  global,
                      int            control_port )
 {
     Socket  fd;
-#if !USE_SYSDEPS
     int     ret;
     SockAddress  sockaddr;
-#endif
 
     memset( global, 0, sizeof(*global) );
 
-    sys_main_init();
-
-#if USE_SYSDEPS
-    fd = sys_channel_create_tcp_server( control_port );
-    if (fd == NULL) {
-        return -1;
-    }
-
-    D(("global fd=%p\n", fd));
-
-    global->listen_fd = fd;
-    sys_channel_on( fd, SYS_EVENT_READ,
-                    (SysChannelCallback) control_global_accept,
-                    global );
-#else
     fd = socket_create_inet( SOCKET_STREAM );
     if (fd < 0) {
         perror("socket");
@@ -637,7 +663,6 @@ control_global_init( ControlGlobal  global,
     global->listen_fd = fd;
 
     qemu_set_fd_handler( fd, control_global_accept, NULL, global );
-#endif
     return 0;
 }
 
@@ -1000,6 +1025,86 @@ static const CommandDefRec  redir_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 /*****                                                                                 ******/
+/*****                          C D M A   M O D E M                                    ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static const struct {
+    const char *            name;
+    const char *            display;
+    ACdmaSubscriptionSource source;
+} _cdma_subscription_sources[] = {
+    { "nv",            "Read subscription from non-volatile RAM", A_SUBSCRIPTION_NVRAM },
+    { "ruim",          "Read subscription from RUIM", A_SUBSCRIPTION_RUIM },
+};
+
+static void
+dump_subscription_sources( ControlClient client )
+{
+    int i;
+    for (i = 0;
+         i < sizeof(_cdma_subscription_sources) / sizeof(_cdma_subscription_sources[0]);
+         i++) {
+        control_write( client, "    %s: %s\r\n",
+                       _cdma_subscription_sources[i].name,
+                       _cdma_subscription_sources[i].display );
+    }
+}
+
+static void
+describe_subscription_source( ControlClient client )
+{
+    control_write( client,
+                   "'cdma ssource <ssource>' allows you to specify where to read the subscription from\r\n" );
+    dump_subscription_sources( client );
+}
+
+static int
+do_cdma_ssource( ControlClient  client, char*  args )
+{
+    int nn;
+    if (!args) {
+        control_write( client, "KO: missing argument, try 'cdma ssource <source>'\r\n" );
+        return -1;
+    }
+
+    for (nn = 0; ; nn++) {
+        const char*         name    = _cdma_subscription_sources[nn].name;
+        ACdmaSubscriptionSource ssource = _cdma_subscription_sources[nn].source;
+
+        if (!name)
+            break;
+
+        if (!strcasecmp( args, name )) {
+            amodem_set_cdma_subscription_source( android_modem, ssource );
+            return 0;
+        }
+    }
+    control_write( client, "KO: Don't know source %s\r\n", args );
+    return -1;
+}
+
+static int
+do_cdma_prl_version( ControlClient client, char * args )
+{
+    int version = 0;
+    char *endptr;
+
+    if (!args) {
+        control_write( client, "KO: missing argument, try 'cdma prl_version <version>'\r\n");
+        return -1;
+    }
+
+    version = strtol(args, &endptr, 0);
+    if (endptr != args) {
+        amodem_set_cdma_prl_version( android_modem, version );
+    }
+    return 0;
+}
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
 /*****                           G S M   M O D E M                                     ******/
 /*****                                                                                 ******/
 /********************************************************************************************/
@@ -1318,6 +1423,65 @@ do_gsm_accept( ControlClient  client, char*  args )
     return 0;
 }
 
+static int
+do_gsm_signal( ControlClient  client, char*  args )
+{
+      enum { SIGNAL_RSSI = 0, SIGNAL_BER, NUM_SIGNAL_PARAMS };
+      char*   p = args;
+      int     top_param = -1;
+      int     params[ NUM_SIGNAL_PARAMS ];
+
+      static  int  last_ber = 99;
+
+      if (!p)
+          p = "";
+
+      /* tokenize */
+      while (*p) {
+          char*   end;
+          int  val = strtol( p, &end, 10 );
+
+          if (end == p) {
+              control_write( client, "KO: argument '%s' is not a number\n", p );
+              return -1;
+          }
+
+          params[++top_param] = val;
+          if (top_param + 1 == NUM_SIGNAL_PARAMS)
+              break;
+
+          p = end;
+          while (*p && (p[0] == ' ' || p[0] == '\t'))
+              p += 1;
+      }
+
+      /* sanity check */
+      if (top_param < SIGNAL_RSSI) {
+          control_write( client, "KO: not enough arguments: see 'help gsm signal' for details\r\n" );
+          return -1;
+      }
+
+      int rssi = params[SIGNAL_RSSI];
+      if ((rssi < 0 || rssi > 31) && rssi != 99) {
+          control_write( client, "KO: invalid RSSI - must be 0..31 or 99\r\n");
+          return -1;
+      }
+
+      /* check ber is 0..7 or 99 */
+      if (top_param >= SIGNAL_BER) {
+          int ber = params[SIGNAL_BER];
+          if ((ber < 0 || ber > 7) && ber != 99) {
+              control_write( client, "KO: invalid BER - must be 0..7 or 99\r\n");
+              return -1;
+          }
+          last_ber = ber;
+      }
+
+      amodem_set_signal_strength( android_modem, rssi, last_ber );
+
+      return 0;
+  }
+
 
 #if 0
 static const CommandDefRec  gsm_in_commands[] =
@@ -1341,6 +1505,16 @@ static const CommandDefRec  gsm_in_commands[] =
 };
 #endif
 
+
+static const CommandDefRec  cdma_commands[] =
+{
+    { "ssource", "Set the current CDMA subscription source",
+      NULL, describe_subscription_source,
+      do_cdma_ssource, NULL },
+    { "prl_version", "Dump the current PRL version",
+      NULL, NULL,
+      do_cdma_prl_version, NULL },
+};
 
 static const CommandDefRec  gsm_commands[] =
 {
@@ -1380,6 +1554,12 @@ static const CommandDefRec  gsm_commands[] =
     { "status", "display GSM status",
     "'gsm status' displays the current state of the GSM emulation\r\n", NULL,
     do_gsm_status, NULL },
+
+    { "signal", "set sets the rssi and ber",
+    "'gsm signal <rssi> [<ber>]' changes the reported strength and error rate on next (15s) update.\r\n"
+    "rssi range is 0..31 and 99 for unknown\r\n"
+    "ber range is 0..7 percent and 99 for unknown\r\n",
+    NULL, do_gsm_signal, NULL },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -1675,9 +1855,10 @@ do_event_send( ControlClient  client, char*  args )
     p = args;
     while (*p) {
         char*  q;
+        char   temp[128];
         int    type, code, value, ret;
 
-        p += strspn( args, " \t" );  /* skip spaces */
+        p += strspn( p, " \t" );  /* skip spaces */
         if (*p == 0)
             break;
 
@@ -1686,7 +1867,8 @@ do_event_send( ControlClient  client, char*  args )
         if (q == p)
             break;
 
-        ret = android_event_from_str( p, &type, &code, &value );
+        snprintf(temp, sizeof temp, "%.*s", q-p, p);
+        ret = android_event_from_str( temp, &type, &code, &value );
         if (ret < 0) {
             if (ret == -1) {
                 control_write( client,
@@ -1806,8 +1988,8 @@ do_event_text( ControlClient  client, char*  args )
         return -1;
     }
 
-    /* Get default charmap. */
-    charmap = android_get_charmap_by_index(0);
+    /* Get active charmap. */
+    charmap = android_get_charmap();
     if (charmap == NULL) {
         control_write( client, "KO: no character map active in current device layout/config\r\n" );
         return -1;
@@ -1871,6 +2053,123 @@ static const CommandDefRec  event_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 /*****                                                                                 ******/
+/*****                      S N A P S H O T   C O M M A N D S                          ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static int
+control_write_out_cb(void* opaque, const char* str, int strsize)
+{
+    ControlClient client = opaque;
+    control_control_write(client, str, strsize);
+    return strsize;
+}
+
+static int
+control_write_err_cb(void* opaque, const char* str, int strsize)
+{
+    int ret = 0;
+    ControlClient client = opaque;
+    ret += control_write(client, "KO: ");
+    control_control_write(client, str, strsize);
+    return ret + strsize;
+}
+
+static int
+do_snapshot_list( ControlClient  client, char*  args )
+{
+    int64_t ret;
+    Monitor *out = monitor_fake_new(client, control_write_out_cb);
+    Monitor *err = monitor_fake_new(client, control_write_err_cb);
+    do_info_snapshots(out, err);
+    ret = monitor_fake_get_bytes(err);
+    monitor_fake_free(err);
+    monitor_fake_free(out);
+
+    return ret > 0;
+}
+
+static int
+do_snapshot_save( ControlClient  client, char*  args )
+{
+    int64_t ret;
+
+    if (args == NULL) {
+        control_write(client, "KO: argument missing, try 'avd snapshot save <name>'\r\n");
+        return -1;
+    }
+
+    Monitor *err = monitor_fake_new(client, control_write_err_cb);
+    do_savevm(err, args);
+    ret = monitor_fake_get_bytes(err);
+    monitor_fake_free(err);
+
+    return ret > 0; // no output on error channel indicates success
+}
+
+static int
+do_snapshot_load( ControlClient  client, char*  args )
+{
+    int64_t ret;
+
+    if (args == NULL) {
+        control_write(client, "KO: argument missing, try 'avd snapshot load <name>'\r\n");
+        return -1;
+    }
+
+    Monitor *err = monitor_fake_new(client, control_write_err_cb);
+    do_loadvm(err, args);
+    ret = monitor_fake_get_bytes(err);
+    monitor_fake_free(err);
+
+    return ret > 0;
+}
+
+static int
+do_snapshot_del( ControlClient  client, char*  args )
+{
+    int64_t ret;
+
+    if (args == NULL) {
+        control_write(client, "KO: argument missing, try 'avd snapshot del <name>'\r\n");
+        return -1;
+    }
+
+    Monitor *err = monitor_fake_new(client, control_write_err_cb);
+    do_delvm(err, args);
+    ret = monitor_fake_get_bytes(err);
+    monitor_fake_free(err);
+
+    return ret > 0;
+}
+
+static const CommandDefRec  snapshot_commands[] =
+{
+    { "list", "list available state snapshots",
+    "'avd snapshot list' will show a list of all state snapshots that can be loaded\r\n",
+    NULL, do_snapshot_list, NULL },
+
+    { "save", "save state snapshot",
+    "'avd snapshot save <name>' will save the current (run-time) state to a snapshot with the given name\r\n",
+    NULL, do_snapshot_save, NULL },
+
+    { "load", "load state snapshot",
+    "'avd snapshot load <name>' will load the state snapshot of the given name\r\n",
+    NULL, do_snapshot_load, NULL },
+
+    { "del", "delete state snapshot",
+    "'avd snapshot del <name>' will delete the state snapshot with the given name\r\n",
+    NULL, do_snapshot_del, NULL },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
 /*****                               V M   C O M M A N D S                             ******/
 /*****                                                                                 ******/
 /********************************************************************************************/
@@ -1908,7 +2207,7 @@ do_avd_status( ControlClient  client, char*  args )
 static int
 do_avd_name( ControlClient  client, char*  args )
 {
-    control_write( client, "%s\r\n", avdInfo_getName(android_avdInfo) );
+    control_write( client, "%s\r\n", android_hw->avd_name);
     return 0;
 }
 
@@ -1923,12 +2222,16 @@ static const CommandDefRec  vm_commands[] =
     NULL, do_avd_start, NULL },
 
     { "status", "query virtual device status",
-    "'avd status' will indicate wether the virtual device is running or not\r\n",
+    "'avd status' will indicate whether the virtual device is running or not\r\n",
     NULL, do_avd_status, NULL },
 
     { "name", "query virtual device name",
     "'avd name' will return the name of this virtual device\r\n",
     NULL, do_avd_name, NULL },
+
+    { "snapshot", "state snapshot commands",
+    "allows you to save and restore the virtual device state in snapshots\r\n",
+    NULL, NULL, snapshot_commands },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -1959,10 +2262,12 @@ do_geo_nmea( ControlClient  client, char*  args )
 static int
 do_geo_fix( ControlClient  client, char*  args )
 {
-#define  MAX_GEO_PARAMS  3
+    // GEO_SAT2 provides bug backwards compatibility.
+    enum { GEO_LONG = 0, GEO_LAT, GEO_ALT, GEO_SAT, GEO_SAT2, NUM_GEO_PARAMS };
     char*   p = args;
-    int     n_params = 0;
-    double  params[ MAX_GEO_PARAMS ];
+    int     top_param = -1;
+    double  params[ NUM_GEO_PARAMS ];
+    int     n_satellites = 1;
 
     static  int     last_time = 0;
     static  double  last_altitude = 0.;
@@ -1980,8 +2285,8 @@ do_geo_fix( ControlClient  client, char*  args )
             return -1;
         }
 
-        params[n_params++] = val;
-        if (n_params >= MAX_GEO_PARAMS)
+        params[++top_param] = val;
+        if (top_param + 1 == NUM_GEO_PARAMS)
             break;
 
         p = end;
@@ -1990,9 +2295,20 @@ do_geo_fix( ControlClient  client, char*  args )
     }
 
     /* sanity check */
-    if (n_params < 2) {
+    if (top_param < GEO_LAT) {
         control_write( client, "KO: not enough arguments: see 'help geo fix' for details\r\n" );
         return -1;
+    }
+
+    /* check number of satellites, must be integer between 1 and 12 */
+    if (top_param >= GEO_SAT) {
+        int sat_index = (top_param >= GEO_SAT2) ? GEO_SAT2 : GEO_SAT;
+        n_satellites = (int) params[sat_index];
+        if (n_satellites != params[sat_index]
+            || n_satellites < 1 || n_satellites > 12) {
+            control_write( client, "KO: invalid number of satellites. Must be an integer between 1 and 12\r\n");
+            return -1;
+        }
     }
 
     /* generate an NMEA sentence for this fix */
@@ -2002,43 +2318,62 @@ do_geo_fix( ControlClient  client, char*  args )
         int      deg, min;
         char     hemi;
 
+        /* format overview:
+         *    time of fix      123519     12:35:19 UTC
+         *    latitude         4807.038   48 degrees, 07.038 minutes
+         *    north/south      N or S
+         *    longitude        01131.000  11 degrees, 31. minutes
+         *    east/west        E or W
+         *    fix quality      1          standard GPS fix
+         *    satellites       1 to 12    number of satellites being tracked
+         *    HDOP             <dontcare> horizontal dilution
+         *    altitude         546.       altitude above sea-level
+         *    altitude units   M          to indicate meters
+         *    diff             <dontcare> height of sea-level above ellipsoid
+         *    diff units       M          to indicate meters (should be <dontcare>)
+         *    dgps age         <dontcare> time in seconds since last DGPS fix
+         *    dgps sid         <dontcare> DGPS station id
+         */
+
         /* first, the time */
         stralloc_add_format( s, "$GPGGA,%06d", last_time );
         last_time ++;
 
         /* then the latitude */
         hemi = 'N';
-        val  = params[1];
+        val  = params[GEO_LAT];
         if (val < 0) {
             hemi = 'S';
             val  = -val;
         }
         deg = (int) val;
-        min = 60*(val - deg);
-        val = val - min/60.;
-        stralloc_add_format( s, ",%02d%02d.%04d,%c", deg, min, (int)(val * 10000), hemi );
+        val = 60*(val - deg);
+        min = (int) val;
+        val = 10000*(val - min);
+        stralloc_add_format( s, ",%02d%02d.%04d,%c", deg, min, (int)val, hemi );
 
         /* the longitude */
         hemi = 'E';
-        val  = params[0];
+        val  = params[GEO_LONG];
         if (val < 0) {
             hemi = 'W';
             val  = -val;
         }
         deg = (int) val;
-        min = 60*(val - deg);
-        val = val - min/60.;
-        stralloc_add_format( s, ",%02d%02d.%04d,%c", deg, min, (int)(val * 10000), hemi );
+        val = 60*(val - deg);
+        min = (int) val;
+        val = 10000*(val - min);
+        stralloc_add_format( s, ",%02d%02d.%04d,%c", deg, min, (int)val, hemi );
 
-        /* bogus fix quality, empty satellite count and dilutions */
-        stralloc_add_str( s, ",1,,,," );
+        /* bogus fix quality, satellite count and dilution */
+        stralloc_add_format( s, ",1,%02d,", n_satellites );
 
-        /* optional altitude */
-        if (n_params >= 3) {
-            stralloc_add_format( s, "%.1g", params[2] );
-            last_altitude = params[2];
+        /* optional altitude + bogus diff */
+        if (top_param >= GEO_ALT) {
+            stralloc_add_format( s, ",%.1g,M,0.,M", params[GEO_ALT] );
+            last_altitude = params[GEO_ALT];
         } else {
-            stralloc_add_str( s, "," );
+            stralloc_add_str( s, ",,,," );
         }
         /* bogus rest and checksum */
         stralloc_add_str( s, ",,,*47" );
@@ -2059,17 +2394,213 @@ static const CommandDefRec  geo_commands[] =
     NULL, do_geo_nmea, NULL },
 
     { "fix", "send a simple GPS fix",
-    "'geo fix <longitude> <latitude> [<altitude>]' allows you to send a\r\n"
-    "simple GPS fix to the emulated system. the parameters are:\r\n\r\n"
+    "'geo fix <longitude> <latitude> [<altitude> [<satellites>]]'\r\n"
+    " allows you to send a simple GPS fix to the emulated system.\r\n"
+    " The parameters are:\r\n\r\n"
     "  <longitude>   longitude, in decimal degrees\r\n"
     "  <latitude>    latitude, in decimal degrees\r\n"
     "  <altitude>    optional altitude in meters\r\n"
+    "  <satellites>  number of satellites being tracked (1-12)\r\n"
     "\r\n",
     NULL, do_geo_fix, NULL },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
+/*****                        S E N S O R S  C O M M A N D S                           ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+/* For sensors user prompt string size.*/
+#define SENSORS_INFO_SIZE 150
+
+/* Get sensor data - (a,b,c) from sensor name */
+static int
+do_sensors_get( ControlClient client, char* args )
+{
+    if (! args) {
+        control_write( client, "KO: Usage: \"get <sensorname>\"\n" );
+        return -1;
+    }
+
+    int status = SENSOR_STATUS_UNKNOWN;
+    char sensor[strlen(args) + 1];
+    if (1 != sscanf( args, "%s", &sensor[0] ))
+        goto SENSOR_STATUS_ERROR;
+
+    int sensor_id = android_sensors_get_id_from_name( sensor );
+    char buffer[SENSORS_INFO_SIZE] = { 0 };
+    float a, b, c;
+
+    if (sensor_id < 0) {
+        status = sensor_id;
+        goto SENSOR_STATUS_ERROR;
+    } else {
+        status = android_sensors_get( sensor_id, &a, &b, &c );
+        if (status != SENSOR_STATUS_OK)
+            goto SENSOR_STATUS_ERROR;
+        snprintf( buffer, sizeof(buffer),
+                "%s = %g:%g:%g\r\n", sensor, a, b, c );
+        do_control_write( client, buffer );
+        return 0;
+    }
+
+SENSOR_STATUS_ERROR:
+    switch(status) {
+    case SENSOR_STATUS_NO_SERVICE:
+        snprintf( buffer, sizeof(buffer), "KO: No sensor service found!\r\n" );
+        break;
+    case SENSOR_STATUS_DISABLED:
+        snprintf( buffer, sizeof(buffer), "KO: '%s' sensor is disabled.\r\n", sensor );
+        break;
+    case SENSOR_STATUS_UNKNOWN:
+        snprintf( buffer, sizeof(buffer),
+                "KO: unknown sensor name: %s, run 'sensor status' to get available sensors.\r\n", sensor );
+        break;
+    default:
+        snprintf( buffer, sizeof(buffer), "KO: '%s' sensor: exception happens.\r\n", sensor );
+    }
+    do_control_write( client, buffer );
+    return -1;
+}
+
+/* set sensor data - (a,b,c) from sensor name */
+static int
+do_sensors_set( ControlClient client, char* args )
+{
+    if (! args) {
+        control_write( client, "KO: Usage: \"set <sensorname> <value-a>[:<value-b>[:<value-c>]]\"\n" );
+        return -1;
+    }
+
+    int status;
+    char* sensor;
+    char* value;
+    char* args_dup = strdup( args );
+    if (args_dup == NULL) {
+        control_write( client, "KO: Memory allocation failed.\n" );
+        return -1;
+    }
+    char* p = args_dup;
+
+    /* Parsing the args to get sensor name string */
+    while (*p && isspace(*p)) p++;
+    if (*p == 0)
+        goto INPUT_ERROR;
+    sensor = p;
+
+    /* Parsing the args to get value string */
+    while (*p && (! isspace(*p))) p++;
+    if (*p == 0 || *(p + 1) == 0/* make sure value isn't NULL */)
+        goto INPUT_ERROR;
+    *p = 0;
+    value = p + 1;
+
+    if (! (strlen(sensor) && strlen(value)))
+        goto INPUT_ERROR;
+
+    int sensor_id = android_sensors_get_id_from_name( sensor );
+    char buffer[SENSORS_INFO_SIZE] = { 0 };
+
+    if (sensor_id < 0) {
+        status = sensor_id;
+        goto SENSOR_STATUS_ERROR;
+    } else {
+        float fvalues[3];
+        status = android_sensors_get( sensor_id, &fvalues[0], &fvalues[1], &fvalues[2] );
+        if (status != SENSOR_STATUS_OK)
+            goto SENSOR_STATUS_ERROR;
+
+        /* Parsing the value part to get the sensor values(a, b, c) */
+        int i;
+        char* pnext;
+        char* pend = value + strlen(value);
+        for (i = 0; i < 3; i++, value = pnext + 1) {
+            pnext=strchr( value, ':' );
+            if (pnext) {
+                *pnext = 0;
+            } else {
+                pnext = pend;
+            }
+
+            if (pnext > value) {
+                if (1 != sscanf( value,"%g", &fvalues[i] ))
+                    goto INPUT_ERROR;
+            }
+        }
+
+        status = android_sensors_set( sensor_id, fvalues[0], fvalues[1], fvalues[2] );
+        if (status != SENSOR_STATUS_OK)
+            goto SENSOR_STATUS_ERROR;
+
+        free( args_dup );
+        return 0;
+    }
+
+SENSOR_STATUS_ERROR:
+    switch(status) {
+    case SENSOR_STATUS_NO_SERVICE:
+        snprintf( buffer, sizeof(buffer), "KO: No sensor service found!\r\n" );
+        break;
+    case SENSOR_STATUS_DISABLED:
+        snprintf( buffer, sizeof(buffer), "KO: '%s' sensor is disabled.\r\n", sensor );
+        break;
+    case SENSOR_STATUS_UNKNOWN:
+        snprintf( buffer, sizeof(buffer),
+                "KO: unknown sensor name: %s, run 'sensor status' to get available sensors.\r\n", sensor );
+        break;
+    default:
+        snprintf( buffer, sizeof(buffer), "KO: '%s' sensor: exception happens.\r\n", sensor );
+    }
+    do_control_write( client, buffer );
+    free( args_dup );
+    return -1;
+
+INPUT_ERROR:
+    control_write( client, "KO: Usage: \"set <sensorname> <value-a>[:<value-b>[:<value-c>]]\"\n" );
+    free( args_dup );
+    return -1;
+}
+
+/* get all available sensor names and enable status respectively. */
+static int
+do_sensors_status( ControlClient client, char* args )
+{
+    uint8_t id, status;
+    char buffer[SENSORS_INFO_SIZE] = { 0 };
+
+    for(id = 0; id < MAX_SENSORS; id++) {
+        status = android_sensors_get_sensor_status( id );
+        snprintf( buffer, sizeof(buffer), "%s: %s\n",
+                android_sensors_get_name_from_id(id), (status ? "enabled.":"disabled.") );
+        control_write( client, buffer );
+    }
+
+    return 0;
+}
+
+/* Sensor commands for get/set sensor values and get available sensor names. */
+static const CommandDefRec sensor_commands[] =
+{
+    { "status", "list all sensors and their status.",
+      "'status': list all sensors and their status.\r\n",
+      NULL, do_sensors_status, NULL },
+
+    { "get", "get sensor values",
+      "'get <sensorname>' returns the values of a given sensor.\r\n",
+      NULL, do_sensors_get, NULL },
+
+    { "set", "set sensor values",
+      "'set <sensorname> <value-a>[:<value-b>[:<value-c>]]' set the values of a given sensor.\r\n",
+      NULL, do_sensors_set, NULL },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
 
 /********************************************************************************************/
 /********************************************************************************************/
@@ -2103,7 +2634,7 @@ do_window_scale( ControlClient  client, char*  args )
         }
     }
 
-    android_ui_set_window_scale( scale, is_dpi );
+    uicmd_set_window_scale( scale, is_dpi );
     return 0;
 }
 
@@ -2121,6 +2652,264 @@ static const CommandDefRec  window_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 /*****                                                                                 ******/
+/*****                           Q E M U   C O M M A N D S                             ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static int
+do_qemu_monitor( ControlClient client, char* args )
+{
+    char             socketname[32];
+    int              fd;
+    CharDriverState* cs;
+
+    if (args != NULL) {
+        control_write( client, "KO: no argument for 'qemu monitor'\r\n" );
+        return -1;
+    }
+    /* Detach the client socket, and re-attach it to a monitor */
+    fd = control_client_detach(client);
+    snprintf(socketname, sizeof socketname, "tcp:socket=%d", fd);
+    cs = qemu_chr_open("monitor", socketname, NULL);
+    if (cs == NULL) {
+        control_client_reattach(client, fd);
+        control_write( client, "KO: internal error: could not detach from console !\r\n" );
+        return -1;
+    }
+    monitor_init(cs, MONITOR_USE_READLINE|MONITOR_QUIT_DOESNT_EXIT);
+    control_client_destroy(client);
+    return 0;
+}
+
+#ifdef CONFIG_STANDALONE_CORE
+/* UI settings, passed to the core via -ui-settings command line parameter. */
+extern char* android_op_ui_settings;
+
+static int
+do_attach_ui( ControlClient client, char* args )
+{
+    // Make sure that there are no UI already attached to this console.
+    if (attached_ui_client != NULL) {
+        control_write( client, "KO: Another UI is attached to this core!\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    if (!attachUiProxy_create(client->sock)) {
+        char reply_buf[4096];
+        attached_ui_client = client;
+        // Reply "OK" with the saved -ui-settings property.
+        snprintf(reply_buf, sizeof(reply_buf), "OK: %s\r\n", android_op_ui_settings);
+        control_write( client, reply_buf);
+    } else {
+        control_write( client, "KO\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    return 0;
+}
+
+void
+destroy_attach_ui_client(void)
+{
+    if (attached_ui_client != NULL) {
+        control_client_destroy(attached_ui_client);
+    }
+}
+
+static int
+do_create_framebuffer_service( ControlClient client, char* args )
+{
+    ProxyFramebuffer* core_fb;
+    const char* protocol = "-raw";   // Default framebuffer exchange protocol.
+    char reply_buf[64];
+
+    // Protocol type is defined by the arguments passed with the stream switch
+    // command.
+    if (args != NULL && *args != '\0') {
+        size_t token_len;
+        const char* param_end = strchr(args, ' ');
+        if (param_end == NULL) {
+            param_end = args + strlen(args);
+        }
+        token_len = param_end - args;
+        protocol = args;
+
+        // Make sure that this is one of the supported protocols.
+        if (strncmp(protocol, "-raw", token_len) &&
+            strncmp(protocol, "-shared", token_len)) {
+            derror("Invalid framebuffer parameter %s\n", protocol);
+            control_write( client, "KO: Invalid parameter\r\n" );
+            control_client_destroy(client);
+            return -1;
+        }
+    }
+
+    core_fb = proxyFb_create(client->sock, protocol);
+    if (core_fb == NULL) {
+        control_write( client, "KO\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    // Reply "OK" with the framebuffer's bits per pixel
+    snprintf(reply_buf, sizeof(reply_buf), "OK: -bitsperpixel=%d\r\n",
+             proxyFb_get_bits_per_pixel(core_fb));
+    control_write( client, reply_buf);
+    return 0;
+}
+
+static int
+do_create_user_events_service( ControlClient client, char* args )
+{
+    // Make sure that there are no user events client already existing.
+    if (user_events_client != NULL) {
+        control_write( client, "KO: Another user events service is already existing!\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    if (!userEventsImpl_create(client->sock)) {
+        char reply_buf[4096];
+        user_events_client = client;
+        snprintf(reply_buf, sizeof(reply_buf), "OK\r\n");
+        control_write( client, reply_buf);
+    } else {
+        control_write( client, "KO\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    return 0;
+}
+
+void
+destroy_user_events_client(void)
+{
+    if (user_events_client != NULL) {
+        control_client_destroy(user_events_client);
+    }
+}
+
+static int
+do_create_ui_core_ctl_service( ControlClient client, char* args )
+{
+    // Make sure that there are no ui control client already existing.
+    if (ui_core_ctl_client != NULL) {
+        control_write( client, "KO: Another UI control service is already existing!\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    if (!coreCmdImpl_create(client->sock)) {
+        char reply_buf[4096];
+        ui_core_ctl_client = client;
+        snprintf(reply_buf, sizeof(reply_buf), "OK\r\n");
+        control_write( client, reply_buf);
+    } else {
+        control_write( client, "KO\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    return 0;
+}
+
+void
+destroy_ui_core_ctl_client(void)
+{
+    if (ui_core_ctl_client != NULL) {
+        control_client_destroy(ui_core_ctl_client);
+    }
+}
+
+void
+destroy_corecmd_client(void)
+{
+    if (ui_core_ctl_client != NULL) {
+        control_client_destroy(ui_core_ctl_client);
+    }
+}
+
+static int
+do_create_core_ui_ctl_service( ControlClient client, char* args )
+{
+    // Make sure that there are no ui control client already existing.
+    if (core_ui_ctl_client != NULL) {
+        control_write( client, "KO: Another UI control service is already existing!\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    if (!uiCmdProxy_create(client->sock)) {
+        char reply_buf[4096];
+        core_ui_ctl_client = client;
+        snprintf(reply_buf, sizeof(reply_buf), "OK\r\n");
+        control_write( client, reply_buf);
+    } else {
+        control_write( client, "KO\r\n" );
+        control_client_destroy(client);
+        return -1;
+    }
+
+    return 0;
+}
+
+void
+destroy_core_ui_ctl_client(void)
+{
+    if (core_ui_ctl_client != NULL) {
+        control_client_destroy(core_ui_ctl_client);
+    }
+}
+
+void
+destroy_uicmd_client(void)
+{
+    if (core_ui_ctl_client != NULL) {
+        control_client_destroy(core_ui_ctl_client);
+    }
+}
+
+#endif  // CONFIG_STANDALONE_CORE
+
+static const CommandDefRec  qemu_commands[] =
+{
+    { "monitor", "enter QEMU monitor",
+    "Enter the QEMU virtual machine monitor\r\n",
+    NULL, do_qemu_monitor, NULL },
+
+#ifdef CONFIG_STANDALONE_CORE
+    { "attach-UI", "attach UI to the core",
+    "Attach UI to the core\r\n",
+    NULL, do_attach_ui, NULL },
+
+    { "framebuffer", "create framebuffer service",
+    "Create framebuffer service\r\n",
+    NULL, do_create_framebuffer_service, NULL },
+
+    { "user-events", "create user events service",
+    "Create user events service\r\n",
+    NULL, do_create_user_events_service, NULL },
+
+    { "ui-core-control", "create UI control service",
+    "Create UI control service\r\n",
+    NULL, do_create_ui_core_ctl_service, NULL },
+
+    { "core-ui-control", "create UI control service",
+    "Create UI control service\r\n",
+    NULL, do_create_core_ui_ctl_service, NULL },
+#endif  // CONFIG_STANDALONE_CORE
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
 /*****                           M A I N   C O M M A N D S                             ******/
 /*****                                                                                 ******/
 /********************************************************************************************/
@@ -2129,8 +2918,8 @@ static const CommandDefRec  window_commands[] =
 static int
 do_kill( ControlClient  client, char*  args )
 {
-	control_write( client, "OK: killing emulator, bye bye\r\n" );
-	exit(0);
+    control_write( client, "OK: killing emulator, bye bye\r\n" );
+    exit(0);
 }
 
 static const CommandDefRec   main_commands[] =
@@ -2149,8 +2938,12 @@ static const CommandDefRec   main_commands[] =
       "allows you to change GSM-related settings, or to make a new inbound phone call\r\n", NULL,
       NULL, gsm_commands },
 
+    { "cdma", "CDMA related commands",
+      "allows you to change CDMA-related settings\r\n", NULL,
+      NULL, cdma_commands },
+
     { "kill", "kill the emulator instance", NULL, NULL,
-	  do_kill, NULL },
+      do_kill, NULL },
 
     { "network", "manage network settings",
       "allows you to manage the settings related to the network data connection of the\r\n"
@@ -2174,13 +2967,21 @@ static const CommandDefRec   main_commands[] =
       "allows you to simulate an inbound SMS\r\n", NULL,
       NULL, sms_commands },
 
-    { "avd", "manager virtual device state",
-    "allows to change (e.g. start/stop) the virtual device state\r\n", NULL,
+    { "avd", "control virtual device execution",
+    "allows you to control (e.g. start/stop) the execution of the virtual device\r\n", NULL,
     NULL, vm_commands },
 
     { "window", "manage emulator window",
     "allows you to modify the emulator window\r\n", NULL,
     NULL, window_commands },
+
+    { "qemu", "QEMU-specific commands",
+    "allows to connect to the QEMU virtual machine monitor\r\n", NULL,
+    NULL, qemu_commands },
+
+    { "sensor", "manage emulator sensors",
+      "allows you to request the emulator sensors\r\n", NULL,
+      NULL, sensor_commands },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };

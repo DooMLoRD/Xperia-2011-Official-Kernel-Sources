@@ -3,7 +3,7 @@
  *  BlueZ - Bluetooth protocol stack for Linux
  *
  *  Copyright (C) 2000-2002  Maxim Krasnyansky <maxk@qualcomm.com>
- *  Copyright (C) 2003-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2003-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -254,7 +254,7 @@ void ascii_dump(int level, struct frame *frm, int num)
 	unsigned char *buf = frm->ptr;
 	register int i, n;
 
-	if ((num < 0) || (num > frm->len))
+	if ((num < 0) || (num > (int) frm->len))
 		num = frm->len;
 
 	for (i = 0, n = 1; i < num; i++, n++) {
@@ -275,7 +275,7 @@ void hex_dump(int level, struct frame *frm, int num)
 	unsigned char *buf = frm->ptr;
 	register int i, n;
 
-	if ((num < 0) || (num > frm->len))
+	if ((num < 0) || (num > (int) frm->len))
 		num = frm->len;
 
 	for (i = 0, n = 1; i < num; i++, n++) {
@@ -296,7 +296,7 @@ void ext_dump(int level, struct frame *frm, int num)
 	unsigned char *buf = frm->ptr;
 	register int i, n = 0, size;
 
-	if ((num < 0) || (num > frm->len))
+	if ((num < 0) || (num > (int) frm->len))
 		num = frm->len;
 
 	while (num > 0) {

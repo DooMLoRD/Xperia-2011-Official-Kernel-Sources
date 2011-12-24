@@ -4,7 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010-2011 Sony Ericsson Mobile Communications AB
+ *  Copyright (C) 2010 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -41,7 +41,6 @@
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
-#include <bluetooth/l2cap.h>
 
 #include <glib.h>
 #include <dbus/dbus.h>
@@ -183,8 +182,6 @@ struct control {
 	gboolean target;
 
 	uint8_t key_quirks[256];
-
-	gboolean ignore_pause;
 };
 
 static struct {
@@ -206,7 +203,7 @@ static GSList *avctp_callbacks = NULL;
 
 static void auth_cb(DBusError *derr, void *user_data);
 
-static sdp_record_t *avrcp_ct_record()
+static sdp_record_t *avrcp_ct_record(void)
 {
 	sdp_list_t *svclass_id, *pfseq, *apseq, *root;
 	uuid_t root_uuid, l2cap, avctp, avrct;
@@ -270,7 +267,7 @@ static sdp_record_t *avrcp_ct_record()
 	return record;
 }
 
-static sdp_record_t *avrcp_tg_record()
+static sdp_record_t *avrcp_tg_record(void)
 {
 	sdp_list_t *svclass_id, *pfseq, *apseq, *root;
 	uuid_t root_uuid, l2cap, avctp, avrtg;
@@ -376,25 +373,6 @@ static gboolean handle_panel_passthrough(struct control *control,
 		pressed = 1;
 	}
 
-#ifdef ANDROID
-	if ((operands[0] & 0x7F) == PAUSE_OP) {
-		if (!sink_is_streaming(control->dev)) {
-			if (pressed) {
-				uint8_t key_quirks =
-					control->key_quirks[PAUSE_OP];
-				DBG("AVRCP: Ignoring Pause key - pressed");
-				if (!(key_quirks & QUIRK_NO_RELEASE))
-					control->ignore_pause = TRUE;
-				return TRUE;
-			} else if (!pressed && control->ignore_pause) {
-				DBG("AVRCP: Ignoring Pause key - released");
-				control->ignore_pause = FALSE;
-				return TRUE;
-			}
-		}
-	}
-#endif
-
 	for (i = 0; key_map[i].name != NULL; i++) {
 		uint8_t key_quirks;
 
@@ -468,7 +446,7 @@ static void avctp_set_state(struct control *control, avctp_state_t new_state)
 {
 	GSList *l;
 	struct audio_device *dev = control->dev;
-	avdtp_session_state_t old_state = control->state;
+	avctp_state_t old_state = control->state;
 	gboolean value;
 
 	switch (new_state) {
@@ -577,7 +555,7 @@ static gboolean control_cb(GIOChannel *chan, GIOCondition cond,
 	} else if (avctp->pid != htons(AV_REMOTE_SVCLASS_ID)) {
 		avctp->ipid = 1;
 		avctp->cr = AVCTP_RESPONSE;
-		packet_size = sizeof(struct avctp_header);
+		packet_size = sizeof(*avctp);
 	} else if (avctp->cr == AVCTP_COMMAND &&
 			avrcp->code == CTYPE_CONTROL &&
 			avrcp->subunit_type == SUBUNIT_PANEL &&
@@ -608,6 +586,8 @@ static gboolean control_cb(GIOChannel *chan, GIOCondition cond,
 		avrcp->code = CTYPE_REJECTED;
 	}
 	ret = write(sock, buf, packet_size);
+	if (ret != packet_size)
+		goto failed;
 
 	return TRUE;
 
@@ -686,7 +666,6 @@ static void init_uinput(struct control *control)
 		control->key_quirks[PLAY_OP] |= QUIRK_NO_RELEASE;
 		control->key_quirks[PAUSE_OP] |= QUIRK_NO_RELEASE;
 	}
-	control->ignore_pause = FALSE;
 
 	ba2str(&dev->dst, address);
 
@@ -962,10 +941,8 @@ int avrcp_register(DBusConnection *conn, const bdaddr_t *src, GKeyFile *config)
 
 static struct avctp_server *find_server(GSList *list, const bdaddr_t *src)
 {
-	GSList *l;
-
-	for (l = list; l; l = l->next) {
-		struct avctp_server *server = l->data;
+	for (; list; list = list->next) {
+		struct avctp_server *server = list->data;
 
 		if (bacmp(&server->src, src) == 0)
 			return server;
@@ -1027,7 +1004,7 @@ static int avctp_send_passthrough(struct control *control, uint8_t op)
 	struct avctp_header *avctp = (void *) buf;
 	struct avrcp_header *avrcp = (void *) &buf[AVCTP_HEADER_LENGTH];
 	uint8_t *operands = &buf[AVCTP_HEADER_LENGTH + AVRCP_HEADER_LENGTH];
-	int err, sk = g_io_channel_unix_get_fd(control->io);
+	int sk = g_io_channel_unix_get_fd(control->io);
 	static uint8_t transaction = 0;
 
 	memset(buf, 0, sizeof(buf));
@@ -1044,15 +1021,17 @@ static int avctp_send_passthrough(struct control *control, uint8_t op)
 	operands[0] = op & 0x7f;
 	operands[1] = 0;
 
-	err = write(sk, buf, sizeof(buf));
-	if (err < 0)
-		return err;
+	if (write(sk, buf, sizeof(buf)) < 0)
+		return -errno;
 
 	/* Button release */
 	avctp->transaction = transaction++;
 	operands[0] |= 0x80;
 
-	return write(sk, buf, sizeof(buf));
+	if (write(sk, buf, sizeof(buf)) < 0)
+		return -errno;
+
+	return 0;
 }
 
 static DBusMessage *volume_up(DBusConnection *conn, DBusMessage *msg,
@@ -1068,19 +1047,14 @@ static DBusMessage *volume_up(DBusConnection *conn, DBusMessage *msg,
 		return NULL;
 
 	if (control->state != AVCTP_STATE_CONNECTED)
-		return g_dbus_create_error(msg,
-					ERROR_INTERFACE ".NotConnected",
-					"Device not Connected");
+		return btd_error_not_connected(msg);
 
 	if (!control->target)
-		return g_dbus_create_error(msg,
-					ERROR_INTERFACE ".NotSupported",
-					"AVRCP Target role not supported");
+		return btd_error_not_supported(msg);
 
 	err = avctp_send_passthrough(control, VOL_UP_OP);
 	if (err < 0)
-		return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-							strerror(-err));
+		return btd_error_failed(msg, strerror(-err));
 
 	return dbus_message_new_method_return(msg);
 }
@@ -1098,19 +1072,14 @@ static DBusMessage *volume_down(DBusConnection *conn, DBusMessage *msg,
 		return NULL;
 
 	if (control->state != AVCTP_STATE_CONNECTED)
-		return g_dbus_create_error(msg,
-					ERROR_INTERFACE ".NotConnected",
-					"Device not Connected");
+		return btd_error_not_connected(msg);
 
 	if (!control->target)
-		return g_dbus_create_error(msg,
-					ERROR_INTERFACE ".NotSupported",
-					"AVRCP Target role not supported");
+		return btd_error_not_supported(msg);
 
 	err = avctp_send_passthrough(control, VOL_DOWN_OP);
 	if (err < 0)
-		return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-							strerror(-err));
+		return btd_error_failed(msg, strerror(-err));
 
 	return dbus_message_new_method_return(msg);
 }

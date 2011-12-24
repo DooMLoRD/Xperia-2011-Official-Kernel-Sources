@@ -30,6 +30,7 @@
 #define PTRACE_GETCRUNCHREGS	25
 #define PTRACE_SETCRUNCHREGS	26
 #define PTRACE_GETVFPREGS       27
+#define PTRACE_SETVFPREGS       28
 
 /*
  * PSR bits

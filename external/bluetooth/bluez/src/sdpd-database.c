@@ -41,6 +41,7 @@
 #include "sdpd.h"
 #include "log.h"
 #include "adapter.h"
+#include "manager.h"
 
 static sdp_list_t *service_db;
 static sdp_list_t *access_db;
@@ -57,8 +58,8 @@ typedef struct {
  */
 int record_sort(const void *r1, const void *r2)
 {
-	const sdp_record_t *rec1 = (const sdp_record_t *) r1;
-	const sdp_record_t *rec2 = (const sdp_record_t *) r2;
+	const sdp_record_t *rec1 = r1;
+	const sdp_record_t *rec2 = r2;
 
 	if (!rec1 || !rec2) {
 		error("NULL RECORD LIST FATAL");
@@ -70,8 +71,8 @@ int record_sort(const void *r1, const void *r2)
 
 static int access_sort(const void *r1, const void *r2)
 {
-	const sdp_access_t *rec1 = (const sdp_access_t *) r1;
-	const sdp_access_t *rec2 = (const sdp_access_t *) r2;
+	const sdp_access_t *rec1 = r1;
+	const sdp_access_t *rec2 = r2;
 
 	if (!rec1 || !rec2) {
 		error("NULL RECORD LIST FATAL");
@@ -89,7 +90,7 @@ static void access_free(void *p)
 /*
  * Reset the service repository by deleting its contents
  */
-void sdp_svcdb_reset()
+void sdp_svcdb_reset(void)
 {
 	sdp_list_free(service_db, (sdp_free_func_t) sdp_record_free);
 	sdp_list_free(access_db, access_free);
@@ -110,7 +111,7 @@ void sdp_svcdb_collect_all(int sock)
 	sdp_list_t *p, *q;
 
 	for (p = socket_index, q = 0; p; ) {
-		sdp_indexed_t *item = (sdp_indexed_t *) p->data;
+		sdp_indexed_t *item = p->data;
 		if (item->sock == sock) {
 			sdp_list_t *next = p->next;
 			sdp_record_remove(item->record->handle);
@@ -136,7 +137,7 @@ void sdp_svcdb_collect(sdp_record_t *rec)
 	sdp_list_t *p, *q;
 
 	for (p = socket_index, q = 0; p; q = p, p = p->next) {
-		sdp_indexed_t *item = (sdp_indexed_t *) p->data;
+		sdp_indexed_t *item = p->data;
 		if (rec == item->record) {
 			free(item);
 			if (q)
@@ -151,8 +152,8 @@ void sdp_svcdb_collect(sdp_record_t *rec)
 
 static int compare_indices(const void *i1, const void *i2)
 {
-	const sdp_indexed_t *s1 = (const sdp_indexed_t *) i1;
-	const sdp_indexed_t *s2 = (const sdp_indexed_t *) i2;
+	const sdp_indexed_t *s1 = i1;
+	const sdp_indexed_t *s2 = i2;
 	return s1->sock - s2->sock;
 }
 
@@ -169,6 +170,7 @@ void sdp_svcdb_set_collectable(sdp_record_t *record, int sock)
  */
 void sdp_record_add(const bdaddr_t *device, sdp_record_t *rec)
 {
+	struct btd_adapter *adapter;
 	sdp_access_t *dev;
 
 	SDPDBG("Adding rec : 0x%lx", (long) rec);
@@ -185,7 +187,14 @@ void sdp_record_add(const bdaddr_t *device, sdp_record_t *rec)
 
 	access_db = sdp_list_insert_sorted(access_db, dev, access_sort);
 
-	adapter_service_insert(device, rec);
+	if (bacmp(device, BDADDR_ANY) == 0) {
+		manager_foreach_adapter(adapter_service_insert, rec);
+		return;
+	}
+
+	adapter = manager_find_adapter(device);
+	if (adapter)
+		adapter_service_insert(adapter, rec);
 }
 
 static sdp_list_t *record_locate(uint32_t handle)
@@ -230,7 +239,7 @@ sdp_record_t *sdp_record_find(uint32_t handle)
 		return 0;
 	}
 
-	return (sdp_record_t *) p->data;
+	return p->data;
 }
 
 /*
@@ -247,19 +256,25 @@ int sdp_record_remove(uint32_t handle)
 		return -1;
 	}
 
-	r = (sdp_record_t *) p->data;
+	r = p->data;
 	if (r)
 		service_db = sdp_list_remove(service_db, r);
 
 	p = access_locate(handle);
-	if (p) {
-		a = (sdp_access_t *) p->data;
-		if (a) {
-			adapter_service_remove(&a->device, r);
-			access_db = sdp_list_remove(access_db, a);
-			access_free(a);
-		}
-	}
+	if (p == NULL || p->data == NULL)
+		return 0;
+
+	a = p->data;
+
+	if (bacmp(&a->device, BDADDR_ANY) != 0) {
+		struct btd_adapter *adapter = manager_find_adapter(&a->device);
+		if (adapter)
+			adapter_service_remove(adapter, r);
+	} else
+		manager_foreach_adapter(adapter_service_remove, r);
+
+	access_db = sdp_list_remove(access_db, a);
+	access_free(a);
 
 	return 0;
 }
@@ -285,7 +300,7 @@ int sdp_check_access(uint32_t handle, bdaddr_t *device)
 	if (!p)
 		return 1;
 
-	a = (sdp_access_t *) p->data;
+	a = p->data;
 	if (!a)
 		return 1;
 
@@ -305,4 +320,27 @@ uint32_t sdp_next_handle(void)
 		handle++;
 
 	return handle;
+}
+
+void sdp_init_services_list(bdaddr_t *device)
+{
+	sdp_list_t *p;
+
+	DBG("");
+
+	for (p = access_db; p != NULL; p = p->next) {
+		sdp_access_t *access = p->data;
+		sdp_record_t *rec;
+
+		if (bacmp(BDADDR_ANY, &access->device))
+			continue;
+
+		rec = sdp_record_find(access->handle);
+		if (rec == NULL)
+			continue;
+
+		SDPDBG("adding record with handle %x", access->handle);
+
+		manager_foreach_adapter(adapter_service_insert, rec);
+	}
 }

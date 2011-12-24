@@ -34,7 +34,6 @@
 #include <sys/ioctl.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/l2cap.h>
 #include <bluetooth/bnep.h>
 
 #include <netinet/in.h>
@@ -138,9 +137,10 @@ int bnep_show_connections(void)
 	}
 
 	for (i = 0; i < req.cnum; i++) {
+		char addr[18];
+		ba2str((bdaddr_t *) ci[i].dst, addr);
 		printf("%s %s %s\n", ci[i].device,
-			batostr((bdaddr_t *) ci[i].dst),
-			bnep_svc2str(ci[i].role));
+			addr, bnep_svc2str(ci[i].role));
 	}
 	return 0;
 }
@@ -231,6 +231,22 @@ int bnep_accept_connection(int sk, uint16_t role, char *dev)
 		return -1;
 
 	req = (void *) pkt;
+
+	/* Highest known Control command ID
+	 * is BNEP_FILTER_MULT_ADDR_RSP = 0x06 */
+	if (req->type == BNEP_CONTROL &&
+				req->ctrl > BNEP_FILTER_MULT_ADDR_RSP) {
+		uint8_t pkt[3];
+
+		pkt[0] = BNEP_CONTROL;
+		pkt[1] = BNEP_CMD_NOT_UNDERSTOOD;
+		pkt[2] = req->ctrl;
+
+		send(sk, pkt, sizeof(pkt), 0);
+
+		return -1;
+	}
+
 	if (req->type != BNEP_CONTROL || req->ctrl != BNEP_SETUP_CONN_REQ)
 		return -1;
 

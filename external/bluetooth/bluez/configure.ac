@@ -1,5 +1,5 @@
 AC_PREREQ(2.60)
-AC_INIT(bluez, 4.69)
+AC_INIT(bluez, 4.93)
 
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 AM_CONFIG_HEADER(config.h)
@@ -40,7 +40,10 @@ AC_PATH_GLIB
 AC_PATH_ALSA
 AC_PATH_GSTREAMER
 AC_PATH_USB
+AC_PATH_UDEV
 AC_PATH_SNDFILE
+AC_PATH_OUI
+AC_PATH_READLINE
 
 AC_ARG_BLUEZ
 
@@ -53,16 +56,6 @@ if (test "${enable_capng}" = "yes"); then
 	AC_SUBST(CAPNG_LIBS)
 	AC_DEFINE(HAVE_CAPNG, 1, [Define to 1 if you have capabilities library.])
 fi
-
-AC_ARG_ENABLE(netlink, AC_HELP_STRING([--enable-netlink],
-		[enable netlink support]), [enable_netlink=${enableval}])
-if (test "${enable_netlink}" = "yes"); then
-	PKG_CHECK_MODULES(NETLINK, libnl-1, dummy=yes,
-				AC_MSG_ERROR(Netlink library is required))
-	AC_SUBST(NETLINK_CFLAGS)
-	AC_SUBST(NETLINK_LIBS)
-fi
-AM_CONDITIONAL(NETLINK, test "${enable_netlink}" = "yes")
 
 AC_OUTPUT(Makefile scripts/bluetooth.rules doc/version.xml
 					src/bluetoothd.8 bluez.pc)

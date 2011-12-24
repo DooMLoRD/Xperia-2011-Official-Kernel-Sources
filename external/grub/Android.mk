@@ -16,7 +16,6 @@
 
 LOCAL_PATH := $(call my-dir)
 
-ifneq ($(TARGET_SIMULATOR),true)
 ifeq ($(TARGET_ARCH),x86)
 
 include $(CLEAR_VARS)
@@ -36,6 +35,7 @@ LOCAL_CFLAGS += -m32 -O2 -fno-builtin -nostdinc
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/stage1
 
 LOCAL_MODULE := grub_stage1
+LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE_PATH := $(PRODUCT_OUT)/grub
 
 LOCAL_SYSTEM_SHARED_LIBRARIES :=
@@ -98,6 +98,7 @@ LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH)/stage2
 
 LOCAL_MODULE := grub_pre_stage2
+LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE_PATH := $(PRODUCT_OUT)/grub
 
 LOCAL_SYSTEM_SHARED_LIBRARIES :=
@@ -135,6 +136,7 @@ LOCAL_SYSTEM_SHARED_LIBRARIES :=
 LOCAL_SHARED_LIBRARIES :=
 
 LOCAL_MODULE := grub_start_stage2
+LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE_PATH := $(PRODUCT_OUT)/grub
 
 # <generate the header file>
@@ -171,7 +173,7 @@ file := $(PRODUCT_OUT)/grub/grub_stage2
 $(file) : $(my_files) 
 	@echo "target Creating: $@"
 	$(hide) cat $^ > $@
-ALL_PREBUILT += $(file)
+#ALL_PREBUILT += $(file)
 
 
 #############################################################################
@@ -186,7 +188,6 @@ $(grub_full) : $(grub_stage1) $(grub_stage2)
 	$(hide) rm -f $@
 	$(hide) dd if=$(grub_stage1) of=$@ bs=512 count=1 2>/dev/null
 	$(hide) dd if=$(grub_stage2) of=$@ bs=512 seek=1 2>/dev/null
-ALL_PREBUILT += $(grub_full)
+#ALL_PREBUILT += $(grub_full)
 
 endif # x86
-endif # ! sim

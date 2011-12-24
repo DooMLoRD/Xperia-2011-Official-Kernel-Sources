@@ -4,8 +4,6 @@
  *
  *  Copyright (C) 2006-2007  Nokia Corporation
  *  Copyright (C) 2004-2008  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010, Code Aurora Forum
- *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  *
  *  This library is free software; you can redistribute it and/or
@@ -138,7 +136,6 @@ struct bluetooth_data {
 	int	frame_duration;			/* length of an SBC frame in microseconds */
 	int codesize;				/* SBC codesize */
 	int samples;				/* Number of encoded samples */
-	size_t sizeof_scms_t;                   /* Indicates protection hdr */
 	uint8_t buffer[BUFFER_SIZE];		/* Codec transfer buffer */
 	int count;				/* Codec transfer buffer counter */
 
@@ -153,9 +150,6 @@ struct bluetooth_data {
 	/* used for pacing our writes to the output socket */
 	uint64_t	next_write;
 };
-
-#define CP_TYPE_SCMS_T	0x0002
-#define SCMS_T_COPY_NOT_ALLOWED 0x00
 
 static uint64_t get_microseconds()
 {
@@ -200,20 +194,20 @@ static int l2cap_set_flushable(int fd, int flushable)
 	socklen_t len;
 
 	len = sizeof(flags);
-	if (getsockopt(fd, SOL_L2CAP, L2CAP_LM, &flags, &len) < 0)
+	if (getsockopt(fd, SOL_BLUETOOTH, BT_FLUSHABLE, &flags, &len) < 0)
 		return -errno;
 
 	if (flushable) {
-		if (flags & L2CAP_LM_FLUSHABLE)
+		if (flags == BT_FLUSHABLE_ON)
 			return 0;
-		flags |= L2CAP_LM_FLUSHABLE;
+		flags = BT_FLUSHABLE_ON;
 	} else {
-		if (!(flags & L2CAP_LM_FLUSHABLE))
+		if (flags == BT_FLUSHABLE_OFF)
 			return 0;
-		flags &= ~L2CAP_LM_FLUSHABLE;
+		flags = BT_FLUSHABLE_OFF;
 	}
 
-	if (setsockopt(fd, SOL_L2CAP, L2CAP_LM, &flags, sizeof(flags)) < 0)
+	if (setsockopt(fd, SOL_BLUETOOTH, L2CAP_LM, &flags, sizeof(flags)) < 0)
 		return -errno;
 
 	return 0;
@@ -265,7 +259,7 @@ static int bluetooth_start(struct bluetooth_data *data)
 	setsockopt(data->stream.fd, SOL_SOCKET, SO_SNDBUF, &bytes,
 			sizeof(bytes));
 
-	data->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload) + data->sizeof_scms_t;
+	data->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload);
 	data->frame_count = 0;
 	data->samples = 0;
 	data->nsamples = 0;
@@ -630,12 +624,7 @@ static int bluetooth_a2dp_hw_params(struct bluetooth_data *data)
 		return err;
 
 	data->link_mtu = setconf_rsp->link_mtu;
-	if (setconf_rsp->content_protection == CP_TYPE_SCMS_T) {
-		data->sizeof_scms_t = 1;
-	} else {
-		data->sizeof_scms_t = 0;
-	}
-	DBG("MTU: %d -- SCMS-T Enabled: %d", data->link_mtu, setconf_rsp->content_protection);
+	DBG("MTU: %d", data->link_mtu);
 
 	/* Setup SBC encoder now we agree on parameters */
 	bluetooth_a2dp_setup(data);
@@ -661,14 +650,10 @@ static int avdtp_write(struct bluetooth_data *data)
 #endif
 
 	header = (struct rtp_header *)data->buffer;
-	payload = (struct rtp_payload *)(data->buffer + sizeof(*header) + data->sizeof_scms_t);
+	payload = (struct rtp_payload *)(data->buffer + sizeof(*header));
 
-	memset(data->buffer, 0, sizeof(*header) + sizeof(*payload) + data->sizeof_scms_t);
+	memset(data->buffer, 0, sizeof(*header) + sizeof(*payload));
 
-
-	if (data->sizeof_scms_t) {
-		data->buffer[sizeof(*header)] =SCMS_T_COPY_NOT_ALLOWED;
-	}
 	payload->frame_count = data->frame_count;
 	header->v = 2;
 	header->pt = 1;
@@ -732,7 +717,7 @@ static int avdtp_write(struct bluetooth_data *data)
 	}
 
 	/* Reset buffer of data to send */
-	data->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload) + data->sizeof_scms_t;
+	data->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload);
 	data->frame_count = 0;
 	data->samples = 0;
 	data->seq_num++;
@@ -1104,8 +1089,6 @@ static void* a2dp_thread(void *d)
 
 			case A2DP_CMD_INIT:
 				/* already called bluetooth_init() */
-				/* notify client that thread is ready for next command */
-				pthread_cond_signal(&data->client_wait);
 			default:
 				break;
 		}

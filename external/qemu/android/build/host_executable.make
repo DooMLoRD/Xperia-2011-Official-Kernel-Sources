@@ -14,9 +14,11 @@
 #
 
 # first, call a library containing all object files
-LOCAL_BUILT_MODULE := $(call executable-path,$(LOCAL_MODULE))
+LOCAL_BUILT_MODULE := $(call executable-path,$(LOCAL_MODULE))$(HOST_EXEEXT)
 LOCAL_CC ?= $(CC)
 include $(BUILD_SYSTEM)/binary.make
+
+LOCAL_LIBRARIES := $(foreach lib,$(LOCAL_STATIC_LIBRARIES),$(call library-path,$(lib)))
 
 LOCAL_LDLIBS := $(foreach lib,$(LOCAL_STATIC_LIBRARIES),$(call library-path,$(lib))) $(LOCAL_LDLIBS)
 
@@ -24,7 +26,7 @@ $(LOCAL_BUILT_MODULE): PRIVATE_LDFLAGS := $(LDFLAGS) $(LOCAL_LDFLAGS)
 $(LOCAL_BUILT_MODULE): PRIVATE_LDLIBS  := $(LOCAL_LDLIBS)
 $(LOCAL_BUILT_MODULE): PRIVATE_OBJS    := $(LOCAL_OBJECTS)
 
-$(LOCAL_BUILT_MODULE): $(LOCAL_OBJECTS)
+$(LOCAL_BUILT_MODULE): $(LOCAL_OBJECTS) $(LOCAL_LIBRARIES)
 	@ mkdir -p $(dir $@)
 	@ echo "Executable: $@"
 	$(hide) $(LD) $(PRIVATE_LDFLAGS) -o $@ $(PRIVATE_LIBRARY) $(PRIVATE_OBJS) $(PRIVATE_LDLIBS)

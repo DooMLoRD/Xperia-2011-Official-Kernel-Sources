@@ -29,13 +29,10 @@
 #include <dbus/dbus.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
 
 #include "plugin.h"
 #include "adapter.h"
 #include "log.h"
-#include "dbus-hci.h"
 
 static void formfactor_reply(DBusPendingCall *call, void *user_data)
 {

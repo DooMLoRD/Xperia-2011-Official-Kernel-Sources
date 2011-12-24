@@ -131,7 +131,7 @@ get_zoneinfo_timezone( void )
                 return NULL;
             }
         }
-        pstrcpy( android_timezone0, sizeof(android_timezone0), tz );
+        snprintf(android_timezone0, sizeof(android_timezone0), "%s", tz );
         android_timezone = android_timezone0;
     }
     D( "found timezone %s", android_timezone );
@@ -185,7 +185,7 @@ compare_timezone_to_localtime( ScanDataRec*  scan,
     }
 
     if ( st.st_size != scan->localtime_st.st_size ) {
-        D( " size mistmatch (%lld != %lld)\n", st.st_size, scan->localtime_st.st_size );
+        D( " size mistmatch (%zd != %zd)\n", (size_t)st.st_size, (size_t)scan->localtime_st.st_size );
         return 0;
     }
 
@@ -402,7 +402,7 @@ get_zoneinfo_timezone( void )
             if (tz == NULL)
                 return NULL;
 
-            pstrcpy( android_timezone0, sizeof(android_timezone0), tz );
+            snprintf(android_timezone0, sizeof(android_timezone0), "%s", tz);
             android_timezone = android_timezone0;
         }
         D( "found timezone %s\n", android_timezone );

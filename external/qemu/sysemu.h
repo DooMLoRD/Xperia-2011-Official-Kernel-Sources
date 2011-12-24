@@ -50,8 +50,9 @@ void qemu_system_powerdown_request(void);
 int qemu_shutdown_requested(void);
 int qemu_reset_requested(void);
 int qemu_powerdown_requested(void);
+void qemu_system_killed(int signal, pid_t pid);
 #ifdef NEED_CPU_H
-#if !defined(TARGET_SPARC) && !defined(TARGET_I386)
+#if !defined(TARGET_SPARC)
 // Please implement a power failure function to signal the OS
 #define qemu_system_powerdown() do{}while(0)
 #else
@@ -63,7 +64,7 @@ void qemu_system_reset(void);
 void do_savevm(Monitor *mon, const char *name);
 void do_loadvm(Monitor *mon, const char *name);
 void do_delvm(Monitor *mon, const char *name);
-void do_info_snapshots(Monitor *mon);
+void do_info_snapshots(Monitor *mon, Monitor* err);
 
 void qemu_announce_self(void);
 
@@ -86,22 +87,6 @@ void qemu_error_internal(const char *file, int linenr, const char *func,
 #define qemu_error_new(fmt, ...) \
     qemu_error_internal(__FILE__, __LINE__, __func__, fmt, ## __VA_ARGS__)
 
-#ifdef _WIN32
-/* Polling handling */
-
-/* return TRUE if no sleep should be done afterwards */
-typedef int PollingFunc(void *opaque);
-
-int qemu_add_polling_cb(PollingFunc *func, void *opaque);
-void qemu_del_polling_cb(PollingFunc *func, void *opaque);
-
-/* Wait objects handling */
-typedef void WaitObjectFunc(void *opaque);
-
-int qemu_add_wait_object(HANDLE handle, WaitObjectFunc *func, void *opaque);
-void qemu_del_wait_object(HANDLE handle, WaitObjectFunc *func, void *opaque);
-#endif
-
 /* TAP win32 */
 int tap_win32_init(VLANState *vlan, const char *model,
                    const char *name, const char *ifname);
@@ -109,15 +94,7 @@ int tap_win32_init(VLANState *vlan, const char *model,
 /* SLIRP */
 void do_info_slirp(Monitor *mon);
 
-typedef enum DisplayType
-{
-    DT_DEFAULT,
-    DT_CURSES,
-    DT_SDL,
-    DT_VNC,
-    DT_NOGRAPHIC,
-} DisplayType;
-
+extern int autostart;
 extern int bios_size;
 extern int cirrus_vga_enabled;
 extern int std_vga_enabled;
@@ -139,10 +116,7 @@ extern int graphic_rotate;
 extern int no_quit;
 extern int semihosting_enabled;
 extern int old_param;
-
-#ifdef CONFIG_KQEMU
-extern int kqemu_allowed;
-#endif
+extern QEMUClock *rtc_clock;
 
 #define MAX_NODES 64
 extern int nb_numa_nodes;
@@ -160,17 +134,13 @@ extern unsigned int nb_prom_envs;
 #endif
 #endif
 
-typedef enum {
-    IF_IDE, IF_SCSI, IF_FLOPPY, IF_PFLASH, IF_MTD, IF_SD, IF_VIRTIO, IF_XEN,
-    IF_COUNT
-} BlockInterfaceType;
-
+#if 0
 typedef enum {
     BLOCK_ERR_REPORT, BLOCK_ERR_IGNORE, BLOCK_ERR_STOP_ENOSPC,
     BLOCK_ERR_STOP_ANY
 } BlockInterfaceErrorAction;
 
-typedef struct DriveInfo {
+struct DriveInfo {
     BlockDriverState *bdrv;
     BlockInterfaceType type;
     int bus;
@@ -179,7 +149,7 @@ typedef struct DriveInfo {
     int drive_opt_idx;
     BlockInterfaceErrorAction onerror;
     char serial[21];
-} DriveInfo;
+};
 
 #define MAX_IDE_DEVS	2
 #define MAX_SCSI_DEVS	7
@@ -208,6 +178,8 @@ extern int nb_drives_opt;
 
 extern int drive_add(const char *file, const char *fmt, ...);
 extern int drive_init(struct drive_opt *arg, int snapshot, void *machine);
+int add_init_drive(const char *opts);
+#endif
 
 /* acpi */
 void qemu_system_hot_add_init(void);
@@ -217,16 +189,17 @@ void qemu_system_device_hot_add(int pcibus, int slot, int state);
 
 typedef int (dev_match_fn)(void *dev_private, void *arg);
 
-int add_init_drive(const char *opts);
 void destroy_nic(dev_match_fn *match_fn, void *arg);
 void destroy_bdrvs(dev_match_fn *match_fn, void *arg);
 
+#ifndef CONFIG_ANDROID
 /* pci-hotplug */
 void pci_device_hot_add(Monitor *mon, const char *pci_addr, const char *type,
                         const char *opts);
 void drive_hot_add(Monitor *mon, const char *pci_addr, const char *opts);
 void pci_device_hot_remove(Monitor *mon, const char *pci_addr);
 void pci_device_hot_remove_success(int pcibus, int slot);
+#endif
 
 /* serial ports */
 
@@ -264,21 +237,6 @@ int fread_targphys_ok(target_phys_addr_t dst_addr, size_t nbytes, FILE *f);
 int read_targphys(int fd, target_phys_addr_t dst_addr, size_t nbytes);
 void pstrcpy_targphys(target_phys_addr_t dest, int buf_size,
                       const char *source);
-#endif
-
-#ifdef HAS_AUDIO
-struct soundhw {
-    const char *name;
-    const char *descr;
-    int enabled;
-    int isa;
-    union {
-        int (*init_isa) (qemu_irq *pic);
-        int (*init_pci) (PCIBus *bus);
-    } init;
-};
-
-extern struct soundhw soundhw[];
 #endif
 
 void do_usb_add(Monitor *mon, const char *devname);

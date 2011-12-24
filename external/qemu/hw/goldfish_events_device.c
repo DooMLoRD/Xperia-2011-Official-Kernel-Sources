@@ -15,6 +15,7 @@
 #include "android/globals.h"  /* for android_hw */
 #include "irq.h"
 #include "user-events.h"
+#include "console.h"
 
 #define MAX_EVENTS 256*4
 
@@ -27,6 +28,17 @@ enum {
     PAGE_NAME       = 0x00000,
     PAGE_EVBITS     = 0x10000,
     PAGE_ABSDATA    = 0x20000 | EV_ABS,
+};
+
+/* These corresponds to the state of the driver.
+ * Unfortunately, we have to buffer events coming
+ * from the UI, since the kernel driver is not
+ * capable of receiving them until XXXXXX
+ */
+enum {
+    STATE_INIT = 0,  /* The device is initialized */
+    STATE_BUFFERED,  /* Events have been buffered, but no IRQ raised yet */
+    STATE_LIVE       /* Events can be sent directly to the kernel */
 };
 
 /* NOTE: The ev_bits arrays are used to indicate to the kernel
@@ -43,6 +55,7 @@ typedef struct
     unsigned events[MAX_EVENTS];
     unsigned first;
     unsigned last;
+    unsigned state;
 
     const char *name;
 
@@ -58,7 +71,7 @@ typedef struct
 /* modify this each time you change the events_device structure. you
  * will also need to upadte events_state_load and events_state_save
  */
-#define  EVENTS_STATE_SAVE_VERSION  1
+#define  EVENTS_STATE_SAVE_VERSION  2
 
 #undef  QFIELD_STRUCT
 #define QFIELD_STRUCT  events_state
@@ -69,6 +82,7 @@ QFIELD_BEGIN(events_state_fields)
     QFIELD_BUFFER(events),
     QFIELD_INT32(first),
     QFIELD_INT32(last),
+    QFIELD_INT32(state),
 QFIELD_END
 
 static void  events_state_save(QEMUFile*  f, void*  opaque)
@@ -88,8 +102,6 @@ static int  events_state_load(QEMUFile*  f, void* opaque, int  version_id)
     return qemu_get_struct(f, events_state_fields, s);
 }
 
-extern const char*  android_skin_keycharmap;
-
 static void enqueue_event(events_state *s, unsigned int type, unsigned int code, int value)
 {
     int  enqueued = s->last - s->first;
@@ -97,13 +109,17 @@ static void enqueue_event(events_state *s, unsigned int type, unsigned int code,
     if (enqueued < 0)
         enqueued += MAX_EVENTS;
 
-    if (enqueued + 3 >= MAX_EVENTS-1) {
+    if (enqueued + 3 > MAX_EVENTS) {
         fprintf(stderr, "##KBD: Full queue, lose event\n");
         return;
     }
 
-    if(s->first == s->last){
-        qemu_irq_raise(s->irq);
+    if(s->first == s->last) {
+	if (s->state == STATE_LIVE)
+	  qemu_irq_raise(s->irq);
+	else {
+	  s->state = STATE_BUFFERED;
+	}
     }
 
     //fprintf(stderr, "##KBD: type=%d code=%d value=%d\n", type, code, value);
@@ -131,16 +147,33 @@ static unsigned dequeue_event(events_state *s)
     if(s->first == s->last) {
         qemu_irq_lower(s->irq);
     }
-
+#ifdef TARGET_I386
+    /*
+     * Adding the logic to handle edge-triggered interrupts for x86
+     * because the exisiting goldfish events device basically provides
+     * level-trigger interrupts only.
+     *
+     * Logic: When an event (including the type/code/value) is fetched
+     * by the driver, if there is still another event in the event
+     * queue, the goldfish event device will re-assert the IRQ so that
+     * the driver can be notified to fetch the event again.
+     */
+    else if (((s->first + 2) & (MAX_EVENTS - 1)) < s->last ||
+               (s->first & (MAX_EVENTS - 1)) > s->last) { /* if there still is an event */
+        qemu_irq_lower(s->irq);
+        qemu_irq_raise(s->irq);
+    }
+#endif
     return n;
 }
 
 static int get_page_len(events_state *s)
 {
     int page = s->page;
-    if (page == PAGE_NAME)
-        return strlen(s->name);
-    if (page >= PAGE_EVBITS && page <= PAGE_EVBITS + EV_MAX)
+    if (page == PAGE_NAME) {
+        const char* name = s->name;
+        return strlen(name);
+    } if (page >= PAGE_EVBITS && page <= PAGE_EVBITS + EV_MAX)
         return s->ev_bits[page - PAGE_EVBITS].len;
     if (page == PAGE_ABSDATA)
         return s->abs_info_count * sizeof(s->abs_info[0]);
@@ -153,12 +186,14 @@ static int get_page_data(events_state *s, int offset)
     int page = s->page;
     if (offset > page_len)
         return 0;
-    if (page == PAGE_NAME)
-        return s->name[offset];
-    if (page >= PAGE_EVBITS && page <= PAGE_EVBITS + EV_MAX)
+    if (page == PAGE_NAME) {
+        const char* name = s->name;
+        return name[offset];
+    } if (page >= PAGE_EVBITS && page <= PAGE_EVBITS + EV_MAX)
         return s->ev_bits[page - PAGE_EVBITS].bits[offset];
-    if (page == PAGE_ABSDATA)
+    if (page == PAGE_ABSDATA) {
         return s->abs_info[offset / sizeof(s->abs_info[0])];
+    }
     return 0;
 }
 
@@ -166,6 +201,19 @@ static uint32_t events_read(void *x, target_phys_addr_t off)
 {
     events_state *s = (events_state *) x;
     int offset = off; // - s->base;
+
+    /* This gross hack below is used to ensure that we
+     * only raise the IRQ when the kernel driver is
+     * properly ready! If done before this, the driver
+     * becomes confused and ignores all input events
+     * as soon as one was buffered!
+     */
+    if (offset == REG_LEN && s->page == PAGE_ABSDATA) {
+	if (s->state == STATE_BUFFERED)
+	  qemu_irq_raise(s->irq);
+	s->state = STATE_LIVE;
+    }
+
     if (offset == REG_READ)
         return dequeue_event(s);
     else if (offset == REG_LEN)
@@ -267,6 +315,17 @@ events_set_bit(events_state* s, int  type, int  bit)
     events_set_bits(s, type, bit, bit);
 }
 
+static void
+events_clr_bit(events_state* s, int type, int bit)
+{
+    int ii = bit / 8;
+    if (ii < s->ev_bits[type].len) {
+        uint8_t* bits = s->ev_bits[type].bits;
+        uint8_t  mask = 0x01U << (bit & 7);
+        bits[ii] &= ~mask;
+    }
+}
+
 void events_dev_init(uint32_t base, qemu_irq irq)
 {
     events_state *s;
@@ -274,7 +333,6 @@ void events_dev_init(uint32_t base, qemu_irq irq)
     AndroidHwConfig*  config = android_hw;
 
     s = (events_state *) qemu_mallocz(sizeof(events_state));
-    s->name = android_skin_keycharmap;
 
     /* now set the events capability bits depending on hardware configuration */
     /* apparently, the EV_SYN array is used to indicate which other
@@ -346,6 +404,18 @@ void events_dev_init(uint32_t base, qemu_irq irq)
          */
         events_set_bits(s, EV_KEY, 1, 0xff);
         events_set_bits(s, EV_KEY, 0x160, 0x1ff);
+
+        /* If there is a keyboard, but no DPad, we need to clear the
+         * corresponding bits. Doing this is simpler than trying to exclude
+         * the DPad values from the ranges above.
+         */
+        if (!config->hw_dPad) {
+            events_clr_bit(s, EV_KEY, KEY_DOWN);
+            events_clr_bit(s, EV_KEY, KEY_UP);
+            events_clr_bit(s, EV_KEY, KEY_LEFT);
+            events_clr_bit(s, EV_KEY, KEY_RIGHT);
+            events_clr_bit(s, EV_KEY, KEY_CENTER);
+        }
     }
 
     /* configure EV_REL array
@@ -362,8 +432,44 @@ void events_dev_init(uint32_t base, qemu_irq irq)
      * EV_ABS events are sent when the touchscreen is pressed
      */
     if (config->hw_touchScreen) {
+        int32_t*  values;
+
         events_set_bit (s, EV_SYN, EV_ABS );
         events_set_bits(s, EV_ABS, ABS_X, ABS_Z);
+        /* Allocate the absinfo to report the min/max bounds for each
+         * absolute dimension. The array must contain 3 tuples
+         * of (min,max,fuzz,flat) 32-bit values.
+         *
+         * min and max are the bounds
+         * fuzz corresponds to the device's fuziness, we set it to 0
+         * flat corresponds to the flat position for JOEYDEV devices,
+         * we also set it to 0.
+         *
+         * There is no need to save/restore this array in a snapshot
+         * since the values only depend on the hardware configuration.
+         */
+        s->abs_info_count = 3*4;
+        s->abs_info = values = malloc(sizeof(uint32_t)*s->abs_info_count);
+
+        /* ABS_X min/max/fuzz/flat */
+        values[0] = 0;
+        values[1] = config->hw_lcd_width-1;
+        values[2] = 0;
+        values[3] = 0;
+        values   += 4;
+
+        /* ABS_Y */
+        values[0] = 0;
+        values[1] = config->hw_lcd_height-1;
+        values[2] = 0;
+        values[3] = 0;
+        values   += 4;
+
+        /* ABS_Z */
+        values[0] = 0;
+        values[1] = 1;
+        values[2] = 0;
+        values[3] = 0;
     }
 
     /* configure EV_SW array
@@ -372,10 +478,9 @@ void events_dev_init(uint32_t base, qemu_irq irq)
      * was closed or opened (done when we switch layouts through
      * KP-7 or KP-9).
      *
-     * We only support this when there is a real keyboard, which
-     * we assume can be hidden/revealed.
+     * We only support this when hw.keyboard.lid is true.
      */
-    if (config->hw_keyboard) {
+    if (config->hw_keyboard && config->hw_keyboard_lid) {
         events_set_bit(s, EV_SYN, EV_SW);
         events_set_bit(s, EV_SW, 0);
     }
@@ -386,15 +491,20 @@ void events_dev_init(uint32_t base, qemu_irq irq)
 
     qemu_add_kbd_event_handler(events_put_keycode, s);
     qemu_add_mouse_event_handler(events_put_mouse, s, 1, "goldfish-events");
-    user_event_register_generic(s, events_put_generic);
 
     s->base = base;
     s->irq = irq;
 
     s->first = 0;
     s->last = 0;
+    s->state = STATE_INIT;
+    s->name = qemu_strdup(config->hw_keyboard_charmap);
+
+    /* This function migh fire buffered events to the device, so
+     * ensure that it is called after initialization is complete
+     */
+    user_event_register_generic(s, events_put_generic);
 
     register_savevm( "events_state", 0, EVENTS_STATE_SAVE_VERSION,
                       events_state_save, events_state_load, s );
 }
-

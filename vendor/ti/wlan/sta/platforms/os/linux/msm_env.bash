@@ -1,4 +1,0 @@
-export CROSS_COMPILE=arm-eabi-
-export ARCH=arm
-export HOST_PLATFORM=msm
-export KERNEL_DIR=$ANDROID_PRODUCT_OUT/obj/KERNEL_OBJ

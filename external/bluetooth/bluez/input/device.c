@@ -34,11 +34,7 @@
 #include <sys/socket.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
 #include <bluetooth/hidp.h>
-#include <bluetooth/l2cap.h>
-#include <bluetooth/rfcomm.h>
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
@@ -50,16 +46,15 @@
 #include "textfile.h"
 #include "uinput.h"
 
+#include "../src/adapter.h"
+#include "../src/device.h"
 #include "../src/storage.h"
 #include "../src/manager.h"
 #include "../src/dbus-common.h"
-#include "adapter.h"
-#include "../src/device.h"
 
 #include "device.h"
 #include "error.h"
 #include "fakehid.h"
-#include "glib-helper.h"
 #include "btio.h"
 
 #define INPUT_DEVICE_INTERFACE "org.bluez.Input"
@@ -95,14 +90,12 @@ struct input_device {
 	GSList			*connections;
 };
 
-GSList *devices = NULL;
+static GSList *devices = NULL;
 
 static struct input_device *find_device_by_path(GSList *list, const char *path)
 {
-	GSList *l;
-
-	for (l = list; l; l = l->next) {
-		struct input_device *idev = l->data;
+	for (; list; list = list->next) {
+		struct input_device *idev = list->data;
 
 		if (!strcmp(idev->path, path))
 			return idev;
@@ -113,10 +106,8 @@ static struct input_device *find_device_by_path(GSList *list, const char *path)
 
 static struct input_conn *find_connection(GSList *list, const char *pattern)
 {
-	GSList *l;
-
-	for (l = list; l; l = l->next) {
-		struct input_conn *iconn = l->data;
+	for (; list; list = list->next) {
+		struct input_conn *iconn = list->data;
 
 		if (!strcasecmp(iconn->uuid, pattern))
 			return iconn;
@@ -252,17 +243,16 @@ static int decode_key(const char *str)
 	return key;
 }
 
-static void send_event(int fd, uint16_t type, uint16_t code, int32_t value)
+static int send_event(int fd, uint16_t type, uint16_t code, int32_t value)
 {
 	struct uinput_event event;
-	int err;
 
 	memset(&event, 0, sizeof(event));
 	event.type	= type;
 	event.code	= code;
 	event.value	= value;
 
-	err = write(fd, &event, sizeof(event));
+	return write(fd, &event, sizeof(event));
 }
 
 static void send_key(int fd, uint16_t key)
@@ -280,8 +270,9 @@ static gboolean rfcomm_io_cb(GIOChannel *chan, GIOCondition cond, gpointer data)
 	struct fake_input *fake = data;
 	const char *ok = "\r\nOK\r\n";
 	char buf[BUF_SIZE];
-	gsize bread = 0, bwritten;
+	ssize_t bread = 0, bwritten;
 	uint16_t key;
+	int fd;
 
 	if (cond & G_IO_NVAL)
 		return FALSE;
@@ -291,16 +282,19 @@ static gboolean rfcomm_io_cb(GIOChannel *chan, GIOCondition cond, gpointer data)
 		goto failed;
 	}
 
+	fd = g_io_channel_unix_get_fd(chan);
+
 	memset(buf, 0, BUF_SIZE);
-	if (g_io_channel_read(chan, buf, sizeof(buf) - 1,
-				&bread) != G_IO_ERROR_NONE) {
+	bread = read(fd, buf, sizeof(buf) - 1);
+	if (bread < 0) {
 		error("IO Channel read error");
 		goto failed;
 	}
 
 	DBG("Received: %s", buf);
 
-	if (g_io_channel_write(chan, ok, 6, &bwritten) != G_IO_ERROR_NONE) {
+	bwritten = write(fd, ok, 6);
+	if (bwritten < 0) {
 		error("IO Channel write error");
 		goto failed;
 	}
@@ -320,32 +314,6 @@ failed:
 	return FALSE;
 }
 
-static inline DBusMessage *not_supported(DBusMessage *msg)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-							"Not supported");
-}
-
-static inline DBusMessage *in_progress(DBusMessage *msg)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".InProgress",
-				"Device connection already in progress");
-}
-
-static inline DBusMessage *already_connected(DBusMessage *msg)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".AlreadyConnected",
-					"Already connected to a device");
-}
-
-static inline DBusMessage *connection_attempt_failed(DBusMessage *msg,
-							const char *err)
-{
-	return g_dbus_create_error(msg,
-				ERROR_INTERFACE ".ConnectionAttemptFailed",
-				err ? err : "Connection attempt failed");
-}
-
 static void rfcomm_connect_cb(GIOChannel *chan, GError *err, gpointer user_data)
 {
 	struct input_conn *iconn = user_data;
@@ -354,8 +322,7 @@ static void rfcomm_connect_cb(GIOChannel *chan, GError *err, gpointer user_data)
 	DBusMessage *reply;
 
 	if (err) {
-		reply = connection_attempt_failed(iconn->pending_connect,
-								err->message);
+		reply = btd_error_failed(iconn->pending_connect, err->message);
 		goto failed;
 	}
 
@@ -368,7 +335,7 @@ static void rfcomm_connect_cb(GIOChannel *chan, GError *err, gpointer user_data)
 	fake->uinput = uinput_create(idev->name);
 	if (fake->uinput < 0) {
 		g_io_channel_shutdown(chan, TRUE, NULL);
-		reply = connection_attempt_failed(iconn->pending_connect,
+		reply = btd_error_failed(iconn->pending_connect,
 							strerror(errno));
 		goto failed;
 	}
@@ -402,6 +369,7 @@ static gboolean rfcomm_connect(struct input_conn *iconn, GError **err)
 				NULL, err,
 				BT_IO_OPT_SOURCE_BDADDR, &idev->src,
 				BT_IO_OPT_DEST_BDADDR, &idev->dst,
+				BT_IO_OPT_POWER_ACTIVE, 0,
 				BT_IO_OPT_INVALID);
 	if (!io)
 		return FALSE;
@@ -635,11 +603,17 @@ static int hidp_add_connection(const struct input_device *idev,
 
 	fake_hid = get_fake_hid(req->vendor, req->product);
 	if (fake_hid) {
+		err = 0;
 		fake = g_new0(struct fake_input, 1);
 		fake->connect = fake_hid_connect;
 		fake->disconnect = fake_hid_disconnect;
 		fake->priv = fake_hid;
-		err = fake_hid_connadd(fake, iconn->intr_io, fake_hid);
+		fake->idev = idev;
+		fake = fake_hid_connadd(fake, iconn->intr_io, fake_hid);
+		if (fake == NULL)
+			err = -ENOMEM;
+		else
+			fake->flags |= FI_FLAG_CONNECTED;
 		goto cleanup;
 	}
 
@@ -648,12 +622,15 @@ static int hidp_add_connection(const struct input_device *idev,
 
 	/* Encryption is mandatory for keyboards */
 	if (req->subclass & 0x40) {
-		err = bt_acl_encrypt(&idev->src, &idev->dst, encrypt_completed, req);
+		struct btd_adapter *adapter = device_get_adapter(idev->device);
+
+		err = btd_adapter_encrypt_link(adapter, (bdaddr_t *) &idev->dst,
+						encrypt_completed, req);
 		if (err == 0) {
 			/* Waiting async encryption */
 			return 0;
 		} else if (err != -EALREADY) {
-			error("bt_acl_encrypt(): %s(%d)", strerror(-err), -err);
+			error("encrypt_link: %s (%d)", strerror(-err), -err);
 			goto cleanup;
 		}
 	}
@@ -768,7 +745,7 @@ static int disconnect(struct input_device *idev, uint32_t flags)
 	}
 
 	if (!iconn)
-		return ENOTCONN;
+		return -ENOTCONN;
 
 	return connection_disconnect(iconn, flags);
 }
@@ -827,8 +804,6 @@ static void interrupt_connect_cb(GIOChannel *chan, GError *conn_err,
 
 	if (conn_err) {
 		err_msg = conn_err->message;
-		g_io_channel_unref(iconn->intr_io);
-		iconn->intr_io = NULL;
 		goto failed;
 	}
 
@@ -848,17 +823,21 @@ static void interrupt_connect_cb(GIOChannel *chan, GError *conn_err,
 
 failed:
 	error("%s", err_msg);
-	reply = connection_attempt_failed(iconn->pending_connect, err_msg);
+	reply = btd_error_failed(iconn->pending_connect, err_msg);
 	g_dbus_send_message(idev->conn, reply);
 
-	if (iconn->ctrl_io)
-		g_io_channel_shutdown(iconn->ctrl_io, FALSE, NULL);
+	/* So we guarantee the interrupt channel is closed before the
+	 * control channel (if we only do unref GLib will close it only
+	 * after returning control to the mainloop */
+	if (!conn_err)
+		g_io_channel_shutdown(iconn->intr_io, FALSE, NULL);
 
-	if (iconn->intr_io) {
-		if (!conn_err)
-			g_io_channel_shutdown(iconn->intr_io, FALSE, NULL);
-		g_io_channel_unref(iconn->intr_io);
-		iconn->intr_io = NULL;
+	g_io_channel_unref(iconn->intr_io);
+	iconn->intr_io = NULL;
+
+	if (iconn->ctrl_io) {
+		g_io_channel_unref(iconn->ctrl_io);
+		iconn->ctrl_io = NULL;
 	}
 }
 
@@ -873,8 +852,8 @@ static void control_connect_cb(GIOChannel *chan, GError *conn_err,
 
 	if (conn_err) {
 		error("%s", conn_err->message);
-		reply = connection_attempt_failed(iconn->pending_connect,
-							conn_err->message);
+		reply = btd_error_failed(iconn->pending_connect,
+						conn_err->message);
 		goto failed;
 	}
 
@@ -885,13 +864,13 @@ static void control_connect_cb(GIOChannel *chan, GError *conn_err,
 				BT_IO_OPT_DEST_BDADDR, &idev->dst,
 				BT_IO_OPT_PSM, L2CAP_PSM_HIDP_INTR,
 				BT_IO_OPT_SEC_LEVEL, BT_IO_SEC_LOW,
+				BT_IO_OPT_POWER_ACTIVE, 0,
 				BT_IO_OPT_INVALID);
 	if (!io) {
 		error("%s", err->message);
-		reply = connection_attempt_failed(iconn->pending_connect,
+		reply = btd_error_failed(iconn->pending_connect,
 							err->message);
 		g_error_free(err);
-		g_io_channel_shutdown(chan, TRUE, NULL);
 		goto failed;
 	}
 
@@ -900,6 +879,8 @@ static void control_connect_cb(GIOChannel *chan, GError *conn_err,
 	return;
 
 failed:
+	g_io_channel_unref(iconn->ctrl_io);
+	iconn->ctrl_io = NULL;
 	g_dbus_send_message(idev->conn, reply);
 	dbus_message_unref(iconn->pending_connect);
 	iconn->pending_connect = NULL;
@@ -939,13 +920,13 @@ static DBusMessage *input_device_connect(DBusConnection *conn,
 
 	iconn = find_connection(idev->connections, "HID");
 	if (!iconn)
-		return not_supported(msg);
+		return btd_error_not_supported(msg);
 
 	if (iconn->pending_connect)
-		return in_progress(msg);
+		return btd_error_in_progress(msg);
 
 	if (is_connected(iconn))
-		return already_connected(msg);
+		return btd_error_already_connected(msg);
 
 	iconn->pending_connect = dbus_message_ref(msg);
 	fake = iconn->fake;
@@ -964,6 +945,7 @@ static DBusMessage *input_device_connect(DBusConnection *conn,
 					BT_IO_OPT_DEST_BDADDR, &idev->dst,
 					BT_IO_OPT_PSM, L2CAP_PSM_HIDP_CTRL,
 					BT_IO_OPT_SEC_LEVEL, BT_IO_SEC_LOW,
+					BT_IO_OPT_POWER_ACTIVE, 0,
 					BT_IO_OPT_INVALID);
 		iconn->ctrl_io = io;
 	}
@@ -974,15 +956,9 @@ static DBusMessage *input_device_connect(DBusConnection *conn,
 	error("%s", err->message);
 	dbus_message_unref(iconn->pending_connect);
 	iconn->pending_connect = NULL;
-	reply = connection_attempt_failed(msg, err->message);
+	reply = btd_error_failed(msg, err->message);
 	g_error_free(err);
 	return reply;
-}
-
-static DBusMessage *create_errno_message(DBusMessage *msg, int err)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-							strerror(err));
 }
 
 static DBusMessage *input_device_disconnect(DBusConnection *conn,
@@ -993,7 +969,7 @@ static DBusMessage *input_device_disconnect(DBusConnection *conn,
 
 	err = disconnect(idev, 0);
 	if (err < 0)
-		return create_errno_message(msg, -err);
+		return btd_error_failed(msg, strerror(-err));
 
 	return g_dbus_create_reply(msg, DBUS_TYPE_INVALID);
 }

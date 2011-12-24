@@ -159,6 +159,7 @@ static int get_hci_sock() {
     }
 
     /* Bind socket to the HCI device */
+    memset(&addr, 0, sizeof(addr));
     addr.hci_family = AF_BLUETOOTH;
     addr.hci_dev = 0;  // hci0
     if(bind(sock, (struct sockaddr *) &addr, sizeof(addr)) < 0) {

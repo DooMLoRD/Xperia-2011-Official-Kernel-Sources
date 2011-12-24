@@ -91,6 +91,7 @@ skin_display_init_from( SkinDisplay*  display, AConfig*  node )
     display->rect.size.w = aconfig_int(node, "width", 0);
     display->rect.size.h = aconfig_int(node, "height", 0);
     display->rotation    = aconfig_unsigned(node, "rotation", SKIN_ROTATION_0);
+    display->bpp         = aconfig_int(node, "bpp", 16);
 
     display->valid = ( display->rect.size.w > 0 && display->rect.size.h > 0 );
 
@@ -101,7 +102,8 @@ skin_display_init_from( SkinDisplay*  display, AConfig*  node )
                            r.size.w,
                            r.size.h,
                            0,
-                           QFRAME_BUFFER_RGB565 );
+                           display->bpp == 32 ? QFRAME_BUFFER_RGBX_8888
+                                              : QFRAME_BUFFER_RGB565 );
 
         qframebuffer_fifo_add( display->qfbuff );
     }
@@ -126,6 +128,7 @@ static KeyInfo  _keyinfo_table[] = {
     { "soft-left",    kKeyCodeSoftLeft },
     { "soft-right",   kKeyCodeSoftRight },
     { "search",       kKeyCodeSearch },
+    { "camera",       kKeyCodeCamera },
     { "volume-up",    kKeyCodeVolumeUp },
     { "volume-down",  kKeyCodeVolumeDown },
     { "power",        kKeyCodePower },
@@ -184,6 +187,20 @@ static KeyInfo  _keyinfo_table[] = {
     { "ALT",          kKeyCodeAltLeft },
     { "ALT2",         kKeyCodeAltRight },
     { "CAP2",         kKeyCodeCapRight },
+    { "tv",           kKeyCodeTV },
+    { "epg",          kKeyCodeEPG },
+    { "dvr",          kKeyCodeDVR },
+    { "prev",         kKeyCodePrevious },
+    { "next",         kKeyCodeNext },
+    { "play",         kKeyCodePlay },
+    { "pause",        kKeyCodePause },
+    { "stop",         kKeyCodeStop },
+    { "rev",          kKeyCodeRewind },
+    { "ffwd",         kKeyCodeFastForward },
+    { "bookmarks",    kKeyCodeBookmarks },
+    { "window",       kKeyCodeCycleWindows },
+    { "channel-up",   kKeyCodeChannelUp },
+    { "channel-down", kKeyCodeChannelDown },
     { 0, 0 },
 };
 
@@ -607,6 +624,7 @@ skin_file_load_from_v1( SkinFile*  file, AConfig*  aconfig, const char*  basepat
         *ptail = layout;
         ptail  = &layout->next;
     }
+    file->version = 1;
     return 0;
 }
 
@@ -660,6 +678,7 @@ skin_file_load_from_v2( SkinFile*  file, AConfig*  aconfig, const char*  basepat
     if (file->layouts == NULL)
         return -1;
 
+    file->version = 2;
     return 0;
 }
 
@@ -669,19 +688,29 @@ skin_file_create_from_aconfig( AConfig*   aconfig, const char*  basepath )
     SkinFile*  file;
 
     ANEW0(file);
+
     if ( aconfig_find(aconfig, "parts") != NULL) {
         if (skin_file_load_from_v2( file, aconfig, basepath ) < 0) {
-            skin_file_free( file );
-            file = NULL;
+            goto BAD_FILE;
+        }
+        file->version = aconfig_int(aconfig, "version", 2);
+        /* The file version must be 1 or higher */
+        if (file->version <= 0) {
+            dprint( "## WARNING: invalid skin version: %d", file->version);
+            goto BAD_FILE;
         }
     }
     else {
         if (skin_file_load_from_v1( file, aconfig, basepath ) < 0) {
-            skin_file_free( file );
-            file = NULL;
+            goto BAD_FILE;
         }
+        file->version = 1;
     }
     return file;
+
+BAD_FILE:
+    skin_file_free( file );
+    return NULL;
 }
 
 void

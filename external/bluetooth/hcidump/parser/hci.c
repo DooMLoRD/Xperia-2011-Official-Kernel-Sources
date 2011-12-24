@@ -3,7 +3,7 @@
  *  BlueZ - Bluetooth protocol stack for Linux
  *
  *  Copyright (C) 2000-2002  Maxim Krasnyansky <maxk@qualcomm.com>
- *  Copyright (C) 2003-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2003-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -50,7 +50,7 @@ static inline uint16_t get_manufacturer(void)
 	return (manufacturer == DEFAULT_COMPID ? parser.defcompid : manufacturer);
 }
 
-#define EVENT_NUM 61
+#define EVENT_NUM 76
 static char *event_str[EVENT_NUM + 1] = {
 	"Unknown",
 	"Inquiry Complete",
@@ -114,9 +114,34 @@ static char *event_str[EVENT_NUM + 1] = {
 	"User Passkey Notification",
 	"Keypress Notification",
 	"Remote Host Supported Features Notification",
+	"LE Meta Event",
+	"Physical Link Complete",
+	"Channel Selected",
+	"Disconnection Physical Link Complete",
+	"Physical Link Loss Early Warning",
+	"Physical Link Recovery",
+	"Logical Link Complete",
+	"Disconnection Logical Link Complete",
+	"Flow Spec Modify Complete",
+	"Number Of Completed Data Blocks",
+	"AMP Start Test",
+	"AMP Test End",
+	"AMP Receiver Report",
+	"Short Range Mode Change Complete",
+	"AMP Status Change",
 };
 
-#define CMD_LINKCTL_NUM 52
+#define LE_EV_NUM 5
+static char *ev_le_meta_str[LE_EV_NUM + 1] = {
+	"Unknown",
+	"LE Connection Complete",
+	"LE Advertising Report",
+	"LE Connection Update Complete",
+	"LE Read Remote Used Features Complete",
+	"LE Long Term Key Request",
+};
+
+#define CMD_LINKCTL_NUM 60
 static char *cmd_linkctl_str[CMD_LINKCTL_NUM + 1] = {
 	"Unknown",
 	"Inquiry",
@@ -171,6 +196,14 @@ static char *cmd_linkctl_str[CMD_LINKCTL_NUM + 1] = {
 	"Unknown",
 	"Remote OOB Data Request Negative Reply",
 	"IO Capability Request Negative Reply",
+	"Create Physical Link",
+	"Accept Physical Link",
+	"Disconnect Physical Link",
+	"Create Logical Link",
+	"Accept Logical Link",
+	"Disconnect Logical Link",
+	"Logical Link Cancel",
+	"Flow Spec Modify",
 };
 
 #define CMD_LINKPOL_NUM 17
@@ -195,7 +228,7 @@ static char *cmd_linkpol_str[CMD_LINKPOL_NUM + 1] = {
 	"Sniff Subrating",
 };
 
-#define CMD_HOSTCTL_NUM 95
+#define CMD_HOSTCTL_NUM 109
 static char *cmd_hostctl_str[CMD_HOSTCTL_NUM + 1] = {
 	"Unknown",
 	"Set Event Mask",
@@ -286,14 +319,27 @@ static char *cmd_hostctl_str[CMD_HOSTCTL_NUM + 1] = {
 	"Write Simple Pairing Mode",
 	"Read Local OOB Data",
 	"Read Inquiry Response Transmit Power Level",
-	"Write Inquiry Response Transmit Power Level",
+	"Write Inquiry Transmit Power Level",
 	"Read Default Erroneous Data Reporting",
 	"Write Default Erroneous Data Reporting",
 	"Unknown",
 	"Unknown",
 	"Unknown",
-	"Enhanced Flush"
+	"Enhanced Flush",
 	"Unknown",
+	"Read Logical Link Accept Timeout",
+	"Write Logical Link Accept Timeout",
+	"Set Event Mask Page 2",
+	"Read Location Data",
+	"Write Location Data",
+	"Read Flow Control Mode",
+	"Write Flow Control Mode",
+	"Read Enhanced Transmit Power Level",
+	"Read Best Effort Flush Timeout",
+	"Write Best Effort Flush Timeout",
+	"Short Range Mode",
+	"Read LE Host Supported",
+	"Write LE Host Supported",
 };
 
 #define CMD_INFO_NUM 9
@@ -310,7 +356,7 @@ static char *cmd_info_str[CMD_INFO_NUM + 1] = {
 	"Read BD ADDR",
 };
 
-#define CMD_STATUS_NUM 7
+#define CMD_STATUS_NUM 11
 static char *cmd_status_str[CMD_STATUS_NUM + 1] = {
 	"Unknown",
 	"Read Failed Contact Counter",
@@ -320,6 +366,10 @@ static char *cmd_status_str[CMD_STATUS_NUM + 1] = {
 	"Read RSSI",
 	"Read AFH Channel Map",
 	"Read Clock",
+	"Read Encryption Key Size",
+	"Read Local AMP Info",
+	"Read Local AMP ASSOC",
+	"Write Remote AMP ASSOC"
 };
 
 #define CMD_TESTING_NUM 4
@@ -329,6 +379,42 @@ static char *cmd_testing_str[CMD_TESTING_NUM + 1] = {
 	"Write Loopback Mode",
 	"Enable Device Under Test mode",
 	"Unknown",
+};
+
+#define CMD_LE_NUM 31
+static char *cmd_le_str[CMD_LE_NUM + 1] = {
+	"Unknown",
+	"LE Set Event Mask",
+	"LE Read Buffer Size",
+	"LE Read Local Supported Features",
+	"Unknown",
+	"LE Set Random Address",
+	"LE Set Advertising Parameters",
+	"LE Read Advertising Channel Tx Power",
+	"LE Set Advertising Data",
+	"LE Set Scan Response Data",
+	"LE Set Advertise Enable",
+	"LE Set Scan Parameters",
+	"LE Set Scan Enable",
+	"LE Create Connection",
+	"LE Create Connection Cancel",
+	"LE Read White List Size",
+	"LE Clear White List",
+	"LE Add Device To White List",
+	"LE Remove Device From White List",
+	"LE Connection Update",
+	"LE Set Host Channel Classification",
+	"LE Read Channel Map",
+	"LE Read Remote Used Features",
+	"LE Encrypt",
+	"LE Rand",
+	"LE Start Encryption",
+	"LE Long Term Key Request Reply",
+	"LE Long Term Key Request Negative Reply",
+	"LE Read Supported States",
+	"LE Receiver Test",
+	"LE Transmitter Test",
+	"LE Test End",
 };
 
 #define ERROR_CODE_NUM 56
@@ -453,6 +539,13 @@ static char *opcode2str(uint16_t opcode)
 			cmd = "Unknown";
 		break;
 
+	case OGF_LE_CTL:
+		if (ocf <= CMD_LE_NUM)
+			cmd = cmd_le_str[ocf];
+		else
+			cmd = "Unknown";
+		break;
+
 	case OGF_VENDOR_CMD:
 		cmd = "Vendor";
 		break;
@@ -523,6 +616,36 @@ static char *airmode2str(uint8_t mode)
 	}
 }
 
+static const char *bdaddrtype2str(uint8_t type)
+{
+	switch (type) {
+	case 0x00:
+		return "Public";
+	case 0x01:
+		return "Random";
+	default:
+		return "Reserved";
+	}
+}
+
+static const char *evttype2str(uint8_t type)
+{
+	switch (type) {
+	case 0x00:
+		return "ADV_IND - Connectable undirected advertising";
+	case 0x01:
+		return "ADV_DIRECT_IND - Connectable directed advertising";
+	case 0x02:
+		return "ADV_SCAN_IND - Scannable undirected advertising";
+	case 0x03:
+		return "ADV_NONCONN_IND - Non connectable undirected advertising";
+	case 0x04:
+		return "SCAN_RSP - Scan Response";
+	default:
+		return "Reserved";
+	}
+}
+
 static char *keytype2str(uint8_t type)
 {
 	switch (type) {
@@ -581,67 +704,136 @@ static char *authentication2str(uint8_t authentication)
 	}
 }
 
+static char *eventmask2str(const uint8_t mask[8])
+{
+	int i;
+
+	for (i = 0; i < 7; i++) {
+		if (mask[i] != 0x00)
+			return "Reserved";
+	}
+
+	switch (mask[7]) {
+	case 0x00:
+		return "No LE events specified";
+	case 0x01:
+		return "LE Connection Complete Event";
+	case 0x02:
+		return "LE Advertising Report Event";
+	case 0x04:
+		return "LE Connection Update Complete Event";
+	case 0x08:
+		return "LE Read Remote Used Features Complete Event";
+	case 0x10:
+		return "LE Long Term Key Request Event";
+	case 0x1F:
+		return "Default";
+	default:
+		return "Reserved";
+	}
+}
+
+static char *lefeatures2str(const uint8_t features[8])
+{
+	if (features[0] & 0x01)
+		return "Link Layer supports LE Encryption";
+
+	return "RFU";
+}
+
+static char *filterpolicy2str(uint8_t policy)
+{
+	switch (policy) {
+	case 0x00:
+		return "Allow scan from any, connection from any";
+	case 0x01:
+		return "Allow scan from white list, connection from any";
+	case 0x02:
+		return "Allow scan from any, connection from white list";
+	case 0x03:
+		return "Allow scan and connection from white list";
+	default:
+		return "Reserved";
+	}
+}
+
+static inline void ext_inquiry_data_dump(int level, struct frame *frm,
+						uint8_t *data)
+{
+	uint8_t len = data[0];
+	uint8_t type;
+	char *str;
+	int i;
+
+	if (len == 0)
+		return;
+
+	type = data[1];
+	data += 2;
+	len -= 1;
+
+	switch (type) {
+	case 0x01:
+		p_indent(level, frm);
+		printf("Flags:");
+		for (i = 0; i < len; i++)
+			printf(" 0x%2.2x", data[i]);
+		printf("\n");
+		break;
+
+	case 0x02:
+	case 0x03:
+		p_indent(level, frm);
+		printf("%s service classes:",
+				type == 0x02 ? "Shortened" : "Complete");
+
+		for (i = 0; i < len / 2; i++) {
+			uint16_t val;
+
+			val = btohs(bt_get_unaligned(((uint16_t *) (data + i * 2))));
+			printf(" 0x%4.4x", val);
+		}
+		printf("\n");
+		break;
+
+	case 0x08:
+	case 0x09:
+		str = malloc(len + 1);
+		if (str) {
+			snprintf(str, len + 1, "%s", (char *) data);
+			for (i = 0; i < len; i++)
+				if (!isprint(str[i]))
+					str[i] = '.';
+			p_indent(level, frm);
+			printf("%s local name: \'%s\'\n",
+				type == 0x08 ? "Shortened" : "Complete", str);
+			free(str);
+		}
+		break;
+
+	case 0x0a:
+		p_indent(level, frm);
+		printf("TX power level: %d\n", *((uint8_t *) data));
+		break;
+
+	default:
+		p_indent(level, frm);
+		printf("Unknown type 0x%02x with %d bytes data\n",
+							type, len);
+		break;
+	}
+}
+
 static inline void ext_inquiry_response_dump(int level, struct frame *frm)
 {
 	void *ptr = frm->ptr;
 	uint32_t len = frm->len;
-	uint8_t type, length;
-	char *str;
-	int i;
+	uint8_t length;
 
 	length = get_u8(frm);
 
 	while (length > 0) {
-		type = get_u8(frm);
-		length--;
-
-		switch (type) {
-		case 0x01:
-			p_indent(level, frm);
-			printf("Flags:");
-			for (i = 0; i < length; i++)
-				printf(" 0x%2.2x", *((uint8_t *) (frm->ptr + i)));
-			printf("\n");
-			break;
-
-		case 0x02:
-		case 0x03:
-			p_indent(level, frm);
-			printf("%s service classes:",
-					type == 0x02 ? "Shortened" : "Complete");
-			for (i = 0; i < length / 2; i++) {
-				uint16_t val = btohs(bt_get_unaligned((uint16_t *) (frm->ptr + (i * 2))));
-				printf(" 0x%4.4x", val);
-			}
-			printf("\n");
-			break;
-
-		case 0x08:
-		case 0x09:
-			str = malloc(length + 1);
-			if (str) {
-				snprintf(str, length + 1, "%s", (char *) frm->ptr);
-				for (i = 0; i < length; i++)
-					if (!isprint(str[i]))
-						str[i] = '.';
-				p_indent(level, frm);
-				printf("%s local name: \'%s\'\n",
-					type == 0x08 ? "Shortened" : "Complete", str);
-				free(str);
-			}
-			break;
-
-		case 0x0a:
-			p_indent(level, frm);
-			printf("TX power level: %d\n", *((uint8_t *) frm->ptr));
-			break;
-
-		default:
-			p_indent(level, frm);
-			printf("Unknown type 0x%02x with %d bytes data\n",
-								type, length);
-			break;
-		}
+		ext_inquiry_data_dump(level, frm, frm->ptr);
 
 		frm->ptr += length;
 		frm->len -= length;
@@ -649,8 +841,10 @@ static inline void ext_inquiry_response_dump(int level, struct frame *frm)
 		length = get_u8(frm);
 	}
 
-	frm->ptr = ptr + (EXTENDED_INQUIRY_INFO_SIZE - INQUIRY_INFO_WITH_RSSI_SIZE);
-	frm->len = len + (EXTENDED_INQUIRY_INFO_SIZE - INQUIRY_INFO_WITH_RSSI_SIZE);
+	frm->ptr = ptr +
+		(EXTENDED_INQUIRY_INFO_SIZE - INQUIRY_INFO_WITH_RSSI_SIZE);
+	frm->len = len +
+		(EXTENDED_INQUIRY_INFO_SIZE - INQUIRY_INFO_WITH_RSSI_SIZE);
 }
 
 static inline void bdaddr_command_dump(int level, struct frame *frm)
@@ -917,9 +1111,42 @@ static inline void setup_sync_conn_dump(int level, struct frame *frm)
 	setup_sync_conn_cp *cp = frm->ptr;
 
 	p_indent(level, frm);
-	printf("handle %d voice setting 0x%4.4x pkt_type 0x%4.4x\n",
+	printf("handle %d voice setting 0x%4.4x ptype 0x%4.4x\n",
 		btohs(cp->handle), btohs(cp->voice_setting),
 		btohs(cp->pkt_type));
+}
+
+static inline void create_physical_link_dump(int level, struct frame *frm)
+{
+	create_physical_link_cp *cp = frm->ptr;
+	int i;
+
+	p_indent(level, frm);
+
+	printf("handle %d key length %d key type %d\n",
+		cp->handle, cp->key_length, cp->key_type);
+	printf("key ");
+
+	for (i = 0; i < cp->key_length && cp->key_length < 32; i++)
+		printf("%2.2x", cp->key[i]);
+	printf("\n");
+}
+
+static inline void create_logical_link_dump(int level, struct frame *frm)
+{
+	create_logical_link_cp *cp = frm->ptr;
+	int i;
+
+	p_indent(level, frm);
+
+	printf("handle %d\n", cp->handle);
+	printf("tx_flow ");
+	for (i = 0; i < 16; i++)
+		printf("%2.2x", cp->tx_flow[i]);
+	printf("\nrx_flow ");
+	for (i = 0; i < 16; i++)
+		printf("%2.2x", cp->rx_flow[i]);
+	printf("\n");
 }
 
 static inline void accept_sync_conn_req_dump(int level, struct frame *frm)
@@ -1344,6 +1571,97 @@ static inline void num_comp_pkts_dump(int level, struct frame *frm)
 	}
 }
 
+static inline void le_create_connection_dump(int level, struct frame *frm)
+{
+	char addr[18];
+	le_create_connection_cp *cp = frm->ptr;
+
+	p_indent(level, frm);
+	p_ba2str(&cp->peer_bdaddr, addr);
+	printf("bdaddr %s type %d\n", addr, cp->peer_bdaddr_type);
+}
+
+static inline void le_set_event_mask_dump(int level, struct frame *frm)
+{
+	int i;
+	le_set_event_mask_cp *cp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("mask 0x");
+	for (i = 0; i < 8; i++)
+		printf("%.2x", cp->mask[i]);
+
+	printf(" (%s)\n", eventmask2str(cp->mask));
+}
+
+static inline void le_set_random_address_dump(int level, struct frame *frm)
+{
+	char addr[18];
+	le_set_random_address_cp *cp = frm->ptr;
+
+	p_indent(level, frm);
+	p_ba2str(&cp->bdaddr, addr);
+	printf("bdaddr %s\n", addr);
+}
+
+
+static inline void le_set_advertising_parameters_dump(int level, struct frame *frm)
+{
+	char addr[18];
+	le_set_advertising_parameters_cp *cp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("min %.3fms, max %.3fms\n", btohs(cp->min_interval) * 0.625,
+			btohs(cp->max_interval) * 0.625);
+
+	p_indent(level, frm);
+	printf("type 0x%02x (%s) ownbdaddr 0x%02x (%s)\n", cp->advtype,
+			evttype2str(cp->advtype), cp->own_bdaddr_type,
+			bdaddrtype2str(cp->own_bdaddr_type));
+
+	p_indent(level, frm);
+	p_ba2str(&cp->direct_bdaddr, addr);
+	printf("directbdaddr 0x%02x (%s) %s\n", cp->direct_bdaddr_type,
+			bdaddrtype2str(cp->direct_bdaddr_type), addr);
+
+	p_indent(level, frm);
+	printf("channelmap 0x%02x filterpolicy 0x%02x (%s)\n",
+			cp->chan_map, cp->filter, filterpolicy2str(cp->filter));
+}
+
+static inline void le_set_scan_parameters_dump(int level, struct frame *frm)
+{
+	le_set_scan_parameters_cp *cp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("type 0x%02x (%s)\n", cp->type,
+		cp->type == 0x00 ? "passive" : "active");
+
+	p_indent(level, frm);
+	printf("interval %.3fms window %.3fms\n", btohs(cp->interval) * 0.625,
+		btohs(cp->window) * 0.625);
+
+	p_indent(level, frm);
+	printf("own address: 0x%02x (%s) policy: %s\n", cp->own_bdaddr_type,
+			bdaddrtype2str(cp->own_bdaddr_type),
+		(cp->filter == 0x00 ? "All" :
+			(cp->filter == 0x01 ? "white list only" : "reserved")));
+}
+
+static inline void le_set_scan_enable_dump(int level, struct frame *frm)
+{
+	le_set_scan_enable_cp *cp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("value 0x%02x (%s)\n", cp->enable,
+		(cp->enable == 0x00 ? "scanning disabled" :
+		"scanning enabled"));
+
+	p_indent(level, frm);
+	printf("filter duplicates 0x%02x (%s)\n", cp->filter_dup,
+		(cp->filter_dup == 0x00 ? "disabled" : "enabled"));
+}
+
 static inline void command_dump(int level, struct frame *frm)
 {
 	hci_command_hdr *hdr = frm->ptr;
@@ -1445,6 +1763,7 @@ static inline void command_dump(int level, struct frame *frm)
 		case OCF_READ_REMOTE_VERSION:
 		case OCF_READ_CLOCK_OFFSET:
 		case OCF_READ_LMP_HANDLE:
+		case OCF_DISCONNECT_LOGICAL_LINK:
 			generic_command_dump(level + 1, frm);
 			return;
 		case OCF_MASTER_LINK_KEY:
@@ -1458,6 +1777,14 @@ static inline void command_dump(int level, struct frame *frm)
 			return;
 		case OCF_SETUP_SYNC_CONN:
 			setup_sync_conn_dump(level + 1, frm);
+			return;
+		case OCF_CREATE_PHYSICAL_LINK:
+		case OCF_ACCEPT_PHYSICAL_LINK:
+			create_physical_link_dump(level + 1, frm);
+			return;
+		case OCF_CREATE_LOGICAL_LINK:
+		case OCF_ACCEPT_LOGICAL_LINK:
+			create_logical_link_dump(level + 1, frm);
 			return;
 		}
 		break;
@@ -1503,6 +1830,7 @@ static inline void command_dump(int level, struct frame *frm)
 		case OCF_CREATE_NEW_UNIT_KEY:
 			return;
 		case OCF_SET_EVENT_MASK:
+		case OCF_SET_EVENT_MASK_PAGE_2:
 			set_event_mask_dump(level + 1, frm);
 			return;
 		case OCF_SET_EVENT_FLT:
@@ -1535,6 +1863,7 @@ static inline void command_dump(int level, struct frame *frm)
 		case OCF_SET_CONTROLLER_TO_HOST_FC:
 			write_scan_enable_dump(level + 1, frm);
 			return;
+		case OCF_WRITE_LOGICAL_LINK_ACCEPT_TIMEOUT:
 		case OCF_WRITE_CONN_ACCEPT_TIMEOUT:
 		case OCF_WRITE_PAGE_TIMEOUT:
 			write_page_timeout_dump(level + 1, frm);
@@ -1566,6 +1895,7 @@ static inline void command_dump(int level, struct frame *frm)
 		case OCF_FLUSH:
 		case OCF_READ_LINK_SUPERVISION_TIMEOUT:
 		case OCF_REFRESH_ENCRYPTION_KEY:
+		case OCF_READ_BEST_EFFORT_FLUSH_TIMEOUT:
 			generic_command_dump(level + 1, frm);
 			return;
 		case OCF_WRITE_LINK_SUPERVISION_TIMEOUT:
@@ -1575,6 +1905,7 @@ static inline void command_dump(int level, struct frame *frm)
 			write_ext_inquiry_response_dump(level + 1, frm);
 			return;
 		case OCF_WRITE_SIMPLE_PAIRING_MODE:
+		case OCF_WRITE_FLOW_CONTROL_MODE:
 			generic_write_mode_dump(level + 1, frm);
 			return;
 		case OCF_WRITE_INQUIRY_TRANSMIT_POWER_LEVEL:
@@ -1618,6 +1949,33 @@ static inline void command_dump(int level, struct frame *frm)
 		case OCF_WRITE_LOOPBACK_MODE:
 		case OCF_WRITE_SIMPLE_PAIRING_DEBUG_MODE:
 			generic_write_mode_dump(level + 1, frm);
+			return;
+		}
+		break;
+
+	case OGF_LE_CTL:
+		switch (ocf) {
+		case OCF_LE_SET_EVENT_MASK:
+			le_set_event_mask_dump(level + 1, frm);
+			return;
+		case OCF_LE_READ_BUFFER_SIZE:
+		case OCF_LE_READ_LOCAL_SUPPORTED_FEATURES:
+		case OCF_LE_READ_ADVERTISING_CHANNEL_TX_POWER:
+			return;
+		case OCF_LE_SET_RANDOM_ADDRESS:
+			le_set_random_address_dump(level + 1, frm);
+			return;
+		case OCF_LE_SET_ADVERTISING_PARAMETERS:
+			le_set_advertising_parameters_dump(level + 1, frm);
+			return;
+		case OCF_LE_SET_SCAN_PARAMETERS:
+			le_set_scan_parameters_dump(level + 1, frm);
+			return;
+		case OCF_LE_SET_SCAN_ENABLE:
+			le_set_scan_enable_dump(level + 1, frm);
+			return;
+		case OCF_LE_CREATE_CONN:
+			le_create_connection_dump(level + 1, frm);
 			return;
 		}
 		break;
@@ -2216,6 +2574,115 @@ static inline void read_clock_dump(int level, struct frame *frm)
 	}
 }
 
+static inline void read_local_amp_info_dump(int level, struct frame *frm)
+{
+	read_local_amp_info_rp *rp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x amp status 0x%2.2x\n",
+			rp->status, rp->amp_status);
+	if (rp->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(rp->status));
+	} else {
+		p_indent(level, frm);
+		printf("total bandwidth %d, max guaranteed bandwidth %d\n",
+			btohl(rp->total_bandwidth),
+			btohl(rp->max_guaranteed_bandwidth));
+		p_indent(level, frm);
+		printf("min latency %d, max PDU %d, controller type 0x%2.2x\n",
+			btohl(rp->min_latency), btohl(rp->max_pdu_size),
+			rp->controller_type);
+		p_indent(level, frm);
+		printf("pal caps 0x%4.4x, max assoc len %d\n",
+			btohs(rp->pal_caps), btohs(rp->max_amp_assoc_length));
+		p_indent(level, frm);
+		printf("max flush timeout %d, best effort flush timeout %d\n",
+			btohl(rp->max_flush_timeout),
+			btohl(rp->best_effort_flush_timeout));
+	}
+}
+
+static inline void read_local_amp_assoc_dump(int level, struct frame *frm)
+{
+	read_local_amp_assoc_rp *rp = frm->ptr;
+	uint16_t len = btohs(rp->length);
+	int i;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle 0x%2.2x length %d\n",
+			rp->status, rp->handle, len);
+	if (rp->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(rp->status));
+	} else {
+		for (i = 0; i < len; i++) {
+			if (!(i % 16)) {
+				printf("\n");
+				p_indent(level, frm);
+			}
+			printf("%2.2x ", rp->fragment[i]);
+		}
+		printf("\n");
+	}
+}
+
+static inline void write_remote_amp_assoc_dump(int level, struct frame *frm)
+{
+	write_remote_amp_assoc_rp *rp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle 0x%2.2x\n", rp->status, rp->handle);
+	if (rp->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(rp->status));
+	}
+}
+
+static inline void le_read_buffer_size_response_dump(int level, struct frame *frm)
+{
+	le_read_buffer_size_rp *rp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x pktlen 0x%4.4x maxpkt 0x%2.2x\n", rp->status,
+			rp->pkt_len, rp->max_pkt);
+
+	if (rp->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(rp->status));
+	}
+}
+
+static inline void le_read_local_supported_features_dump(int level, struct frame *frm)
+{
+	int i;
+	le_read_local_supported_features_rp *rp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x features 0x", rp->status);
+	for (i = 0; i < 8; i++)
+		printf("%2.2x", rp->features[i]);
+	printf(" (%s)\n", lefeatures2str(rp->features));
+
+	if (rp->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(rp->status));
+	}
+}
+
+static inline void le_read_advertising_channel_tx_power_dump(int level, struct frame *frm)
+{
+	le_read_advertising_channel_tx_power_rp *rp = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x level 0x%x (dBm)\n", rp->status, rp->level);
+
+	if (rp->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(rp->status));
+	}
+}
+
 static inline void cmd_complete_dump(int level, struct frame *frm)
 {
 	evt_cmd_complete *evt = frm->ptr;
@@ -2316,6 +2783,7 @@ static inline void cmd_complete_dump(int level, struct frame *frm)
 			return;
 		case OCF_READ_CONN_ACCEPT_TIMEOUT:
 		case OCF_READ_PAGE_TIMEOUT:
+		case OCF_READ_LOGICAL_LINK_ACCEPT_TIMEOUT:
 			read_page_timeout_dump(level, frm);
 			return;
 		case OCF_READ_PAGE_ACTIVITY:
@@ -2349,6 +2817,7 @@ static inline void cmd_complete_dump(int level, struct frame *frm)
 			read_local_oob_data_dump(level, frm);
 			return;
 		case OCF_READ_SIMPLE_PAIRING_MODE:
+		case OCF_READ_FLOW_CONTROL_MODE:
 			status_mode_dump(level, frm);
 			return;
 		case OCF_FLUSH:
@@ -2383,6 +2852,12 @@ static inline void cmd_complete_dump(int level, struct frame *frm)
 		case OCF_HOST_BUFFER_SIZE:
 		case OCF_REFRESH_ENCRYPTION_KEY:
 		case OCF_SEND_KEYPRESS_NOTIFY:
+		case OCF_WRITE_LOGICAL_LINK_ACCEPT_TIMEOUT:
+		case OCF_SET_EVENT_MASK_PAGE_2:
+		case OCF_WRITE_LOCATION_DATA:
+		case OCF_WRITE_FLOW_CONTROL_MODE:
+		case OCF_READ_BEST_EFFORT_FLUSH_TIMEOUT:
+		case OCF_WRITE_BEST_EFFORT_FLUSH_TIMEOUT:
 			status_response_dump(level, frm);
 			return;
 		}
@@ -2429,6 +2904,15 @@ static inline void cmd_complete_dump(int level, struct frame *frm)
 		case OCF_READ_CLOCK:
 			read_clock_dump(level, frm);
 			return;
+		case OCF_READ_LOCAL_AMP_INFO:
+			read_local_amp_info_dump(level, frm);
+			return;
+		case OCF_READ_LOCAL_AMP_ASSOC:
+			read_local_amp_assoc_dump(level, frm);
+			return;
+		case OCF_WRITE_REMOTE_AMP_ASSOC:
+			write_remote_amp_assoc_dump(level, frm);
+			return;
 		}
 		break;
 
@@ -2441,6 +2925,37 @@ static inline void cmd_complete_dump(int level, struct frame *frm)
 		case OCF_ENABLE_DEVICE_UNDER_TEST_MODE:
 		case OCF_WRITE_SIMPLE_PAIRING_DEBUG_MODE:
 			status_response_dump(level, frm);
+			return;
+		}
+		break;
+
+	case OGF_LE_CTL:
+		switch (ocf) {
+		case OCF_LE_SET_EVENT_MASK:
+		case OCF_LE_SET_RANDOM_ADDRESS:
+		case OCF_LE_SET_ADVERTISING_PARAMETERS:
+		case OCF_LE_SET_ADVERTISING_DATA:
+		case OCF_LE_SET_SCAN_RESPONSE_DATA:
+		case OCF_LE_SET_ADVERTISE_ENABLE:
+		case OCF_LE_SET_SCAN_PARAMETERS:
+		case OCF_LE_SET_SCAN_ENABLE:
+		case OCF_LE_CREATE_CONN:
+		case OCF_LE_CLEAR_WHITE_LIST:
+		case OCF_LE_ADD_DEVICE_TO_WHITE_LIST:
+		case OCF_LE_REMOVE_DEVICE_FROM_WHITE_LIST:
+		case OCF_LE_SET_HOST_CHANNEL_CLASSIFICATION:
+		case OCF_LE_RECEIVER_TEST:
+		case OCF_LE_TRANSMITTER_TEST:
+			status_response_dump(level, frm);
+			return;
+		case OCF_LE_READ_BUFFER_SIZE:
+			le_read_buffer_size_response_dump(level, frm);
+			return;
+		case OCF_LE_READ_LOCAL_SUPPORTED_FEATURES:
+			le_read_local_supported_features_dump(level, frm);
+			return;
+		case OCF_LE_READ_ADVERTISING_CHANNEL_TX_POWER:
+			le_read_advertising_channel_tx_power_dump(level, frm);
 			return;
 		}
 		break;
@@ -3008,6 +3523,190 @@ static inline void remote_host_features_notify_dump(int level, struct frame *frm
 	printf("\n");
 }
 
+static inline void evt_le_conn_complete_dump(int level, struct frame *frm)
+{
+	evt_le_connection_complete *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle %d, role %s\n",
+					evt->status, btohs(evt->handle),
+					evt->role ? "slave" : "master");
+}
+
+static inline void evt_le_advertising_report_dump(int level, struct frame *frm)
+{
+	uint8_t num_reports = get_u8(frm);
+	const uint8_t RSSI_SIZE = 1;
+
+	while (num_reports--) {
+		char addr[18];
+		le_advertising_info *info = frm->ptr;
+
+		p_ba2str(&info->bdaddr, addr);
+
+		p_indent(level, frm);
+		printf("%s (%d)\n", evttype2str(info->evt_type), info->evt_type);
+
+		p_indent(level, frm);
+		printf("bdaddr %s (%s)\n", addr,
+					bdaddrtype2str(info->bdaddr_type));
+
+		if (info->length > 0) {
+			ext_inquiry_data_dump(level, frm,
+					((uint8_t *) &info->length) + 1);
+		}
+
+		frm->ptr += LE_ADVERTISING_INFO_SIZE + info->length;
+		frm->len -= LE_ADVERTISING_INFO_SIZE + info->length;
+
+		p_indent(level, frm);
+		printf("RSSI: %d\n", ((int8_t *) frm->ptr)[frm->len - 1]);
+
+		frm->ptr += RSSI_SIZE;
+		frm->len -= RSSI_SIZE;
+	}
+}
+
+static inline void evt_le_conn_update_complete_dump(int level,
+							struct frame *frm)
+{
+	evt_le_connection_update_complete *uevt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle %d\n", uevt->status, btohs(uevt->handle));
+
+	p_indent(level, frm);
+	printf("interval %.2fms, latency %.2fms, superv. timeout %.2fms\n",
+			btohs(uevt->interval) * 1.25, btohs(uevt->latency) * 1.25,
+			btohs(uevt->supervision_timeout) * 10.0);
+}
+
+static inline void evt_le_read_remote_used_features_complete_dump(int level, struct frame *frm)
+{
+	int i;
+	evt_le_read_remote_used_features_complete *revt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle %d\n", revt->status, btohs(revt->handle));
+
+	if (revt->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(revt->status));
+	} else {
+		p_indent(level, frm);
+		printf("Features:");
+		for (i = 0; i < 8; i++)
+			printf(" 0x%2.2x", revt->features[i]);
+		printf("\n");
+	}
+}
+
+static inline void le_meta_ev_dump(int level, struct frame *frm)
+{
+	evt_le_meta_event *mevt = frm->ptr;
+	uint8_t subevent;
+
+	subevent = mevt->subevent;
+
+	frm->ptr += EVT_LE_META_EVENT_SIZE;
+	frm->len -= EVT_LE_META_EVENT_SIZE;
+
+	p_indent(level, frm);
+	printf("%s\n", ev_le_meta_str[subevent]);
+
+	switch (mevt->subevent) {
+	case EVT_LE_CONN_COMPLETE:
+		evt_le_conn_complete_dump(level + 1, frm);
+		break;
+	case EVT_LE_ADVERTISING_REPORT:
+		evt_le_advertising_report_dump(level + 1, frm);
+		break;
+	case EVT_LE_CONN_UPDATE_COMPLETE:
+		evt_le_conn_update_complete_dump(level + 1, frm);
+		break;
+	case EVT_LE_READ_REMOTE_USED_FEATURES_COMPLETE:
+		evt_le_read_remote_used_features_complete_dump(level + 1, frm);
+		break;
+	default:
+		raw_dump(level, frm);
+		break;
+	}
+}
+
+static inline void phys_link_complete_dump(int level, struct frame *frm)
+{
+	evt_physical_link_complete *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle %d\n", evt->status, evt->handle);
+
+	if (evt->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(evt->status));
+	}
+}
+
+static inline void disconn_phys_link_complete_dump(int level, struct frame *frm)
+{
+	evt_disconn_physical_link_complete *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle %d reason 0x%2.2x\n",
+				evt->status, evt->handle, evt->reason);
+
+	if (evt->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(evt->status));
+	} else if (evt->reason > 0) {
+		p_indent(level, frm);
+		printf("Reason: %s\n", status2str(evt->reason));
+	}
+}
+
+static inline void phys_link_loss_warning_dump(int level, struct frame *frm)
+{
+	evt_physical_link_loss_warning *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("handle %d reason 0x%2.2x\n", evt->handle, evt->reason);
+}
+
+static inline void phys_link_handle_dump(int level, struct frame *frm)
+{
+	evt_physical_link_recovery *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("handle %d\n", evt->handle);
+}
+
+static inline void logical_link_complete_dump(int level, struct frame *frm)
+{
+	evt_logical_link_complete *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x log_handle %d handle %d tx_flow_id %d\n",
+			evt->status, btohs(evt->log_handle), evt->handle,
+			evt->tx_flow_id);
+
+	if (evt->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(evt->status));
+	}
+}
+
+static inline void flow_spec_modify_dump(int level, struct frame *frm)
+{
+	evt_flow_spec_modify_complete *evt = frm->ptr;
+
+	p_indent(level, frm);
+	printf("status 0x%2.2x handle %d\n", evt->status, btohs(evt->handle));
+
+	if (evt->status > 0) {
+		p_indent(level, frm);
+		printf("Error: %s\n", status2str(evt->status));
+	}
+}
+
 static inline void event_dump(int level, struct frame *frm)
 {
 	hci_event_hdr *hdr = frm->ptr;
@@ -3104,6 +3803,7 @@ static inline void event_dump(int level, struct frame *frm)
 		conn_request_dump(level + 1, frm);
 		break;
 	case EVT_DISCONN_COMPLETE:
+	case EVT_DISCONNECT_LOGICAL_LINK_COMPLETE:
 		disconn_complete_dump(level + 1, frm);
 		break;
 	case EVT_AUTH_COMPLETE:
@@ -3210,6 +3910,28 @@ static inline void event_dump(int level, struct frame *frm)
 		break;
 	case EVT_REMOTE_HOST_FEATURES_NOTIFY:
 		remote_host_features_notify_dump(level + 1, frm);
+		break;
+	case EVT_LE_META_EVENT:
+		le_meta_ev_dump(level + 1, frm);
+		break;
+	case EVT_PHYSICAL_LINK_COMPLETE:
+		phys_link_complete_dump(level + 1, frm);
+		break;
+	case EVT_DISCONNECT_PHYSICAL_LINK_COMPLETE:
+		disconn_phys_link_complete_dump(level + 1, frm);
+		break;
+	case EVT_PHYSICAL_LINK_LOSS_EARLY_WARNING:
+		phys_link_loss_warning_dump(level + 1, frm);
+		break;
+	case EVT_PHYSICAL_LINK_RECOVERY:
+	case EVT_CHANNEL_SELECTED:
+		phys_link_handle_dump(level + 1, frm);
+		break;
+	case EVT_LOGICAL_LINK_COMPLETE:
+		logical_link_complete_dump(level + 1, frm);
+		break;
+	case EVT_FLOW_SPEC_MODIFY_COMPLETE:
+		flow_spec_modify_dump(level + 1, frm);
 		break;
 	default:
 		raw_dump(level, frm);

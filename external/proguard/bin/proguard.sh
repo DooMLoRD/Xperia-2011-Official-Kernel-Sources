@@ -6,4 +6,4 @@
 PROGUARD_HOME=`dirname "$0"`
 PROGUARD_HOME=`dirname "$PROGUARD_HOME"`
 
-java -jar $PROGUARD_HOME/lib/proguard.jar "$@"
+java -jar "$PROGUARD_HOME"/lib/proguard.jar "$@"

@@ -72,15 +72,38 @@ typedef enum {
 	CPU_PPC64_POWER5pp,  /**< ppc64 Power5++ family */
 	CPU_PPC_E300, /**< e300 */
 	CPU_AVR32, /**< AVR32 */
-	CPU_ARM_V7, /**< ARM V7 */
+	CPU_ARM_V7, /**< ARM Cortex-A8 */
  	CPU_ARCH_PERFMON, /**< Intel architectural perfmon */
 	CPU_FAMILY11H, /**< AMD family 11h */
 	CPU_PPC64_POWER7, /**< ppc64 POWER7 family */
 	CPU_PPC64_IBM_COMPAT_V1, /**< IBM PPC64 processor compat mode version 1 */
    	CPU_CORE_I7, /* Intel Core i7, Nehalem */
    	CPU_ATOM, /* First generation Intel Atom */
+	CPU_MIPS_LOONGSON2, /* < loongson2 family */
+	CPU_NEHALEM, /* Intel Nehalem microarchitecture */
+	CPU_ARM_V7_CA9, /**< ARM Cortex-A9 */
+	CPU_MIPS_74K, /**< MIPS 74K */
+	CPU_MIPS_1004K, /**< MIPS 1004K */
+	CPU_FAMILY12H, /**< AMD family 12h */
+	CPU_FAMILY14H, /**< AMD family 14h */
+	CPU_FAMILY15H, /**< AMD family 15h */
+	CPU_WESTMERE, /* Intel Westmere microarchitecture */
 	MAX_CPU_TYPE
 } op_cpu;
+
+/**
+ * the CPU lowest common denominator
+ *
+ * returns 1 if there are variations for the base cpu type;
+ */
+int op_cpu_variations(op_cpu cpu_type);
+
+/**
+ * get the CPU lowest common denominator
+ *
+ * returns cpu_type if cpu_type does not have a lowest common denominator.
+ */
+op_cpu op_cpu_base_type(op_cpu cpu_type);
 
 /**
  * get the CPU type from the kernel

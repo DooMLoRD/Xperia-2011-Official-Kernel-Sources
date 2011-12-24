@@ -45,6 +45,16 @@
 #include "sdpd.h"
 #include "log.h"
 
+typedef struct {
+	uint32_t timestamp;
+	union {
+		uint16_t maxBytesSent;
+		uint16_t lastIndexSent;
+	} cStateValue;
+} sdp_cont_state_t;
+
+#define SDP_CONT_STATE_SIZE (sizeof(uint8_t) + sizeof(sdp_cont_state_t))
+
 #define MIN(x, y) ((x) < (y)) ? (x): (y)
 
 typedef struct _sdp_cstate_list sdp_cstate_list_t;
@@ -57,8 +67,8 @@ struct _sdp_cstate_list {
 
 static sdp_cstate_list_t *cstates;
 
-// FIXME: should probably remove it when it's found
-sdp_buf_t *sdp_get_cached_rsp(sdp_cont_state_t *cstate)
+/* FIXME: should probably remove it when it's found */
+static sdp_buf_t *sdp_get_cached_rsp(sdp_cont_state_t *cstate)
 {
 	sdp_cstate_list_t *p;
 
@@ -246,15 +256,14 @@ static int sdp_set_cstate_pdu(sdp_buf_t *buf, sdp_cont_state_t *cstate)
 
 	if (cstate) {
 		SDPDBG("Non null sdp_cstate_t id : 0x%x", cstate->timestamp);
-		*(uint8_t *)pdata = sizeof(sdp_cont_state_t);
+		*pdata = sizeof(sdp_cont_state_t);
 		pdata += sizeof(uint8_t);
 		length += sizeof(uint8_t);
 		memcpy(pdata, cstate, sizeof(sdp_cont_state_t));
 		length += sizeof(sdp_cont_state_t);
 	} else {
-		// set "null" continuation state
-		*(uint8_t *)pdata = 0;
-		pdata += sizeof(uint8_t);
+		/* set "null" continuation state */
+		*pdata = 0;
 		length += sizeof(uint8_t);
 	}
 	buf->data_size += length;
@@ -325,7 +334,7 @@ static int sdp_match_uuid(sdp_list_t *search, sdp_list_t *pattern)
 		if (data == NULL)
 			return -1;
 
-		// create 128-bit form of the search UUID
+		/* create 128-bit form of the search UUID */
 		uuid128 = sdp_uuid_to_uuid128((uuid_t *)data);
 		list = sdp_list_find(pattern, uuid128, sdp_uuid128_cmp);
 		bt_free(uuid128);
@@ -365,7 +374,7 @@ static int service_search_req(sdp_req_t *req, sdp_buf_t *buf)
 
 	plen = ntohs(((sdp_pdu_hdr_t *)(req->buf))->plen);
 	mlen = scanned + sizeof(uint16_t) + 1;
-	// ensure we don't read past buffer
+	/* ensure we don't read past buffer */
 	if (plen < mlen || plen != mlen + *(uint8_t *)(pdata+sizeof(uint16_t))) {
 		status = SDP_INVALID_SYNTAX;
 		goto done;
@@ -417,7 +426,7 @@ static int service_search_req(sdp_req_t *req, sdp_buf_t *buf)
 
 		handleSize = 0;
 		for (; list && rsp_count < expected; list = list->next) {
-			sdp_record_t *rec = (sdp_record_t *) list->data;
+			sdp_record_t *rec = list->data;
 
 			SDPDBG("Checking svcRec : 0x%x", rec->handle);
 
@@ -547,16 +556,12 @@ static int extract_attrs(sdp_record_t *rec, sdp_list_t *seq, sdp_buf_t *buf)
 	if (!rec)
 		return SDP_INVALID_RECORD_HANDLE;
 
-	if (seq) {
-		SDPDBG("Entries in attr seq : %d", sdp_list_len(seq));
-	} else {
-		SDPDBG("NULL attribute descriptor");
-	}
-
 	if (seq == NULL) {
 		SDPDBG("Attribute sequence is NULL");
 		return 0;
 	}
+
+	SDPDBG("Entries in attr seq : %d", sdp_list_len(seq));
 
 	sdp_gen_record_pdu(rec, &pdu);
 
@@ -567,7 +572,7 @@ static int extract_attrs(sdp_record_t *rec, sdp_list_t *seq, sdp_buf_t *buf)
 
 		if (aid->dtd == SDP_UINT16) {
 			uint16_t attr = bt_get_unaligned((uint16_t *)&aid->uint16);
-			sdp_data_t *a = (sdp_data_t *)sdp_data_get(rec, attr);
+			sdp_data_t *a = sdp_data_get(rec, attr);
 			if (a)
 				sdp_append_to_pdu(buf, a);
 		} else if (aid->dtd == SDP_UINT32) {
@@ -665,9 +670,9 @@ static int service_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 
 	plen = ntohs(((sdp_pdu_hdr_t *)(req->buf))->plen);
 	mlen = scanned + sizeof(uint32_t) + sizeof(uint16_t) + 1;
-	// ensure we don't read past buffer
+	/* ensure we don't read past buffer */
 	if (plen < mlen || plen != mlen + *(uint8_t *)pdata) {
-		status = SDP_INVALID_SYNTAX;
+		status = SDP_INVALID_PDU_SIZE;
 		goto done;
 	}
 
@@ -682,6 +687,15 @@ static int service_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 
 	SDPDBG("SvcRecHandle : 0x%x", handle);
 	SDPDBG("max_rsp_size : %d", max_rsp_size);
+
+	/*
+	 * Check that max_rsp_size is within valid range
+	 * a minimum size of 0x0007 has to be used for data field
+	 */
+	if (max_rsp_size < 0x0007) {
+		status = SDP_INVALID_SYNTAX;
+		goto done;
+	}
 
 	/*
 	 * Calculate Attribute size acording to MTU
@@ -739,7 +753,7 @@ static int service_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 		}
 	}
 
-	// push header
+	/* push header */
 	buf->data -= sizeof(uint16_t);
 	buf->buf_size += sizeof(uint16_t);
 
@@ -770,7 +784,7 @@ static int service_search_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 	short cstate_size = 0;
 	uint8_t dtd = 0;
 	sdp_buf_t tmpbuf;
-	size_t data_left = req->len;
+	size_t data_left;
 
 	tmpbuf.data = NULL;
 	pdata = req->buf + sizeof(sdp_pdu_hdr_t);
@@ -818,7 +832,7 @@ static int service_search_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 
 	plen = ntohs(((sdp_pdu_hdr_t *)(req->buf))->plen);
 	if (plen < totscanned || plen != totscanned + *(uint8_t *)pdata) {
-		status = SDP_INVALID_SYNTAX;
+		status = SDP_INVALID_PDU_SIZE;
 		goto done;
 	}
 
@@ -852,7 +866,7 @@ static int service_search_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 		/* no continuation state -> create new response */
 		sdp_list_t *p;
 		for (p = svcList; p; p = p->next) {
-			sdp_record_t *rec = (sdp_record_t *) p->data;
+			sdp_record_t *rec = p->data;
 			if (sdp_match_uuid(pattern, rec->pattern) > 0 &&
 					sdp_check_access(rec->handle, &req->device)) {
 				rsp_count++;
@@ -865,7 +879,7 @@ static int service_search_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 					break;
 				}
 				if (buf->data_size + tmpbuf.data_size < buf->buf_size) {
-					// to be sure no relocations
+					/* to be sure no relocations */
 					sdp_append_to_buf(buf, tmpbuf.data, tmpbuf.data_size);
 					tmpbuf.data_size = 0;
 					memset(tmpbuf.data, 0, USHRT_MAX);
@@ -910,13 +924,13 @@ static int service_search_attr_req(sdp_req_t *req, sdp_buf_t *buf)
 	}
 
 	if (!rsp_count && !cstate) {
-		// found nothing
+		/* found nothing */
 		buf->data_size = 0;
 		sdp_append_to_buf(buf, tmpbuf.data, tmpbuf.data_size);
 		sdp_set_cstate_pdu(buf, NULL);
 	}
 
-	// push header
+	/* push header */
 	buf->data -= sizeof(uint16_t);
 	buf->buf_size += sizeof(uint16_t);
 
@@ -947,7 +961,6 @@ static void process_request(sdp_req_t *req)
 	sdp_pdu_hdr_t *rsphdr;
 	sdp_buf_t rsp;
 	uint8_t *buf = malloc(USHRT_MAX);
-	int sent = 0;
 	int status = SDP_INVALID_SYNTAX;
 
 	memset(buf, 0, USHRT_MAX);
@@ -1021,7 +1034,8 @@ send_rsp:
 	rsp.data = buf;
 
 	/* stream the rsp PDU */
-	sent = send(req->sock, rsp.data, rsp.data_size, 0);
+	if (send(req->sock, rsp.data, rsp.data_size, 0) < 0)
+		error("send: %s (%d)", strerror(errno), errno);
 
 	SDPDBG("Bytes Sent : %d", sent);
 

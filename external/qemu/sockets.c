@@ -9,8 +9,12 @@
 ** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ** GNU General Public License for more details.
 */
+#ifdef __linux__ /* Recent versions of glibc only define EAI_NODATA, which is an
+                    extension to the POSIX standard, if _GNU_SOURCE is defined. */
+#  define _GNU_SOURCE 1
+#endif
+
 #include "sockets.h"
-#include "qemu-common.h"
 #include <fcntl.h>
 #include <stddef.h>
 #include "qemu_debug.h"
@@ -20,6 +24,7 @@
 #include "android/utils/path.h"
 #include "android/utils/debug.h"
 #include "android/utils/misc.h"
+#include "android/utils/system.h"
 
 #define  D(...) VERBOSE_PRINT(socket,__VA_ARGS__)
 
@@ -33,14 +38,7 @@
 #  include <sys/socket.h>
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
-#  ifdef __linux__ /* Recent versions of glibc only define EAI_NODATA, which is an
-                      extension to the POSIX standard, if __USE_GNU is defined. */
-#    define __USE_GNU
-#    include <netdb.h>
-#    undef __USE_GNU
-#  else /* !__linux__ */
-#    include <netdb.h>
-#  endif /* !__linux__ */
+#  include <netdb.h>
 #  if HAVE_UNIX_SOCKETS
 #    include <sys/un.h>
 #    ifndef UNIX_PATH_MAX
@@ -132,8 +130,8 @@ _fix_errno( void )
     const WinsockError*  werr = _winsock_errors;
     int                  unix = EINVAL;  /* generic error code */
 
-	winsock_error = WSAGetLastError();
-	
+    winsock_error = WSAGetLastError();
+
     for ( ; werr->string != NULL; werr++ ) {
         if (werr->winsock == winsock_error) {
             unix = werr->unix;
@@ -230,6 +228,17 @@ socket_type_check( SocketType  type )
     return (type == SOCKET_DGRAM || type == SOCKET_STREAM);
 }
 #endif
+
+typedef union {
+    struct sockaddr     sa[1];
+    struct sockaddr_in  in[1];
+#if HAVE_IN6_SOCKETS
+    struct sockaddr_in6 in6[1];
+#endif
+#if HAVE_UNIX_SOCKETS
+    struct sockaddr_un  un[1];
+#endif
+} sockaddr_storage;
 
 /* socket addresses */
 
@@ -496,13 +505,13 @@ bufprint_sock_address( char*  p, char*  end, const SockAddress*  a )
 }
 #endif
 
-int
-sock_address_to_bsd( const SockAddress*  a, void*  paddress, size_t  *psize )
+static int
+sock_address_to_bsd( const SockAddress*  a, sockaddr_storage*  paddress, socklen_t  *psize )
 {
     switch (a->family) {
     case SOCKET_INET:
         {
-            struct sockaddr_in*  dst = (struct sockaddr_in*) paddress;
+            struct sockaddr_in*  dst = paddress->in;
 
             *psize = sizeof(*dst);
 
@@ -517,7 +526,7 @@ sock_address_to_bsd( const SockAddress*  a, void*  paddress, size_t  *psize )
 #if HAVE_IN6_SOCKETS
     case SOCKET_IN6:
         {
-            struct sockaddr_in6*  dst = (struct sockaddr_in6*) paddress;
+            struct sockaddr_in6*  dst = paddress->in6;
 
             *psize = sizeof(*dst);
 
@@ -534,12 +543,12 @@ sock_address_to_bsd( const SockAddress*  a, void*  paddress, size_t  *psize )
     case SOCKET_UNIX:
         {
             int                  slen = strlen(a->u._unix.path);
-            struct sockaddr_un*  dst = (struct sockaddr_un*) paddress;
+            struct sockaddr_un*  dst = paddress->un;
 
             if (slen >= UNIX_PATH_MAX)
                 return -1;
 
-            memset( paddress, 0, sizeof(*dst) );
+            memset( dst, 0, sizeof(*dst) );
 
             dst->sun_family = AF_LOCAL;
             memcpy( dst->sun_path, a->u._unix.path, slen );
@@ -557,32 +566,13 @@ sock_address_to_bsd( const SockAddress*  a, void*  paddress, size_t  *psize )
     return 0;
 }
 
-int
-sock_address_to_inet( SockAddress*  a, int  *paddr_ip, int  *paddr_port )
-{
-    struct sockaddr   addr;
-    socklen_t         addrlen;
-
-    if (a->family != SOCKET_INET) {
-        return _set_errno(EINVAL);
-    }
-
-    if (sock_address_to_bsd(a, &addr, &addrlen) < 0)
-        return -1;
-
-    *paddr_ip   = ntohl(((struct sockaddr_in*)&addr)->sin_addr.s_addr);
-    *paddr_port = ntohs(((struct sockaddr_in*)&addr)->sin_port);
-
-    return 0;
-}
-
-int
+static int
 sock_address_from_bsd( SockAddress*  a, const void*  from, size_t  fromlen )
 {
-    switch (((struct sockaddr*)from)->sa_family) {
+    switch (((struct sockaddr *)from)->sa_family) {
     case AF_INET:
         {
-            struct sockaddr_in*  src = (struct sockaddr_in*) from;
+           const struct sockaddr_in*  src = from;
 
             if (fromlen < sizeof(*src))
                 return _set_errno(EINVAL);
@@ -596,7 +586,7 @@ sock_address_from_bsd( SockAddress*  a, const void*  from, size_t  fromlen )
 #ifdef HAVE_IN6_SOCKETS
     case AF_INET6:
         {
-            struct sockaddr_in6*  src = (struct sockaddr_in6*) from;
+            const struct sockaddr_in6*  src = from;
 
             if (fromlen < sizeof(*src))
                 return _set_errno(EINVAL);
@@ -611,7 +601,7 @@ sock_address_from_bsd( SockAddress*  a, const void*  from, size_t  fromlen )
 #ifdef HAVE_UNIX_SOCKETS
     case AF_LOCAL:
         {
-            struct sockaddr_un*  src = (struct sockaddr_un*) from;
+            const struct sockaddr_un*  src = from;
             char*                end;
 
             if (fromlen < sizeof(*src))
@@ -641,7 +631,7 @@ sock_address_init_resolve( SockAddress*  a, const char*  hostname, uint16_t  por
 {
     struct addrinfo   hints[1];
     struct addrinfo*  res;
-    int               ret;
+    int                ret;
 
     memset(hints, 0, sizeof(hints));
     hints->ai_family   = preferIn6 ? AF_INET6 : AF_UNSPEC;
@@ -760,6 +750,9 @@ sock_address_list_create( const char*  hostname,
     else
         ai.ai_flags |= AI_CANONNAME;
 
+    if (flags & SOCKET_LIST_DGRAM)
+        ai.ai_socktype = SOCK_DGRAM;
+
     while (1) {
         struct addrinfo  hints = ai;
 
@@ -768,9 +761,9 @@ sock_address_list_create( const char*  hostname,
             break;
 
         switch (ret) {
-#ifdef EAI_ADDRFAMILY		
-        case EAI_ADDRFAMILY: 
-#endif		
+#ifdef EAI_ADDRFAMILY
+        case EAI_ADDRFAMILY:
+#endif
         case EAI_NODATA:
             _set_errno(ENOENT);
             break;
@@ -780,12 +773,12 @@ sock_address_list_create( const char*  hostname,
         case EAI_AGAIN:
             _set_errno(EAGAIN);
             break;
-#ifdef EAI_SYSTEM			
+#ifdef EAI_SYSTEM
         case EAI_SYSTEM:
             if (errno == EINTR)
                 continue;
             break;
-#endif			
+#endif
         default:
             _set_errno(EINVAL);
         }
@@ -796,8 +789,8 @@ sock_address_list_create( const char*  hostname,
     for (count = 0, e = res; e != NULL; e = e->ai_next)
         count += 1;
 
-    list = (SockAddress**) qemu_malloc((count+1)*sizeof(SockAddress*));
-    addr = (SockAddress*)  qemu_malloc(count*sizeof(SockAddress));
+    AARRAY_NEW(list, count+1);
+    AARRAY_NEW(addr, count);
 
     for (nn = 0, e = res; e != NULL; e = e->ai_next) {
 
@@ -810,6 +803,33 @@ sock_address_list_create( const char*  hostname,
     list[nn] = NULL;
     freeaddrinfo(res);
     return list;
+}
+
+SockAddress**
+sock_address_list_create2(const char* host_and_port, unsigned flags )
+{
+    char host_name[512];
+    const char* actual_host_name = "localhost";
+    // Parse host and port name.
+    const char* port_name = strchr(host_and_port, ':');
+    if (port_name != NULL) {
+        int to_copy = MIN(sizeof(host_name)-1, port_name - host_and_port);
+        if (to_copy != 0) {
+            memcpy(host_name, host_and_port, to_copy);
+            host_name[to_copy] = '\0';
+            actual_host_name = host_name;
+            port_name++;
+        } else {
+            return NULL;
+        }
+    } else {
+        port_name = host_and_port;
+    }
+    // Make sure that port_name is not empty.
+    if (port_name[0] == '\0') {
+        return NULL;
+    }
+    return sock_address_list_create(actual_host_name, port_name, flags);
 }
 
 void
@@ -826,8 +846,8 @@ sock_address_list_free( SockAddress**  list )
         sock_address_done(list[nn]);
         list[nn] = NULL;
     }
-    qemu_free(addr);
-    qemu_free(list);
+    AFREE(addr);
+    AFREE(list);
 }
 
 int
@@ -954,13 +974,13 @@ socket_send_oob( int  fd, const void*  buf, int  buflen )
 int
 socket_sendto(int  fd, const void*  buf, int  buflen, const SockAddress*  to)
 {
-    struct sockaddr   sa;
+    sockaddr_storage  sa;
     socklen_t         salen;
 
     if (sock_address_to_bsd(to, &sa, &salen) < 0)
         return -1;
 
-    SOCKET_CALL(sendto(fd, buf, buflen, 0, &sa, salen));
+    SOCKET_CALL(sendto(fd, buf, buflen, 0, sa.sa, salen));
 }
 
 int
@@ -972,11 +992,11 @@ socket_recv(int  fd, void*  buf, int  len)
 int
 socket_recvfrom(int  fd, void*  buf, int  len, SockAddress*  from)
 {
-    struct sockaddr   sa;
+    sockaddr_storage  sa;
     socklen_t         salen = sizeof(sa);
     int               ret;
 
-    QSOCKET_CALL(ret,recvfrom(fd,buf,len,0,&sa,&salen));
+    QSOCKET_CALL(ret,recvfrom(fd,buf,len,0,sa.sa,&salen));
     if (ret < 0)
         return _fix_errno();
 
@@ -989,35 +1009,35 @@ socket_recvfrom(int  fd, void*  buf, int  len, SockAddress*  from)
 int
 socket_connect( int  fd, const SockAddress*  address )
 {
-    struct sockaddr   addr;
+    sockaddr_storage  addr;
     socklen_t         addrlen;
 
     if (sock_address_to_bsd(address, &addr, &addrlen) < 0)
         return -1;
 
-    SOCKET_CALL(connect(fd,&addr,addrlen));
+    SOCKET_CALL(connect(fd,addr.sa,addrlen));
 }
 
 int
 socket_bind( int  fd, const SockAddress*  address )
 {
-    struct sockaddr  addr;
-    socklen_t        addrlen;
+    sockaddr_storage  addr;
+    socklen_t         addrlen;
 
     if (sock_address_to_bsd(address, &addr, &addrlen) < 0)
         return -1;
 
-    SOCKET_CALL(bind(fd, &addr, addrlen));
+    SOCKET_CALL(bind(fd, addr.sa, addrlen));
 }
 
 int
 socket_get_address( int  fd, SockAddress*  address )
 {
-    struct sockaddr   addr;
+    sockaddr_storage  addr;
     socklen_t         addrlen = sizeof(addr);
     int               ret;
 
-    QSOCKET_CALL(ret, getsockname(fd, &addr, &addrlen));
+    QSOCKET_CALL(ret, getsockname(fd, addr.sa, &addrlen));
     if (ret < 0)
         return _fix_errno();
 
@@ -1027,11 +1047,11 @@ socket_get_address( int  fd, SockAddress*  address )
 int
 socket_get_peer_address( int  fd, SockAddress*  address )
 {
-    struct sockaddr   addr;
+    sockaddr_storage  addr;
     socklen_t         addrlen = sizeof(addr);
     int               ret;
 
-    QSOCKET_CALL(ret, getpeername(fd, &addr, &addrlen));
+    QSOCKET_CALL(ret, getpeername(fd, addr.sa, &addrlen));
     if (ret < 0)
         return _fix_errno();
 
@@ -1047,11 +1067,11 @@ socket_listen( int  fd, int  backlog )
 int
 socket_accept( int  fd, SockAddress*  address )
 {
-    struct sockaddr   addr;
+    sockaddr_storage  addr;
     socklen_t         addrlen = sizeof(addr);
     int               ret;
 
-    QSOCKET_CALL(ret, accept(fd, &addr, &addrlen));
+    QSOCKET_CALL(ret, accept(fd, addr.sa, &addrlen));
     if (ret < 0)
         return _fix_errno();
 
@@ -1074,14 +1094,14 @@ socket_getoption(int  fd, int  domain, int  option, int  defaut)
 #else
         int  opt  = -1;
 #endif
-        size_t  optlen = sizeof(opt);
+        socklen_t  optlen = sizeof(opt);
         ret = getsockopt(fd, domain, option, (char*)&opt, &optlen);
         if (ret == 0)
             return (int)opt;
         if (errno != EINTR)
             return defaut;
     }
-#undef OPT_CAST	
+#undef OPT_CAST
 }
 
 
@@ -1159,7 +1179,7 @@ int socket_set_ipv6only(int  fd)
 	return 0;
 #else
     return socket_setoption(fd, IPPROTO_IPV6, IPV6_V6ONLY, 1);
-#endif	
+#endif
 }
 
 
@@ -1494,7 +1514,7 @@ socket_mcast_inet_add_membership( int  s, uint32_t  ip )
     imr.imr_interface.s_addr = htonl(INADDR_ANY);
 
     if ( setsockopt( s, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-                     (const char *)&imr, 
+                     (const char *)&imr,
                      sizeof(struct ip_mreq)) < 0 )
     {
         return _fix_errno();
@@ -1511,7 +1531,7 @@ socket_mcast_inet_drop_membership( int  s, uint32_t  ip )
     imr.imr_interface.s_addr = htonl(INADDR_ANY);
 
     if ( setsockopt( s, IPPROTO_IP, IP_DROP_MEMBERSHIP,
-                     (const char *)&imr, 
+                     (const char *)&imr,
                      sizeof(struct ip_mreq)) < 0 )
     {
         return _fix_errno();

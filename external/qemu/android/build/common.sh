@@ -269,7 +269,7 @@ EOF
 
     compile
     if [ $? != 0 ] ; then
-        echo "your C compiler doesn't seem to work:"
+        echo "your C compiler doesn't seem to work: $CC"
         cat $TMPL
         clean_exit
     fi
@@ -413,7 +413,7 @@ feature_check_link ()
 feature_check_header ()
 {
     local result_ch
-    log2 "HeaderChk  : $2"
+    log "HeaderCheck: $2"
     echo "#include $2" > $TMPC
     cat >> $TMPC <<EOF
         int main(void) { return 0; }
@@ -457,11 +457,11 @@ check_android_build ()
     unset ANDROID_TOP
     IN_ANDROID_BUILD=no
 
-    if [ -z "$ANDROID_PRODUCT_OUT" ] ; then
+    if [ -z "$ANDROID_BUILD_TOP" ] ; then
         return ;
     fi
 
-    ANDROID_TOP=`cd $ANDROID_PRODUCT_OUT/../../../.. && pwd`
+    ANDROID_TOP=$ANDROID_BUILD_TOP
     log "ANDROID_TOP found at $ANDROID_TOP"
     # $ANDROID_TOP/config/envsetup.make is for the old tree layout
     # $ANDROID_TOP/build/envsetup.sh is for the new one
@@ -534,7 +534,7 @@ create_config_mk ()
         cat $TMPL
         clean_exit
     fi
-    
+
     # re-create the start of the configuration file
     log "Generate   : $config_mk"
 
@@ -553,7 +553,12 @@ create_config_mk ()
 add_android_config_mk ()
 {
     echo "" >> $config_mk
+    if [ $TARGET_ARCH = arm ] ; then
     echo "TARGET_ARCH       := arm" >> $config_mk
+    fi
+    if [ $TARGET_ARCH = x86 ] ; then
+    echo "TARGET_ARCH       := x86" >> $config_mk
+    fi
     echo "HOST_PREBUILT_TAG := $HOST_TAG" >> $config_mk
     echo "PREBUILT          := $ANDROID_PREBUILT" >> $config_mk
 }

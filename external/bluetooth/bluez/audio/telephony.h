@@ -26,6 +26,13 @@
 #include <errno.h>
 #include <glib.h>
 
+/* Response and hold values */
+#define BTRH_NOT_SUPPORTED	-2
+#define BTRH_NONE		-1
+#define BTRH_HOLD		0
+#define BTRH_ACCEPT		1
+#define BTRH_REJECT		2
+
 /* HFP feature bits */
 #define AG_FEATURE_THREE_WAY_CALLING		0x0001
 #define AG_FEATURE_EC_ANDOR_NR			0x0002
@@ -181,6 +188,7 @@ int telephony_incoming_call_ind(const char *number, int type);
 int telephony_calling_stopped_ind(void);
 int telephony_ready_ind(uint32_t features, const struct indicator *indicators,
 			int rh, const char *chld);
+int telephony_deinit(void);
 int telephony_list_current_call_ind(int idx, int dir, int status, int mode,
 					int mprty, const char *number,
 					int type);

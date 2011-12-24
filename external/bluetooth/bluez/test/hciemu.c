@@ -53,22 +53,6 @@
 
 #include <glib.h>
 
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-static inline uint64_t ntoh64(uint64_t n)
-{
-	uint64_t h;
-	uint64_t tmp = ntohl(n & 0x00000000ffffffff);
-	h = ntohl(n >> 32);
-	h |= tmp << 32;
-	return h;
-}
-#elif __BYTE_ORDER == __BIG_ENDIAN
-#define ntoh64(x) (x)
-#else
-#error "Unknown byte order"
-#endif
-#define hton64(x) ntoh64(x)
-
 #define GHCI_DEV		"/dev/ghci"
 
 #define VHCI_DEV		"/dev/vhci"
@@ -85,7 +69,7 @@ struct vhci_device {
 	uint8_t		dev_class[3];
 	uint8_t		inq_mode;
 	uint8_t		eir_fec;
-	uint8_t		eir_data[240];
+	uint8_t		eir_data[HCI_MAX_EIR_LENGTH];
 	uint16_t	acl_cnt;
 	bdaddr_t	bdaddr;
 	int		fd;
@@ -220,7 +204,6 @@ static int write_snoop(int fd, int type, int incoming, unsigned char *buf, int l
 	struct timeval tv;
 	uint32_t size = len;
 	uint64_t ts;
-	int err;
 
 	if (fd < 0)
 		return -1;
@@ -238,8 +221,11 @@ static int write_snoop(int fd, int type, int incoming, unsigned char *buf, int l
 	if (type == HCI_COMMAND_PKT || type == HCI_EVENT_PKT)
 		pkt.flags |= ntohl(0x02);
 
-	err = write(fd, &pkt, BTSNOOP_PKT_SIZE);
-	err = write(fd, buf, size);
+	if (write(fd, &pkt, BTSNOOP_PKT_SIZE) < 0)
+		return -errno;
+
+	if (write(fd, buf, size) < 0)
+		return -errno;
 
 	return 0;
 }
@@ -440,7 +426,7 @@ static int scan_enable(uint8_t *data)
 
 	if (!(*data & SCAN_PAGE)) {
 		if (vdev.scan) {
-			g_io_channel_close(vdev.scan);
+			g_io_channel_shutdown(vdev.scan, TRUE, NULL);
 			vdev.scan = NULL;
 		}
 		return 0;
@@ -500,10 +486,13 @@ static void accept_connection(uint8_t *data)
 
 static void close_connection(struct vhci_conn *conn)
 {
-	syslog(LOG_INFO, "Closing connection %s handle %d",
-					batostr(&conn->dest), conn->handle);
+	char addr[18];
 
-	g_io_channel_close(conn->chan);
+	ba2str(&conn->dest, addr);
+	syslog(LOG_INFO, "Closing connection %s handle %d",
+					addr, conn->handle);
+
+	g_io_channel_shutdown(conn->chan, TRUE, NULL);
 	g_io_channel_unref(conn->chan);
 
 	vconn[conn->handle - 1] = NULL;
@@ -728,14 +717,14 @@ static void hci_host_control(uint16_t ocf, int plen, uint8_t *data)
 	case OCF_READ_EXT_INQUIRY_RESPONSE:
 		ir.status = 0x00;
 		ir.fec = vdev.eir_fec;
-		memcpy(ir.data, vdev.eir_data, 240);
+		memcpy(ir.data, vdev.eir_data, HCI_MAX_EIR_LENGTH);
 		command_complete(ogf, ocf, sizeof(ir), &ir);
 		break;
 
 	case OCF_WRITE_EXT_INQUIRY_RESPONSE:
 		status = 0x00;
 		vdev.eir_fec = data[0];
-		memcpy(vdev.eir_data, data + 1, 240);
+		memcpy(vdev.eir_data, data + 1, HCI_MAX_EIR_LENGTH);
 		command_complete(ogf, ocf, 1, &status);
 		break;
 
@@ -875,7 +864,7 @@ static gboolean io_acl_data(GIOChannel *chan, GIOCondition cond, gpointer data)
 	unsigned char buf[HCI_MAX_FRAME_SIZE], *ptr;
 	hci_acl_hdr *ah;
 	uint16_t flags;
-	int fd, err, len;
+	int fd, len;
 
 	if (cond & G_IO_NVAL) {
 		g_io_channel_unref(chan);
@@ -912,7 +901,8 @@ static gboolean io_acl_data(GIOChannel *chan, GIOCondition cond, gpointer data)
 
 	write_snoop(vdev.dd, HCI_ACLDATA_PKT, 1, buf, len);
 
-	err = write(vdev.fd, buf, len);
+	if (write(vdev.fd, buf, len) < 0)
+		return FALSE;
 
 	return TRUE;
 }
@@ -969,13 +959,16 @@ static gboolean io_hci_data(GIOChannel *chan, GIOCondition cond, gpointer data)
 {
 	unsigned char buf[HCI_MAX_FRAME_SIZE], *ptr;
 	int type;
-	gsize len;
-	GIOError err;
+	ssize_t len;
+	int fd;
 
 	ptr = buf;
 
-	if ((err = g_io_channel_read(chan, (gchar *) buf, sizeof(buf), &len))) {
-		if (err == G_IO_ERROR_AGAIN)
+	fd = g_io_channel_unix_get_fd(chan);
+
+	len = read(fd, buf, sizeof(buf));
+	if (len < 0) {
+		if (errno == EAGAIN)
 			return TRUE;
 
 		syslog(LOG_ERR, "Read failed: %s (%d)", strerror(errno), errno);
@@ -1018,7 +1011,7 @@ static int getbdaddrbyname(char *str, bdaddr_t *ba)
 
 	if (n == 5) {
 		/* BD address */
-		baswap(ba, strtoba(str));
+		str2ba(str, ba);
 		return 0;
 	}
 

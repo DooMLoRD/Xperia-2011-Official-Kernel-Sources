@@ -2,7 +2,7 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2004-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2004-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -200,27 +200,55 @@ static void parse_headers(int level, struct frame *frm)
 		printf("%s (0x%02x)", hi2str(hi), hi);
 		switch (hi & 0xc0) {
 		case 0x00:	/* Unicode */
+			if (frm->len < 2) {
+				printf("\n");
+				return;
+			}
+
 			len = get_u16(frm) - 3;
 			printf(" = Unicode length %d\n", len);
+
+			if (frm->len < len)
+				return;
+
 			raw_ndump(level, frm, len);
 			frm->ptr += len;
 			frm->len -= len;
 			break;
 
 		case 0x40:	/* Byte sequence */
+			if (frm->len < 2) {
+				printf("\n");
+				return;
+			}
+
 			len = get_u16(frm) - 3;
 			printf(" = Sequence length %d\n", len);
+
+			if (frm->len < len)
+				return;
+
 			raw_ndump(level, frm, len);
 			frm->ptr += len;
 			frm->len -= len;
 			break;
 
 		case 0x80:	/* One byte */
+			if (frm->len < 1) {
+				printf("\n");
+				return;
+			}
+
 			hv8 = get_u8(frm);
 			printf(" = %d\n", hv8);
 			break;
 
 		case 0xc0:	/* Four bytes */
+			if (frm->len < 4) {
+				printf("\n");
+				return;
+			}
+
 			hv32 = get_u32(frm);
 			printf(" = %u\n", hv32);
 			break;
@@ -236,12 +264,12 @@ void obex_dump(int level, struct frame *frm)
 
 	frm = add_frame(frm);
 
-	while (frm->len > 0) {
+	while (frm->len > 2) {
 		opcode = get_u8(frm);
 		length = get_u16(frm);
 		status = opcode & 0x7f;
 
-		if (frm->len < length - 3) {
+		if ((int) frm->len < length - 3) {
 			frm->ptr -= 3;
 			frm->len += 3;
 			return;
@@ -276,6 +304,11 @@ void obex_dump(int level, struct frame *frm)
 
 		switch (opcode & 0x7f) {
 		case 0x00:	/* Connect */
+			if (frm->len < 4) {
+				printf("\n");
+				return;
+			}
+
 			version = get_u8(frm);
 			flags   = get_u8(frm);
 			pktlen  = get_u16(frm);
@@ -284,17 +317,19 @@ void obex_dump(int level, struct frame *frm)
 			break;
 
 		case 0x05:	/* SetPath */
-			if (length > 3) {
-				flags     = get_u8(frm);
-				constants = get_u8(frm);
-				printf(" flags %d constants %d\n",
-							flags, constants);
-			} else
+			if (frm->len < 2) {
 				printf("\n");
+				return;
+			}
+
+			flags     = get_u8(frm);
+			constants = get_u8(frm);
+			printf(" flags %d constants %d\n", flags, constants);
 			break;
 
 		default:
 			printf("\n");
+			break;
 		}
 
 		if ((status & 0x70) && (parser.flags & DUMP_VERBOSE)) {

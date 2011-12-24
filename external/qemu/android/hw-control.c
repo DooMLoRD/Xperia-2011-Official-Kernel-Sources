@@ -23,6 +23,7 @@
 #include "android/hw-control.h"
 #include "cbuffer.h"
 #include "android/hw-qemud.h"
+#include "android/globals.h"
 #include "android/utils/misc.h"
 #include "android/utils/debug.h"
 #include "qemu-char.h"
@@ -61,14 +62,17 @@ _hw_control_qemud_client_recv( void*         opaque,
 
 /* called when a qemud client connects to the service */
 static QemudClient*
-_hw_control_qemud_connect( void*  opaque, QemudService*  service, int  channel )
+_hw_control_qemud_connect( void*  opaque,
+                           QemudService*  service,
+                           int  channel,
+                           const char* client_param )
 {
     QemudClient*  client;
 
-    client = qemud_client_new( service, channel,
+    client = qemud_client_new( service, channel, client_param,
                                opaque,
                                _hw_control_qemud_client_recv,
-                               NULL );
+                               NULL, NULL, NULL );
 
     qemud_client_set_framing(client, 1);
     return client;
@@ -98,7 +102,7 @@ hw_control_do_query( HwControl*  h,
 
     q = if_starts_with( query, querylen, "power:light:brightness:" );
     if (q != NULL) {
-        if (h->client_funcs.light_brightness) {
+        if (h->client_funcs.light_brightness && android_hw->hw_lcd_backlight) {
             char*  qq = strchr((const char*)q, ':');
             int    value;
             if (qq == NULL) {
@@ -123,14 +127,27 @@ hw_control_init( HwControl*                    control,
     control->client_funcs = client_funcs[0];
     control->service      = qemud_service_register( "hw-control", 0,
                                                     control,
-                                                    _hw_control_qemud_connect );
+                                                    _hw_control_qemud_connect,
+                                                    NULL, NULL);
+}
+
+const AndroidHwControlFuncs  defaultControls = {
+    NULL,
+};
+
+static HwControl   hwstate[1];
+
+void
+android_hw_control_init( void )
+{
+    hw_control_init(hwstate, NULL, &defaultControls);
+    D("%s: hw-control qemud handler initialized", __FUNCTION__);
 }
 
 void
-android_hw_control_init( void*  opaque, const AndroidHwControlFuncs*  funcs )
+android_hw_control_set( void*  opaque, const AndroidHwControlFuncs*  funcs )
 {
-    static HwControl   hwstate[1];
-
-    hw_control_init(hwstate, opaque, funcs);
-    D("%s: hw-control qemud handler initialized", __FUNCTION__);
+    hwstate->client       = opaque;
+    hwstate->client_funcs = funcs[0];
 }
+

@@ -494,6 +494,10 @@ static inline void set_gadget_data(struct usb_gadget *gadget, void *data)
 	{ dev_set_drvdata(&gadget->dev, data); }
 static inline void *get_gadget_data(struct usb_gadget *gadget)
 	{ return dev_get_drvdata(&gadget->dev); }
+static inline struct usb_gadget *dev_to_usb_gadget(struct device *dev)
+{
+	return container_of(dev, struct usb_gadget, dev);
+}
 
 /* iterates the non-control endpoints; 'tmp' is a struct usb_ep pointer */
 #define gadget_for_each_ep(tmp,gadget) \
@@ -781,10 +785,6 @@ struct usb_gadget_driver {
 	/* FIXME support safe rmmod */
 	struct device_driver	driver;
 };
-
-
-
-/*-------------------------------------------------------------------------*/
 
 /* driver modules register and unregister, as usual.
  * these calls must be made in a context that can sleep.

@@ -1,3 +1,12 @@
+ver 2.0:
+	Add support for decoding AMP events.
+	Add support for decoding AMP commands.
+	Add support for decoding LE advertising reports.
+	Add support for L2CAP fixed channel information.
+	Add support for L2CAP ERTM and Streaming Mode.
+	Make BT-Snoop format the default file format.
+	Make verbose parsing the default option.
+
 ver 1.42:
 	Decode the Read Link Policy Settings command.
 	Decode Default Link Policy Settings commands

@@ -3,7 +3,7 @@
  *  BlueZ - Bluetooth protocol stack for Linux
  *
  *  Copyright (C) 2000-2002  Maxim Krasnyansky <maxk@qualcomm.com>
- *  Copyright (C) 2003-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2003-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -50,22 +50,6 @@
 #include "parser/parser.h"
 #include "parser/sdp.h"
 
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-static inline uint64_t ntoh64(uint64_t n)
-{
-	uint64_t h;
-	uint64_t tmp = ntohl(n & 0x00000000ffffffff);
-	h = ntohl(n >> 32);
-	h |= tmp << 32;
-	return h;
-}
-#elif __BYTE_ORDER == __BIG_ENDIAN
-#define ntoh64(x) (x)
-#else
-#error "Unknown byte order"
-#endif
-#define hton64(x) ntoh64(x)
-
 #define SNAP_LEN 	HCI_MAX_FRAME_SIZE
 #define DEFAULT_PORT	"10839";
 
@@ -74,8 +58,6 @@ enum {
 	PARSE,
 	READ,
 	WRITE,
-	RECEIVE,
-	SEND,
 	SERVER,
 	PPPDUMP,
 	AUDIO
@@ -85,7 +67,6 @@ enum {
 static int  snap_len = SNAP_LEN;
 static int  mode = PARSE;
 static int  permcheck = 1;
-static int  noappend = 0;
 static char *dump_file = NULL;
 static char *pppdump_file = NULL;
 static char *audio_file = NULL;
@@ -180,9 +161,6 @@ static int process_frames(int dev, int sock, int fd, unsigned long flags)
 
 	if (sock < 0)
 		return -1;
-
-	if (mode == SERVER)
-		flags |= DUMP_BTSNOOP;
 
 	if (snap_len < SNAP_LEN)
 		snap_len = SNAP_LEN;
@@ -303,12 +281,15 @@ static int process_frames(int dev, int sock, int fd, unsigned long flags)
 
 		cmsg = CMSG_FIRSTHDR(&msg);
 		while (cmsg) {
+			int dir;
 			switch (cmsg->cmsg_type) {
 			case HCI_CMSG_DIR:
-				frm.in = *((int *) CMSG_DATA(cmsg));
+				memcpy(&dir, CMSG_DATA(cmsg), sizeof(int));
+				frm.in = (uint8_t) dir;
 				break;
 			case HCI_CMSG_TSTAMP:
-				frm.ts = *((struct timeval *) CMSG_DATA(cmsg));
+				memcpy(&frm.ts, CMSG_DATA(cmsg),
+						sizeof(struct timeval));
 				break;
 			}
 			cmsg = CMSG_NXTHDR(&msg, cmsg);
@@ -319,7 +300,6 @@ static int process_frames(int dev, int sock, int fd, unsigned long flags)
 
 		switch (mode) {
 		case WRITE:
-		case SEND:
 		case SERVER:
 			/* Save or send dump */
 			if (flags & DUMP_BTSNOOP) {
@@ -476,12 +456,9 @@ static int open_file(char *file, int mode, unsigned long flags)
 	struct btsnoop_hdr *hdr = (struct btsnoop_hdr *) buf;
 	int fd, len, open_flags;
 
-	if (mode == WRITE || mode == PPPDUMP || mode == AUDIO) {
-		if (noappend || flags & DUMP_BTSNOOP)
-			open_flags = O_WRONLY | O_CREAT | O_TRUNC;
-		else
-			open_flags = O_WRONLY | O_CREAT | O_APPEND;
-	} else
+	if (mode == WRITE || mode == PPPDUMP || mode == AUDIO)
+		open_flags = O_WRONLY | O_CREAT | O_TRUNC;
+	else
 		open_flags = O_RDONLY;
 
 	fd = open(file, open_flags, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
@@ -612,6 +589,7 @@ static int open_socket(int dev, unsigned long flags)
 	}
 
 	/* Bind socket to the HCI device */
+	memset(&addr, 0, sizeof(addr));
 	addr.hci_family = AF_BLUETOOTH;
 	addr.hci_dev = dev;
 	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
@@ -619,71 +597,6 @@ static int open_socket(int dev, unsigned long flags)
 					dev, strerror(errno), errno);
 		return -1;
 	}
-
-	return sk;
-}
-
-static int open_connection(char *addr, char *port)
-{
-	struct sockaddr_storage ss;
-	struct addrinfo hints, *res0, *res;
-	int sk = -1, opt = 1;
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = af;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	if (getaddrinfo(addr, port, &hints, &res0))
-		if(getaddrinfo(NULL, port, &hints, &res0)) {
-			perror("getaddrinfo");
-			exit(1);
-		}
-	
-	for (res = res0; res; res = res->ai_next) {
-		sk = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-		if (sk < 0) {
-			if (res->ai_next)
-				continue;
-
-			perror("Can't create socket");
-			freeaddrinfo(res0);
-			exit(1);
-		}
-
-		setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-		memcpy(&ss, res->ai_addr, res->ai_addrlen);
-
-		switch(ss.ss_family) {
-		case AF_INET:
-			((struct sockaddr_in *) &ss)->sin_addr.s_addr = htonl(INADDR_ANY);
-			((struct sockaddr_in *) &ss)->sin_port = 0;
-			break;
-#ifdef HAS_INET6
-		case AF_INET6:
-			memcpy(&((struct sockaddr_in6 *) &ss)->sin6_addr,
-						&in6addr_any, sizeof(in6addr_any));
-			((struct sockaddr_in6 *) &ss)->sin6_port = 0;
-			break;
-#endif
-		}
-		if (bind(sk, (struct sockaddr *) &ss, sizeof(ss)) < 0) {
-			perror("Can't bind socket");
-			close(sk);
-			freeaddrinfo(res0);
-			exit(1);
-		}
-		
-		if (connect(sk, res->ai_addr, res->ai_addrlen) < 0) {
-			perror("Can't connect socket");
-			close(sk);
-			freeaddrinfo(res0);
-			exit(1);
-		}
-	}
-
-	freeaddrinfo(res0);
 
 	return sk;
 }
@@ -744,7 +657,8 @@ static int wait_connection(char *addr, char *port)
 	struct addrinfo *ai, *runp;
 	struct addrinfo hints;
 	struct pollfd fds[3];
-	int err, opt, datagram, nfds = 0;
+	unsigned int nfds = 0;
+	int err, opt, datagram;
 
 	memset(&hints, 0, sizeof (hints));
 	hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
@@ -816,7 +730,8 @@ static int wait_connection(char *addr, char *port)
 	freeaddrinfo(ai);
 
 	while (1) {
-		int i, n = poll(fds, nfds, -1);
+		unsigned int i;
+		int n = poll(fds, nfds, -1);
 		if (n <= 0)
 			continue;
 
@@ -845,7 +760,7 @@ static int wait_connection(char *addr, char *port)
 			printf("client: %s:%s snap_len: %d filter: 0x%lx\n",
 					hname, hport, snap_len, parser.filter);
 
-			for (n = 0; n < nfds; n++)
+			for (n = 0; n < (int) nfds; n++)
 				close(fds[n].fd);
 
 			return sk;
@@ -895,6 +810,7 @@ static struct {
 	{ "cmtp",	FILT_CMTP	},
 	{ "hidp",	FILT_HIDP	},
 	{ "hcrp",	FILT_HCRP	},
+	{ "att",	FILT_ATT	},
 	{ "avdtp",	FILT_AVDTP	},
 	{ "avctp",	FILT_AVCTP	},
 	{ "obex",	FILT_OBEX	},
@@ -932,8 +848,6 @@ static void usage(void)
 	"  -m, --manufacturer=compid  Default manufacturer\n"
 	"  -w, --save-dump=file       Save dump to a file\n"
 	"  -r, --read-dump=file       Read dump from a file\n"
-	"  -s, --send-dump=host       Send dump to a host\n"
-	"  -n, --recv-dump=host       Receive dump on a host\n"
 	"  -d, --wait-dump=host       Wait on a host and send\n"
 	"  -t, --ts                   Display time stamps\n"
 	"  -a, --ascii                Dump data in ascii\n"
@@ -946,13 +860,11 @@ static void usage(void)
 	"  -P, --ppp=channel          Channel for PPP\n"
 	"  -D, --pppdump=file         Extract PPP traffic\n"
 	"  -A, --audio=file           Extract SCO audio data\n"
-	"  -B, --btsnoop              Use BTSnoop file format\n"
-	"  -V, --verbose              Verbose decoding\n"
 	"  -Y, --novendor             No vendor commands or events\n"
-	"  -N, --noappend             No appending to existing files\n"
 	"  -4, --ipv4                 Use IPv4 as transport\n"
 	"  -6  --ipv6                 Use IPv6 as transport\n"
 	"  -h, --help                 Give this help list\n"
+	"  -v, --version              Give version information\n"
 	"      --usage                Give a short usage message\n"
 	);
 }
@@ -964,8 +876,6 @@ static struct option main_options[] = {
 	{ "manufacturer",	1, 0, 'm' },
 	{ "save-dump",		1, 0, 'w' },
 	{ "read-dump",		1, 0, 'r' },
-	{ "send-dump",		1, 0, 's' },
-	{ "recv-dump",		1, 0, 'n' },
 	{ "wait-dump",		1, 0, 'd' },
 	{ "timestamp",		0, 0, 't' },
 	{ "ascii",		0, 0, 'a' },
@@ -978,14 +888,12 @@ static struct option main_options[] = {
 	{ "ppp",		1, 0, 'P' },
 	{ "pppdump",		1, 0, 'D' },
 	{ "audio",		1, 0, 'A' },
-	{ "btsnoop",		0, 0, 'B' },
-	{ "verbose",		0, 0, 'V' },
 	{ "novendor",		0, 0, 'Y' },
 	{ "nopermcheck",	0, 0, 'Z' },
-	{ "noappend",		0, 0, 'N' },
 	{ "ipv4",		0, 0, '4' },
 	{ "ipv6",		0, 0, '6' },
 	{ "help",		0, 0, 'h' },
+	{ "version",		0, 0, 'v' },
 	{ 0 }
 };
 
@@ -998,9 +906,7 @@ int main(int argc, char *argv[])
 	int defcompid = DEFAULT_COMPID;
 	int opt, pppdump_fd = -1, audio_fd = -1;
 
-	printf("HCI sniffer - Bluetooth packet analyzer ver %s\n", VERSION);
-
-	while ((opt=getopt_long(argc, argv, "i:l:p:m:w:r:s:n:d:taxXRC:H:O:P:D:A:BVYZN46h", main_options, NULL)) != -1) {
+	while ((opt=getopt_long(argc, argv, "i:l:p:m:w:r:d:taxXRC:H:O:P:D:A:YZ46hv", main_options, NULL)) != -1) {
 		switch(opt) {
 		case 'i':
 			if (strcasecmp(optarg, "none") && strcasecmp(optarg, "system"))
@@ -1029,16 +935,6 @@ int main(int argc, char *argv[])
 		case 'r':
 			mode = READ;
 			dump_file = strdup(optarg);
-			break;
-
-		case 's':
-			mode = SEND;
-			dump_addr = optarg;
-			break;
-
-		case 'n':
-			mode = RECEIVE;
-			dump_addr = optarg;
 			break;
 
 		case 'd':
@@ -1090,24 +986,12 @@ int main(int argc, char *argv[])
 			audio_file = strdup(optarg);
 			break;
 
-		case 'B':
-			flags |= DUMP_BTSNOOP;
-			break;
-
-		case 'V':
-			flags |= DUMP_VERBOSE;
-			break;
-
 		case 'Y':
 			flags |= DUMP_NOVENDOR;
 			break;
 
 		case 'Z':
 			permcheck = 0;
-			break;
-
-		case 'N':
-			noappend = 1;
 			break;
 
 		case '4':
@@ -1117,6 +1001,10 @@ int main(int argc, char *argv[])
 		case '6':
 			af = AF_INET6;
 			break;
+
+		case 'v':
+			printf("%s\n", VERSION);
+			exit(0);
 
 		case 'h':
 		default:
@@ -1128,6 +1016,8 @@ int main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 	optind = 0;
+
+	printf("HCI sniffer - Bluetooth packet analyzer ver %s\n", VERSION);
 
 	if (argc > 0)
 		filter = parse_filter(argc, argv);
@@ -1144,31 +1034,25 @@ int main(int argc, char *argv[])
 
 	switch (mode) {
 	case PARSE:
+		flags |= DUMP_VERBOSE;
 		init_parser(flags, filter, defpsm, defcompid, pppdump_fd, audio_fd);
 		process_frames(device, open_socket(device, flags), -1, flags);
 		break;
 
 	case READ:
+		flags |= DUMP_VERBOSE;
 		init_parser(flags, filter, defpsm, defcompid, pppdump_fd, audio_fd);
 		read_dump(open_file(dump_file, mode, flags));
 		break;
 
 	case WRITE:
+		flags |= DUMP_BTSNOOP;
 		process_frames(device, open_socket(device, flags),
 				open_file(dump_file, mode, flags), flags);
 		break;
 
-	case RECEIVE:
-		init_parser(flags, filter, defpsm, defcompid, pppdump_fd, audio_fd);
-		read_dump(wait_connection(dump_addr, dump_port));
-		break;
-
-	case SEND:
-		process_frames(device, open_socket(device, flags),
-				open_connection(dump_addr, dump_port), flags);
-		break;
-
 	case SERVER:
+		flags |= DUMP_BTSNOOP;
 		init_parser(flags, filter, defpsm, defcompid, pppdump_fd, audio_fd);
 		run_server(device, dump_addr, dump_port, flags);
 		break;

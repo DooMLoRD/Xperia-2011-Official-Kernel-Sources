@@ -35,6 +35,7 @@
 
 #include "log.h"
 #include "telephony.h"
+#include "error.h"
 
 #define TELEPHONY_DUMMY_IFACE "org.bluez.TelephonyTest"
 #define TELEPHONY_DUMMY_PATH "/org/bluez/test"
@@ -49,14 +50,6 @@ static int active_call_dir = 0;
 
 static gboolean events_enabled = FALSE;
 
-/* Response and hold state
- * -1 = none
- *  0 = incoming call is put on hold in the AG
- *  1 = held incoming call is accepted in the AG
- *  2 = held incoming call is rejected in the AG
- */
-static int response_and_hold = -1;
-
 static struct indicator dummy_indicators[] =
 {
 	{ "battchg",	"0-5",	5,	TRUE },
@@ -68,12 +61,6 @@ static struct indicator dummy_indicators[] =
 	{ "roam",	"0,1",	0,	TRUE },
 	{ NULL }
 };
-
-static inline DBusMessage *invalid_args(DBusMessage *msg)
-{
-	return g_dbus_create_error(msg, "org.bluez.Error.InvalidArguments",
-					"Invalid arguments in method call");
-}
 
 void telephony_device_connected(void *telephony_device)
 {
@@ -95,11 +82,8 @@ void telephony_event_reporting_req(void *telephony_device, int ind)
 
 void telephony_response_and_hold_req(void *telephony_device, int rh)
 {
-	response_and_hold = rh;
-
-	telephony_response_and_hold_ind(response_and_hold);
-
-	telephony_response_and_hold_rsp(telephony_device, CME_ERROR_NONE);
+	telephony_response_and_hold_rsp(telephony_device,
+						CME_ERROR_NOT_SUPPORTED);
 }
 
 void telephony_last_dialed_number_req(void *telephony_device)
@@ -236,7 +220,7 @@ static DBusMessage *outgoing_call(DBusConnection *conn, DBusMessage *msg,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &number,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	DBG("telephony-dummy: outgoing call to %s", number);
 
@@ -261,7 +245,7 @@ static DBusMessage *incoming_call(DBusConnection *conn, DBusMessage *msg,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &number,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	DBG("telephony-dummy: incoming call to %s", number);
 
@@ -307,10 +291,10 @@ static DBusMessage *signal_strength(DBusConnection *conn, DBusMessage *msg,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_UINT32, &strength,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	if (strength > 5)
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	telephony_update_indicator(dummy_indicators, "signal", strength);
 
@@ -326,10 +310,10 @@ static DBusMessage *battery_level(DBusConnection *conn, DBusMessage *msg,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_UINT32, &level,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	if (level > 5)
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	telephony_update_indicator(dummy_indicators, "battchg", level);
 
@@ -346,7 +330,7 @@ static DBusMessage *roaming_status(DBusConnection *conn, DBusMessage *msg,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_BOOLEAN, &roaming,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	val = roaming ? EV_ROAM_ACTIVE : EV_ROAM_INACTIVE;
 
@@ -365,7 +349,7 @@ static DBusMessage *registration_status(DBusConnection *conn, DBusMessage *msg,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_BOOLEAN, &registration,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	val = registration ? EV_SERVICE_PRESENT : EV_SERVICE_NONE;
 
@@ -384,7 +368,7 @@ static DBusMessage *set_subscriber_number(DBusConnection *conn,
 
 	if (!dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &number,
 						DBUS_TYPE_INVALID))
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	g_free(subscriber_number);
 	subscriber_number = g_strdup(number);
@@ -417,6 +401,8 @@ int telephony_init(void)
 				AG_FEATURE_ENHANCED_CALL_STATUS |
 				AG_FEATURE_EXTENDED_ERROR_RESULT_CODES;
 
+	DBG("");
+
 	connection = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
 
 	if (g_dbus_register_interface(connection, TELEPHONY_DUMMY_PATH,
@@ -428,14 +414,20 @@ int telephony_init(void)
 		return -1;
 	}
 
-	telephony_ready_ind(features, dummy_indicators, response_and_hold,
-				chld_str);
+	telephony_ready_ind(features, dummy_indicators, BTRH_NOT_SUPPORTED,
+								chld_str);
 
 	return 0;
 }
 
 void telephony_exit(void)
 {
+	DBG("");
+
+	g_dbus_unregister_interface(connection, TELEPHONY_DUMMY_PATH,
+						TELEPHONY_DUMMY_IFACE);
 	dbus_connection_unref(connection);
 	connection = NULL;
+
+	telephony_deinit();
 }

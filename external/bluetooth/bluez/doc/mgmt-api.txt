@@ -1,0 +1,538 @@
+Bluetooth Management API
+*************************
+
+Copyright (C) 2008-2009  Marcel Holtmann <marcel@holtmann.org>
+
+
+Packet Structures
+=================
+
+	Commands:
+
+	0    4    8   12   16   22   24   28   31   35   39   43   47
+	+-------------------+-------------------+-------------------+
+	|  Command Code     |  Controller Index |  Parameter Length |
+	+-------------------+-------------------+-------------------+
+	|                                                           |
+
+	Events:
+
+	0    4    8   12   16   22   24   28   31   35   39   43   47
+	+-------------------+-------------------+-------------------+
+	|  Event Code       |  Controller Index |  Parameter Length |
+	+-------------------+-------------------+-------------------+
+	|                                                           |
+
+Controller Index can have a special value <non-controller> to indicate that
+command or event is not related to any controller. Possible values:
+
+	<controller id>		0x0000 to 0xFFFE
+	<non-controller>	0xFFFF
+
+
+Read Management Version Information Command
+===========================================
+
+	Command Code:		0x0001
+	Controller Index:	<non-controller>
+	Command Parameters:
+	Return Parameters:	Version (1 Octets)
+				Revision (2 Octets)
+
+
+Read Management Supported Features Command
+==========================================
+
+	Command Code:		0x0002
+	Controller Index:	<non-controller>
+	Command Parameters:
+	Return Parameters:	Features (8 Octets)
+
+		Feature Bit 0:	Controller Support
+		Feature Bit 1:	Tracing Support
+
+
+Read Controller Index List Command
+==================================
+
+	Command Code:		0x0003
+	Controller Index:	<non-controller>
+	Command Parameters:
+	Return Paramters:	Num_Controllers (2 Octets)
+				Controller_Index[i] (2 Octets)
+
+
+Read Controller Information Command
+===================================
+
+	Command Code:		0x0004
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Parameters:	Controller_Type (1 Octet)
+				Powered (1 octet)
+				Connectable (1 octet)
+				Discoverable (1 octet)
+				Pairable (1 octed)
+				Security_Mode (1 octed)
+				BD_ADDR (6 Octets)
+				Device_Class (3 octets)
+				Supported_Features (8 Octets)
+				Manufacturer (2 Octets)
+				HCI_Version (1 Octet)
+				HCI_Revision (2 Octets)
+				Name (249 Octets)
+
+		Controller_Type:0x00 Reserved
+				0x01 Bluetooth (BR/EDR)
+				0x02 802.11 (AMP)
+
+
+Set Powered Command
+===================
+
+	Command Code:		0x0005
+	Controller Index:	<controller id>
+	Command Parameters:	Powered (1 Octet)
+	Return Paramters:	Powered (1 Octet)
+
+
+Set Discoverable Command
+========================
+
+	Command Code:		0x0006
+	Controller Index:	<controller id>
+	Command Parameters:	Discoverable (1 Octet)
+	Return Paramters:	Discoverable (1 Octet)
+
+
+Set Connectable Command
+=======================
+
+	Command Code:		0x0007
+	Controller Index:	<controller id>
+	Command Parameters:	Connectable (1 Octet)
+	Return Paramters:	Connectable (1 Octet)
+
+
+Set Pairable Command
+====================
+
+	Command Code:		0x0008
+	Controller Index:	<controller id>
+	Command Parameters:	Pairable (1 Octet)
+	Return Paramters:	Pairable (1 Octet)
+
+Add UUID Command
+================
+
+	Command Code:		0x0009
+	Controller Index:	<controller id>
+	Command Parameters:	UUID (16 Octets)
+				SVC_Hint (1 octet)
+	Return Paramters:
+
+
+Remove UUID Command
+===================
+
+	Command Code:		0x000A
+	Controller Index:	<controller id>
+	Command Parameters:	UUID (16 Octets)
+	Return Paramters:
+
+
+Set Device Class
+================
+
+	Command Code:		0x000B
+	Controller Index:	<controller id>
+	Command Parameters:	Major_Class (1 octet)
+				Minor_Class (1 octed)
+	Return Paramters:
+
+
+Set Service Cache Command
+=========================
+
+	Command Code:		0x000C
+	Controller Index:	<controller id>
+	Command Parameters:	Enable (1 octet)
+	Return Paramters:
+
+
+Load Keys Command
+=================
+
+	Command Code:		0x000D
+	Controller Index:	<controller id>
+	Command Parameters:	Debug_Keys (1 Octet)
+				Key_Count (2 Octets)
+				Key1 {
+					Address (6 Octets)
+					Type (1 Octet)
+					Value (16 Octets)
+					PIN_Length (1 Octet)
+				}
+				Key2 { }
+				...
+	Return Paramters:
+
+
+Remove Key Command
+==================
+
+	Command Code:		0x000E
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+				Disconnect (1 Octet)
+	Return Paramters:
+
+
+Disconnect Command
+==================
+
+	Command Code:		0x000F
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+	Return Paramters:	Address (6 Octets)
+
+Get Connections Command
+=======================
+
+	Command Code:		0x0010
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Paramters:	Connection_Count (2 Octets)
+				Address1 (6 Octets)
+				Address2 (6 Octets)
+				...
+
+PIN Code Reply Command
+=======================
+
+	Command Code:		0x0011
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Paramters:	Address (6 Octets)
+				PIN_Length (1 Octet)
+				PIN_Code (16 Octets)
+
+
+PIN Code Negative Reply Command
+===============================
+
+	Command Code:		0x0012
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Paramters:	Address (6 Octets)
+
+
+Set IO Capability Command
+=========================
+
+	Command Code:		0x0013
+	Controller Index:	<controller id>
+	Command Parameters:	IO_Capability (1 Octet)
+	Return Paramters:
+
+
+Pair Device Command
+===================
+
+	Command Code:		0x0014
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+				IO_Capability (1 Octet)
+	Return Paramters:	Address (6 Octets)
+				Status (1 Octet)
+
+
+User Confirmation Reply Command
+===============================
+
+	Command Code:		0x0015
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+	Return Paramters:	Address (6 Octets)
+				Status (1 Octet)
+
+
+User Confirmation Negative Reply Command
+========================================
+
+	Command Code:		0x0016
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+	Return Paramters:	Address (6 Octets)
+				Status (1 Octet)
+
+Set Local Name Command
+======================
+
+	Command Code:		0x0017
+	Controller Index:	<controller id>
+	Command Parameters:	Name (249 Octets)
+	Return Paramters:	Name (249 Octets)
+
+Read Local Out Of Band Data Command
+========================================
+
+	Command Code:		0x0018
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Paramters:	Hash (16 Octets)
+				Randomizer (16 Octets)
+
+
+Add Remote Out Of Band Data Command
+========================================
+
+	Command Code:		0x0019
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+				Hash (16 Octets)
+				Randomizer (16 Octets)
+	Return Paramters:
+
+
+Remove Remote Out Of Band Data Command
+========================================
+
+	Command Code:		0x001A
+	Controller Index:	<controller id>
+	Command Parameters:	Address (6 Octets)
+	Return Paramters:
+
+Start Discovery Command
+=======================
+
+	Command Code:		0x0001B
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Parameters:
+
+Stop Discovery Command
+======================
+
+	Command Code:		0x0001C
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Parameters:
+
+Read Tracing Buffer Size Command
+================================
+
+	Command Code:		<not yet assigned>
+	Controller Index:	<non-controller>
+	Command Parameters:
+	Return Parameters:	Status (1 Octet)
+				Buffer_Size (2 Octets)
+
+		Buffer Size in Kilobytes
+
+
+Write Tracing Buffer Size Command
+=================================
+
+	Command Code:		<not yet assigned>
+	Controller Index:	<non-controller>
+	Command Parameters:	Buffer_Size (2 Octets)
+	Return Parameters:	Status (1 Octet)
+
+		Buffer Size in Kilobytes
+
+
+Read Controller Tracing Filter Command
+=======================================
+
+	Command Code:		<not yet assigned>
+	Controller Index:	<controller id>
+	Command Parameters:
+	Return Parameters:	Status (1 Octet)
+				Tracing_Enable (1 Octect)
+				Num_Filters (2 Octect)
+				Protocol_UUID[i] (16 Octets)
+				Protocol_Identifier[i] (16 Octets)
+
+		Tracing_Enable:	0x00 Tracing disabled
+				0x01 Command and Event tracing
+				0x02 Command, Event and ACL tracing
+				0x03 Command, Event, ACL and SCO tracing
+
+
+Write Controller Tracing Filter Command
+=======================================
+
+	Command Code:		<not yet assigned>
+	Controller Index:	<controller id>
+	Command Parameters:	Tracing_Enable (1 Octect)
+				Num_Filters (2 Octect)
+				Protocol_UUID[i] (16 Octets)
+				Protocol_Identifier[i] (16 Octets)
+	Return Paramters:	Status (1 Octet)
+
+
+Command Complete Event
+======================
+
+Event Code		0x0001
+Controller Index:	<controller id> or <non-controller>
+Event Parameters	Command_Opcode (2 Octets)
+			Return_Parameters
+
+
+Command Status Event
+====================
+
+Event Code		0x0002
+Controller Index:	<controller id> or <non-controller>
+Event Parameters	Status (1 Octet)
+			Command_Opcode (2 Octets)
+
+
+Controller Error Event
+======================
+
+Event Code		0x0003
+Controller Index:	<controller id>
+Event Parameters	Error_Code (1 Octet)
+
+
+Index Added Event
+=================
+
+Event Code		0x0004
+Controller Index:	<controller id>
+Event Parameters
+
+
+Index Removed Event
+===================
+
+Event Code		0x0005
+Controller Index:	<controller id>
+Event Parameters
+
+Controller Powered Event
+========================
+
+Event Code		0x0006
+Controller Index:	<controller id>
+Event Parameters	Powered (1 Octet)
+
+Controller Discoverable Event
+=============================
+
+Event Code		0x0007
+Controller Index:	<controller id>
+Event Parameters	Discoverable (1 Octet)
+
+Controller Connectable Event
+============================
+
+Event Code		0x0008
+Controller Index:	<controller id>
+Event Parameters	Connectable (1 Octet)
+
+Controller Pairable Event
+=========================
+
+Event Code		0x0009
+Controller Index:	<controller id>
+Event Parameters	Pairable (1 Octet)
+
+New Key Event
+=============
+
+Event Code		0x000A
+Controller Index:	<controller id>
+Event Parameters	Key {
+				Address (6 Octets)
+				Type (1 Octet)
+				Value (16 Octets)
+				PIN_Length (1 Octet)
+			}
+			Old_Key_Type (1 Octet)
+
+Device Connected Event
+======================
+
+Event Code		0x000B
+Controller Index:	<controller id>
+Event Parameters	Address (6 Octets)
+
+Device Disconnected Event
+=========================
+
+Event Code		0x000C
+Controller Index:	<controller id>
+Event Parameters	Address (6 Octets)
+
+Connect Failed Event
+====================
+
+Event Code		0x000D
+Controller Index:	<controller id>
+Event Parameters	Address (6 Octets)
+			Status (1 Octet)
+
+PIN Code Request Event
+======================
+
+Event Code		0x000E
+Controller Index:	<controller id>
+Event Parameters	Address (6 Octets)
+			Secure (1 Octet)
+
+	Secure: 0x01  secure PIN code required
+		0x00  secure PIN code not required
+
+User Confirmation Request Event
+===============================
+
+Event Code		0x000F
+Controller Index:	<controller id>
+Event Parameters	Address (6 Octets)
+			Value (4 Octets)
+
+
+Authentication Failed Event
+===========================
+
+Event Code		0x0010
+Controller Index:	<controller id>
+Event Parameters	Address (6 Octets)
+			Status (1 Octet)
+
+Local Name Changed Event
+========================
+
+Event Code		0x0011
+Controller Index	<controller id>
+Event Parameters	Name (249 Octets)
+
+Device Found Event
+==================
+
+Event Code		0x0012
+Controller Index	<controller id>
+Event Parameters	Address (6 Octets)
+			Class_Of_Device (3 Octets)
+			RSSI (1 Octet)
+			EIR_Data (240 Octets)
+
+Remote Name Event
+=================
+
+Event Code		0x0013
+Controller Index	<controller id>
+Event Parameters	Address (6 Octets)
+			Name (249 Octets)
+
+
+Discovering Event
+=================
+
+Event Code		0x00014
+Controller Index	<controller id>
+Event Parameters	Discovering (1 Octet)

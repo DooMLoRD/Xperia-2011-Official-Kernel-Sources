@@ -17,14 +17,9 @@
 #ifndef QEMU_MEMCHECK_MEMCHECK_UTIL_H
 #define QEMU_MEMCHECK_MEMCHECK_UTIL_H
 
-/* This file should compile iff qemu is built with memory checking
- * configuration turned on. */
-#ifndef CONFIG_MEMCHECK
-#error CONFIG_MEMCHECK is not defined.
-#endif  // CONFIG_MEMCHECK
-
 #include "memcheck_common.h"
-#include "elff_api.h"
+#include "elff/elff_api.h"
+#include "exec.h"
 
 #ifdef __cplusplus
 extern "C" {

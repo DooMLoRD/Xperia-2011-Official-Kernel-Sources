@@ -14,12 +14,6 @@
  * Contains implementation of memory checking framework in the emulator.
  */
 
-/* This file should compile iff qemu is built with memory checking
- * configuration turned on. */
-#ifndef CONFIG_MEMCHECK
-#error CONFIG_MEMCHECK is not defined.
-#endif  // CONFIG_MEMCHECK
-
 #include "qemu-queue.h"
 #include "qemu_file.h"
 #include "elff_api.h"
@@ -138,7 +132,7 @@ av_access_violation(ProcDesc* proc,
                     }
                     memset(align, ' ', set_align);
                     align[set_align] = '\0';
-                    printf(align);
+                    printf("%s", align);
                     if (inl[index].inlined_in_file == NULL) {
                         printf("inlined to %s in unknown location\n",
                                inl[index].routine_name);
@@ -561,7 +555,7 @@ void
 memcheck_guest_print_str(target_ulong str) {
     char str_copy[4096];
     memcheck_get_guest_string(str_copy, str, sizeof(str_copy));
-    printf(str_copy);
+    printf("%s", str_copy);
 }
 
 /* Validates read operations, detected in __ldx_mmu routine.

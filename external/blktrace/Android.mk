@@ -2,8 +2,6 @@ BUILD_BLKTRACE := false
 
 ifeq ($(BUILD_BLKTRACE), true)
 
-ifneq ($(TARGET_SIMULATOR),true)
-
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
@@ -51,5 +49,4 @@ include $(BUILD_EXECUTABLE)
 #LOCAL_SYSTEM_SHARED_LIBRARIES := libc
 #include $(BUILD_EXECUTABLE)
 
-endif
 endif

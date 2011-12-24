@@ -46,14 +46,10 @@
 
 #include "sdpd.h"
 #include "log.h"
-#include "manager.h"
 #include "adapter.h"
+#include "manager.h"
 
 static sdp_record_t *server = NULL;
-
-static uint16_t did_vendor = 0x0000;
-static uint16_t did_product = 0x0000;
-static uint16_t did_version = 0x0000;
 
 /*
  * List of version numbers supported by the SDP server.
@@ -69,7 +65,7 @@ static const int sdpServerVnumEntries = 1;
  * seconds. Used for updating the service db state
  * attribute of the service record of the SDP server
  */
-uint32_t sdp_get_time()
+uint32_t sdp_get_time(void)
 {
 	/*
 	 * To handle failure in gettimeofday, so an old
@@ -95,168 +91,6 @@ static void update_db_timestamp(void)
 	uint32_t dbts = sdp_get_time();
 	sdp_data_t *d = sdp_data_alloc(SDP_UINT32, &dbts);
 	sdp_attr_replace(server, SDP_ATTR_SVCDB_STATE, d);
-}
-
-static void update_adapter_svclass_list(struct btd_adapter *adapter)
-{
-	sdp_list_t *list = adapter_get_services(adapter);
-	uint8_t val = 0;
-
-	for (; list; list = list->next) {
-		sdp_record_t *rec = (sdp_record_t *) list->data;
-
-		if (rec->svclass.type != SDP_UUID16)
-			continue;
-
-		switch (rec->svclass.value.uuid16) {
-		case DIALUP_NET_SVCLASS_ID:
-		case CIP_SVCLASS_ID:
-			val |= 0x42;	/* Telephony & Networking */
-			break;
-		case IRMC_SYNC_SVCLASS_ID:
-		case OBEX_OBJPUSH_SVCLASS_ID:
-		case OBEX_FILETRANS_SVCLASS_ID:
-		case IRMC_SYNC_CMD_SVCLASS_ID:
-		case PBAP_PSE_SVCLASS_ID:
-			val |= 0x10;	/* Object Transfer */
-			break;
-		case HEADSET_SVCLASS_ID:
-		case HANDSFREE_SVCLASS_ID:
-			val |= 0x20;	/* Audio */
-			break;
-		case CORDLESS_TELEPHONY_SVCLASS_ID:
-		case INTERCOM_SVCLASS_ID:
-		case FAX_SVCLASS_ID:
-		case SAP_SVCLASS_ID:
-		/*
-		 * Setting the telephony bit for the handsfree audio gateway
-		 * role is not required by the HFP specification, but the
-		 * Nokia 616 carkit is just plain broken! It will refuse
-		 * pairing without this bit set.
-		 */
-		case HANDSFREE_AGW_SVCLASS_ID:
-			val |= 0x40;	/* Telephony */
-			break;
-		case AUDIO_SOURCE_SVCLASS_ID:
-		case VIDEO_SOURCE_SVCLASS_ID:
-			val |= 0x08;	/* Capturing */
-			break;
-		case AUDIO_SINK_SVCLASS_ID:
-		case VIDEO_SINK_SVCLASS_ID:
-			val |= 0x04;	/* Rendering */
-			break;
-		case PANU_SVCLASS_ID:
-		case NAP_SVCLASS_ID:
-		case GN_SVCLASS_ID:
-			val |= 0x02;	/* Networking */
-			break;
-		}
-	}
-
-	SDPDBG("Service classes 0x%02x", val);
-
-	manager_update_svc(adapter, val);
-}
-
-static void update_svclass_list(const bdaddr_t *src)
-{
-	GSList *adapters = manager_get_adapters();
-
-	for (; adapters; adapters = adapters->next) {
-		struct btd_adapter *adapter = adapters->data;
-		bdaddr_t bdaddr;
-
-		adapter_get_address(adapter, &bdaddr);
-
-		if (bacmp(src, BDADDR_ANY) == 0 || bacmp(src, &bdaddr) == 0)
-			update_adapter_svclass_list(adapter);
-	}
-
-}
-
-void create_ext_inquiry_response(const char *name,
-					int8_t tx_power, sdp_list_t *services,
-					uint8_t *data)
-{
-	sdp_list_t *list = services;
-	uint8_t *ptr = data;
-	uint16_t uuid[24];
-	int i, index = 0;
-
-	if (name) {
-		int len = strlen(name);
-
-		if (len > 48) {
-			len = 48;
-			ptr[1] = 0x08;
-		} else
-			ptr[1] = 0x09;
-
-		ptr[0] = len + 1;
-
-		memcpy(ptr + 2, name, len);
-
-		ptr += len + 2;
-	}
-
-	if (tx_power != 0) {
-		*ptr++ = 2;
-		*ptr++ = 0x0a;
-		*ptr++ = (uint8_t) tx_power;
-	}
-
-	if (did_vendor != 0x0000) {
-		uint16_t source = 0x0002;
-		*ptr++ = 9;
-		*ptr++ = 0x10;
-		*ptr++ = (source & 0x00ff);
-		*ptr++ = (source & 0xff00) >> 8;
-		*ptr++ = (did_vendor & 0x00ff);
-		*ptr++ = (did_vendor & 0xff00) >> 8;
-		*ptr++ = (did_product & 0x00ff);
-		*ptr++ = (did_product & 0xff00) >> 8;
-		*ptr++ = (did_version & 0x00ff);
-		*ptr++ = (did_version & 0xff00) >> 8;
-	}
-
-	ptr[1] = 0x03;
-
-	for (; list; list = list->next) {
-		sdp_record_t *rec = (sdp_record_t *) list->data;
-
-		if (rec->svclass.type != SDP_UUID16)
-			continue;
-
-		if (rec->svclass.value.uuid16 < 0x1100)
-			continue;
-
-		if (rec->svclass.value.uuid16 == PNP_INFO_SVCLASS_ID)
-			continue;
-
-		if (index > 23) {
-			ptr[1] = 0x02;
-			break;
-		}
-
-		for (i = 0; i < index; i++)
-			if (uuid[i] == rec->svclass.value.uuid16)
-				break;
-
-		if (i == index - 1)
-			continue;
-
-		uuid[index++] = rec->svclass.value.uuid16;
-	}
-
-	if (index > 0) {
-		ptr[0] = (index * 2) + 1;
-		ptr += 2;
-
-		for (i = 0; i < index; i++) {
-			*ptr++ = (uuid[i] & 0x00ff);
-			*ptr++ = (uuid[i] & 0xff00) >> 8;
-		}
-	}
 }
 
 void register_public_browse_group(void)
@@ -317,8 +151,8 @@ void register_server_service(void)
 	 * to the server on command line. Now defaults to 1.0
 	 * Build the version number sequence first
 	 */
-	versions = (void **)malloc(sdpServerVnumEntries * sizeof(void *));
-	versionDTDs = (void **)malloc(sdpServerVnumEntries * sizeof(void *));
+	versions = malloc(sdpServerVnumEntries * sizeof(void *));
+	versionDTDs = malloc(sdpServerVnumEntries * sizeof(void *));
 	dtd = SDP_UINT16;
 	for (i = 0; i < sdpServerVnumEntries; i++) {
 		uint16_t *version = malloc(sizeof(uint16_t));
@@ -336,7 +170,6 @@ void register_server_service(void)
 	sdp_attr_add(server, SDP_ATTR_VERSION_NUM_LIST, pData);
 
 	update_db_timestamp();
-	update_svclass_list(BDADDR_ANY);
 }
 
 void register_device_id(const uint16_t vendor, const uint16_t product,
@@ -353,9 +186,7 @@ void register_device_id(const uint16_t vendor, const uint16_t product,
 
 	info("Adding device id record for %04x:%04x", vendor, product);
 
-	did_vendor = vendor;
-	did_product = product;
-	did_version = version;
+	btd_manager_set_did(vendor, product, version);
 
 	record->handle = sdp_next_handle();
 
@@ -398,7 +229,6 @@ void register_device_id(const uint16_t vendor, const uint16_t product,
 	sdp_attr_add(record, 0x0205, source_data);
 
 	update_db_timestamp();
-	update_svclass_list(BDADDR_ANY);
 }
 
 int add_record_to_server(const bdaddr_t *src, sdp_record_t *rec)
@@ -409,10 +239,10 @@ int add_record_to_server(const bdaddr_t *src, sdp_record_t *rec)
 	if (rec->handle == 0xffffffff) {
 		rec->handle = sdp_next_handle();
 		if (rec->handle < 0x10000)
-			return -1;
+			return -ENOSPC;
 	} else {
 		if (sdp_record_find(rec->handle))
-			return -1;
+			return -EEXIST;
 	}
 
 	DBG("Adding record with handle 0x%05x", rec->handle);
@@ -439,7 +269,6 @@ int add_record_to_server(const bdaddr_t *src, sdp_record_t *rec)
 	}
 
 	update_db_timestamp();
-	update_svclass_list(src);
 
 	return 0;
 }
@@ -454,10 +283,8 @@ int remove_record_from_server(uint32_t handle)
 	if (!rec)
 		return -ENOENT;
 
-	if (sdp_record_remove(handle) == 0) {
+	if (sdp_record_remove(handle) == 0)
 		update_db_timestamp();
-		update_svclass_list(BDADDR_ANY);
-	}
 
 	sdp_record_free(rec);
 
@@ -584,7 +411,7 @@ int service_register_req(sdp_req_t *req, sdp_buf_t *rsp)
 		bufsize -= sizeof(bdaddr_t);
 	}
 
-	// save image of PDU: we need it when clients request this attribute
+	/* save image of PDU: we need it when clients request this attribute */
 	rec = extract_pdu_server(&req->device, p, bufsize, 0xffffffff, &scanned);
 	if (!rec)
 		goto invalid;
@@ -621,7 +448,6 @@ success:
 	}
 
 	update_db_timestamp();
-	update_svclass_list(&req->device);
 
 	/* Build a rsp buffer */
 	bt_put_unaligned(htonl(rec->handle), (uint32_t *) rsp->data);
@@ -670,7 +496,6 @@ int service_update_req(sdp_req_t *req, sdp_buf_t *rsp)
 	assert(nrec == orec);
 
 	update_db_timestamp();
-	update_svclass_list(BDADDR_ANY);
 
 done:
 	p = rsp->data;
@@ -690,17 +515,14 @@ int service_remove_req(sdp_req_t *req, sdp_buf_t *rsp)
 	int status = 0;
 
 	/* extract service record handle */
-	p += sizeof(uint32_t);
 
 	rec = sdp_record_find(handle);
 	if (rec) {
 		sdp_svcdb_collect(rec);
 		status = sdp_record_remove(handle);
 		sdp_record_free(rec);
-		if (status == 0) {
+		if (status == 0)
 			update_db_timestamp();
-			update_svclass_list(BDADDR_ANY);
-		}
 	} else {
 		status = SDP_INVALID_RECORD_HANDLE;
 		SDPDBG("Could not find record : 0x%x", handle);

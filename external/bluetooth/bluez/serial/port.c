@@ -53,12 +53,12 @@
 
 #include "error.h"
 #include "manager.h"
+#include "adapter.h"
+#include "device.h"
 #include "storage.h"
 #include "port.h"
 
 #define SERIAL_PORT_INTERFACE	"org.bluez.Serial"
-#define ERROR_INVALID_ARGS	"org.bluez.Error.InvalidArguments"
-#define ERROR_DOES_NOT_EXIST	"org.bluez.Error.DoesNotExist"
 
 #define MAX_OPEN_TRIES		5
 #define OPEN_WAIT		300	/* ms. udev node creation retry wait */
@@ -236,35 +236,15 @@ void port_release_all(void)
 	g_slist_free(devices);
 }
 
-static inline DBusMessage *does_not_exist(DBusMessage *msg,
-					const char *description)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".DoesNotExist",
-				description);
-}
-
-static inline DBusMessage *invalid_arguments(DBusMessage *msg,
-					const char *description)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".InvalidArguments",
-				description);
-}
-
-static inline DBusMessage *failed(DBusMessage *msg, const char *description)
-{
-	return g_dbus_create_error(msg, ERROR_INTERFACE ".Failed",
-				description);
-}
-
 static void open_notify(int fd, int err, struct serial_port *port)
 {
 	struct serial_device *device = port->device;
 	DBusMessage *reply;
 
-	if (err) {
+	if (err < 0) {
 		/* Max tries exceeded */
 		port_release(port);
-		reply = failed(port->msg, strerror(err));
+		reply = btd_error_failed(port->msg, strerror(-err));
 	} else {
 		port->fd = fd;
 		reply = g_dbus_create_reply(port->msg,
@@ -287,9 +267,9 @@ static gboolean open_continue(gpointer user_data)
 
 	fd = open(port->dev, O_RDONLY | O_NOCTTY);
 	if (fd < 0) {
-		int err = errno;
+		int err = -errno;
 		error("Could not open %s: %s (%d)",
-				port->dev, strerror(err), err);
+				port->dev, strerror(-err), -err);
 		if (!--ntries) {
 			/* Reporting error */
 			open_notify(fd, err, port);
@@ -332,7 +312,7 @@ static void rfcomm_connect_cb(GIOChannel *chan, GError *conn_err,
 
 	if (conn_err) {
 		error("%s", conn_err->message);
-		reply = failed(port->msg, conn_err->message);
+		reply = btd_error_failed(port->msg, conn_err->message);
 		goto fail;
 	}
 
@@ -349,9 +329,9 @@ static void rfcomm_connect_cb(GIOChannel *chan, GError *conn_err,
 	sk = g_io_channel_unix_get_fd(chan);
 	port->id = ioctl(sk, RFCOMMCREATEDEV, &req);
 	if (port->id < 0) {
-		int err = errno;
-		error("ioctl(RFCOMMCREATEDEV): %s (%d)", strerror(err), err);
-		reply = failed(port->msg, strerror(err));
+		int err = -errno;
+		error("ioctl(RFCOMMCREATEDEV): %s (%d)", strerror(-err), -err);
+		reply = btd_error_failed(port->msg, strerror(-err));
 		g_io_channel_shutdown(chan, TRUE, NULL);
 		goto fail;
 	}
@@ -394,13 +374,13 @@ static void get_record_cb(sdp_list_t *recs, int err, gpointer user_data)
 	if (err < 0) {
 		error("Unable to get service record: %s (%d)", strerror(-err),
 			-err);
-		reply = failed(port->msg, strerror(-err));
+		reply = btd_error_failed(port->msg, strerror(-err));
 		goto failed;
 	}
 
 	if (!recs || !recs->data) {
 		error("No record found");
-		reply = failed(port->msg, "No record found");
+		reply = btd_error_failed(port->msg, "No record found");
 		goto failed;
 	}
 
@@ -408,7 +388,7 @@ static void get_record_cb(sdp_list_t *recs, int err, gpointer user_data)
 
 	if (sdp_get_access_protos(record, &protos) < 0) {
 		error("Unable to get access protos from port record");
-		reply = failed(port->msg, "Invalid channel");
+		reply = btd_error_failed(port->msg, "Invalid channel");
 		goto failed;
 	}
 
@@ -425,7 +405,7 @@ static void get_record_cb(sdp_list_t *recs, int err, gpointer user_data)
 				BT_IO_OPT_INVALID);
 	if (!port->io) {
 		error("%s", gerr->message);
-		reply = failed(port->msg, gerr->message);
+		reply = btd_error_failed(port->msg, gerr->message);
 		g_error_free(gerr);
 		goto failed;
 	}
@@ -505,13 +485,13 @@ static DBusMessage *port_connect(DBusConnection *conn,
 
 		channel = strtol(pattern, &endptr, 10);
 		if ((endptr && *endptr != '\0') || channel < 1 || channel > 30)
-			return does_not_exist(msg, "Does not match");
+			return btd_error_does_not_exist(msg);
 
 		port = create_port(device, NULL, channel);
 	}
 
 	if (port->listener_id)
-		return failed(msg, "Port already in use");
+		return btd_error_failed(msg, "Port already in use");
 
 	port->listener_id = g_dbus_add_disconnect_watch(conn,
 						dbus_message_get_sender(msg),
@@ -521,13 +501,11 @@ static DBusMessage *port_connect(DBusConnection *conn,
 
 	err = connect_port(port);
 	if (err < 0) {
-		DBusMessage *reply;
-
 		error("%s", strerror(-err));
 		g_dbus_remove_watch(conn, port->listener_id);
 		port->listener_id = 0;
-		reply = failed(msg, strerror(-err));
-		return reply;
+
+		return btd_error_failed(msg, strerror(-err));
 	}
 
 	return NULL;
@@ -546,15 +524,15 @@ static DBusMessage *port_disconnect(DBusConnection *conn,
 
 	port = find_port(device->ports, dev);
 	if (!port)
-		return does_not_exist(msg, "Port does not exist");
+		return btd_error_does_not_exist(msg);
 
 	if (!port->listener_id)
-		return failed(msg, "Not connected");
+		return btd_error_not_connected(msg);
 
 	owner = dbus_message_get_sender(port->msg);
 	caller = dbus_message_get_sender(msg);
 	if (!g_str_equal(owner, caller))
-		return failed(msg, "Operation not permited");
+		return btd_error_not_authorized(msg);
 
 	port_release(port);
 

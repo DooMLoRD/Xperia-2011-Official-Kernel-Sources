@@ -46,6 +46,7 @@ static const char *mx_names[RTAX_MAX+1] = {
 	[RTAX_INITCWND] = "initcwnd",
 	[RTAX_FEATURES] = "features",
 	[RTAX_RTO_MIN]	= "rto_min",
+	[RTAX_INITRWND]	= "initrwnd",
 };
 static void usage(void) __attribute__((noreturn));
 
@@ -68,12 +69,11 @@ static void usage(void)
 	fprintf(stderr, "           [ rtt TIME ] [ rttvar TIME ] [reordering NUMBER ]\n");
 	fprintf(stderr, "           [ window NUMBER] [ cwnd NUMBER ] [ initcwnd NUMBER ]\n");
 	fprintf(stderr, "           [ ssthresh NUMBER ] [ realms REALM ] [ src ADDRESS ]\n");
-	fprintf(stderr, "           [ rto_min TIME ] [ hoplimit NUMBER ] \n");
+	fprintf(stderr, "           [ rto_min TIME ] [ hoplimit NUMBER ] [ initrwnd NUMBER ]\n");
 	fprintf(stderr, "TYPE := [ unicast | local | broadcast | multicast | throw |\n");
 	fprintf(stderr, "          unreachable | prohibit | blackhole | nat ]\n");
 	fprintf(stderr, "TABLE_ID := [ local | main | default | all | NUMBER ]\n");
 	fprintf(stderr, "SCOPE := [ host | link | global | NUMBER ]\n");
-	fprintf(stderr, "FLAGS := [ equalize ]\n");
 	fprintf(stderr, "MP_ALGO := { rr | drr | random | wrandom }\n");
 	fprintf(stderr, "NHFLAGS := [ onlink | pervasive ]\n");
 	fprintf(stderr, "RTPROTO := [ kernel | boot | static | NUMBER ]\n");
@@ -160,14 +160,11 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 	if (r->rtm_family == AF_INET6 && table != RT_TABLE_MAIN)
 		ip6_multiple_tables = 1;
 
+	if (filter.cloned == !(r->rtm_flags&RTM_F_CLONED))
+		return 0;
+
 	if (r->rtm_family == AF_INET6 && !ip6_multiple_tables) {
-		if (filter.cloned) {
-			if (!(r->rtm_flags&RTM_F_CLONED))
-				return 0;
-		}
 		if (filter.tb) {
-			if (!filter.cloned && r->rtm_flags&RTM_F_CLONED)
-				return 0;
 			if (filter.tb == RT_TABLE_LOCAL) {
 				if (r->rtm_type != RTN_LOCAL)
 					return 0;
@@ -179,10 +176,6 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			}
 		}
 	} else {
-		if (filter.cloned) {
-			if (!(r->rtm_flags&RTM_F_CLONED))
-				return 0;
-		}
 		if (filter.tb > 0 && filter.tb != table)
 			return 0;
 	}
@@ -382,8 +375,6 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		fprintf(fp, "onlink ");
 	if (r->rtm_flags & RTNH_F_PERVASIVE)
 		fprintf(fp, "pervasive ");
-	if (r->rtm_flags & RTM_F_EQUALIZE)
-		fprintf(fp, "equalize ");
 	if (r->rtm_flags & RTM_F_NOTIFY)
 		fprintf(fp, "notify ");
 
@@ -423,9 +414,7 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 		PRTFL(FAST, "fastroute");
 		PRTFL(NOTIFY, "notify");
 		PRTFL(TPROXY, "proxy");
-#ifdef RTCF_EQUALIZE
-		PRTFL(EQUALIZE, "equalize");
-#endif
+
 		if (flags)
 			fprintf(fp, "%s%x> ", first ? "<" : "", flags);
 		if (tb[RTA_CACHEINFO]) {
@@ -493,7 +482,7 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			if (mxrta[i] == NULL)
 				continue;
 			if (!hz)
-				hz = get_hz();
+				hz = get_user_hz();
 
 			if (i < sizeof(mx_names)/sizeof(char*) && mx_names[i])
 				fprintf(fp, " %s", mx_names[i]);
@@ -505,7 +494,7 @@ int print_route(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 			val = *(unsigned*)RTA_DATA(mxrta[i]);
 			switch (i) {
 			case RTAX_HOPLIMIT:
-				if ((long)val == -1)
+				if ((int)val == -1)
 					val = 0;
 				/* fall through */
 			default:
@@ -849,6 +838,16 @@ int iproute_modify(int cmd, unsigned flags, int argc, char **argv)
 			if (get_unsigned(&win, *argv, 0))
 				invarg("\"initcwnd\" value is invalid\n", *argv);
 			rta_addattr32(mxrta, sizeof(mxbuf), RTAX_INITCWND, win);
+		} else if (matches(*argv, "initrwnd") == 0) {
+			unsigned win;
+			NEXT_ARG();
+			if (strcmp(*argv, "lock") == 0) {
+				mxlock |= (1<<RTAX_INITRWND);
+				NEXT_ARG();
+			}
+			if (get_unsigned(&win, *argv, 0))
+				invarg("\"initrwnd\" value is invalid\n", *argv);
+			rta_addattr32(mxrta, sizeof(mxbuf), RTAX_INITRWND, win);
 		} else if (matches(*argv, "rttvar") == 0) {
 			unsigned win;
 			NEXT_ARG();
@@ -878,9 +877,6 @@ int iproute_modify(int cmd, unsigned flags, int argc, char **argv)
 			addattr32(&req.n, sizeof(req), RTA_FLOW, realm);
 		} else if (strcmp(*argv, "onlink") == 0) {
 			req.r.rtm_flags |= RTNH_F_ONLINK;
-		} else if (matches(*argv, "equalize") == 0 ||
-			   strcmp(*argv, "eql") == 0) {
-			req.r.rtm_flags |= RTM_F_EQUALIZE;
 		} else if (strcmp(*argv, "nexthop") == 0) {
 			nhs_ok = 1;
 			break;
@@ -1032,6 +1028,7 @@ static int iproute_flush_cache(void)
 
 	if ((write (flush_fd, (void *)buffer, len)) < len) {
 		fprintf (stderr, "Cannot flush routing cache\n");
+		close(flush_fd);
 		return -1;
 	}
 	close(flush_fd);

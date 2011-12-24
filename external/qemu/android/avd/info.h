@@ -14,6 +14,7 @@
 
 #include "android/utils/ini.h"
 #include "android/avd/hw-config.h"
+#include "android/config/config.h"
 
 /* An Android Virtual Device (AVD for short) corresponds to a
  * directory containing all kernel/disk images for a given virtual
@@ -45,6 +46,7 @@
  *
  */
 
+
 /* a macro used to define the list of disk images managed by the
  * implementation. This macro will be expanded several times with
  * varying definitions of _AVD_IMG
@@ -58,6 +60,7 @@
     _AVD_IMG(USERDATA,"userdata-qemu.img", "user data") \
     _AVD_IMG(CACHE,"cache.img","cache") \
     _AVD_IMG(SDCARD,"sdcard.img","SD Card") \
+    _AVD_IMG(SNAPSHOTS,"snapshots.img","snapshots") \
 
 /* define the enumared values corresponding to each AVD image type
  * examples are: AVD_IMAGE_KERNEL, AVD_IMAGE_SYSTEM, etc..
@@ -86,6 +89,8 @@ typedef enum {
     AVDINFO_NO_SDCARD = (1 << 3),
     /* use to wipe the system image with new initial values */
     AVDINFO_WIPE_SYSTEM = (1 << 4),
+    /* use to ignore ignore state snapshot image (default or provided) */
+    AVDINFO_NO_SNAPSHOTS = (1 << 5),
 } AvdFlags;
 
 typedef struct {
@@ -125,6 +130,55 @@ void        avdInfo_free( AvdInfo*  i );
  */
 const char*  avdInfo_getName( AvdInfo*  i );
 
+/* Return the target API level for this AVD.
+ * Note that this will be some ridiculously large
+ * value (e.g. 1000) if this value cannot be properly
+ * determined (e.g. you're using an AVD from a preview SDK)
+ */
+int    avdInfo_getApiLevel( AvdInfo*  i );
+
+/* Returns the path to various images corresponding to a given AVD.
+ * NULL if the image cannot be found. Returned strings must be freed
+ * by the caller.
+ */
+char*  avdInfo_getKernelPath( AvdInfo*  i );
+char*  avdInfo_getRamdiskPath( AvdInfo*  i );
+char*  avdInfo_getSdCardPath( AvdInfo* i );
+char*  avdInfo_getSnapStoragePath( AvdInfo* i );
+
+/* This function returns NULL if the cache image file cannot be found.
+ * Use avdInfo_getDefaultCachePath() to retrieve the default path
+ * if you intend to create the partition file there.
+ */
+char*  avdInfo_getCachePath( AvdInfo*  i );
+char*  avdInfo_getDefaultCachePath( AvdInfo*  i );
+
+
+/* avdInfo_getSystemImagePath() will return NULL, except if the AVD content
+ * directory contains a file named "system-qemu.img".
+ */
+char*  avdInfo_getSystemImagePath( AvdInfo* i );
+
+/* avdInfo_getSystemInitImagePath() retrieves the path to the read-only
+ * initialization image for this disk image.
+ */
+char*  avdInfo_getSystemInitImagePath( AvdInfo*  i );
+
+char*  avdInfo_getDataImagePath( AvdInfo*  i );
+char*  avdInfo_getDefaultDataImagePath( AvdInfo*  i );
+char*  avdInfo_getDataInitImagePath( AvdInfo* i );
+
+/* Returns the path to a given AVD image file. This will return NULL if
+ * the file cannot be found / does not exist.
+ */
+const char*  avdInfo_getImagePath( AvdInfo*  i, AvdImageType  imageType );
+
+/* Returns the default path of a given AVD image file. This only makes sense
+ * if avdInfo_getImagePath() returned NULL.
+ */
+const char*  avdInfo_getImageDefaultPath( AvdInfo*  i, AvdImageType  imageType );
+
+
 /* Try to find the path of a given image file, returns NULL
  * if the corresponding file could not be found. the string
  * belongs to the AvdInfo object.
@@ -149,27 +203,45 @@ int          avdInfo_lockImageFile( AvdInfo*  i, AvdImageType  imageType, int  a
 /* Manually set the path of a given image file. */
 void         avdInfo_setImageFile( AvdInfo*  i, AvdImageType  imageType, const char*  imagePath );
 
-/* Returns the path of the skin directory */
-/* the string belongs to the AvdInfo object */
-const char*  avdInfo_getSkinPath( AvdInfo*  i );
-
-/* Returns the name of the virtual device's skin */
-const char*  avdInfo_getSkinName( AvdInfo*  i );
-
-/* Returns the root skin directory for this device */
-const char*  avdInfo_getSkinDir ( AvdInfo*  i );
-
 /* Returns the content path of the virtual device */
 const char*  avdInfo_getContentPath( AvdInfo*  i );
+
+/* Retrieve the AVD's specific skin information.
+ * On exit:
+ *   '*pSkinName' points to the skin's name.
+ *   '*pSkinDir' points to the skin's directory.
+ *
+ * Note that the skin's content will be under <skinDir>/<skinName>.
+ */
+void         avdInfo_getSkinInfo( AvdInfo*  i, char** pSkinName, char** pSkinDir );
+
+/* Find a charmap file named <charmapName>.kcm for this AVD.
+ * Returns the path of the file on success, or NULL if not found.
+ * The result string must be freed by the caller.
+ */
+char*        avdInfo_getCharmapFile( AvdInfo* i, const char* charmapName );
 
 /* Returns TRUE iff in the Android build system */
 int          avdInfo_inAndroidBuild( AvdInfo*  i );
 
+/* Returns the target ABI for the corresponding platform image.
+ * This may return NULL if it cannot be determined. Otherwise this is
+ * a string like "armeabi", "armeabi-v7a" or "x86" that must be freed
+ * by the caller.
+ */
+char*        avdInfo_getTargetAbi( AvdInfo*  i );
+
 /* Reads the AVD's hardware configuration into 'hw'. returns -1 on error, 0 otherwise */
-int          avdInfo_getHwConfig( AvdInfo*  i, AndroidHwConfig*  hw );
+int          avdInfo_initHwConfig( AvdInfo*  i, AndroidHwConfig*  hw );
 
 /* Returns a *copy* of the path used to store trace 'foo'. result must be freed by caller */
 char*        avdInfo_getTracePath( AvdInfo*  i, const char*  traceName );
+
+/* Returns the path of the hardware.ini where we will write the AVD's
+ * complete hardware configuration before launching the corresponding
+ * core.
+ */
+const char*  avdInfo_getCoreHwIniPath( AvdInfo* i );
 
 /* */
 

@@ -2,21 +2,34 @@
 #define CONSOLE_H
 
 #include "qemu-char.h"
+#include "qdict.h"
+#include "notify.h"
 
 /* keyboard/mouse support */
 
 #define MOUSE_EVENT_LBUTTON 0x01
 #define MOUSE_EVENT_RBUTTON 0x02
 #define MOUSE_EVENT_MBUTTON 0x04
+extern int multitouch_enabled;
+
+/* identical to the ps/2 keyboard bits */
+#define QEMU_SCROLL_LOCK_LED (1 << 0)
+#define QEMU_NUM_LOCK_LED    (1 << 1)
+#define QEMU_CAPS_LOCK_LED   (1 << 2)
 
 /* in ms */
-#if 1  /* ANDROID */
+#ifdef CONFIG_ANDROID
 #define GUI_REFRESH_INTERVAL (1000/60)  /* 60 frames/s is better */
 #else
 #define GUI_REFRESH_INTERVAL 30
 #endif
 
+typedef int QEMUDisplayCloseCallback(void *opaque);
+void qemu_set_display_close_handler(QEMUDisplayCloseCallback *cb, void *opaque);
+int qemu_run_display_close_handler(void);
+
 typedef void QEMUPutKBDEvent(void *opaque, int keycode);
+typedef void QEMUPutLEDEvent(void *opaque, int ledstate);
 typedef void QEMUPutMouseEvent(void *opaque, int dx, int dy, int dz, int buttons_state);
 
 typedef struct QEMUPutMouseEntry {
@@ -25,19 +38,48 @@ typedef struct QEMUPutMouseEntry {
     int qemu_put_mouse_event_absolute;
     char *qemu_put_mouse_event_name;
 
+    int index;
+
     /* used internally by qemu for handling mice */
-    struct QEMUPutMouseEntry *next;
+    QTAILQ_ENTRY(QEMUPutMouseEntry) node;
 } QEMUPutMouseEntry;
 
+typedef struct QEMUPutKBDEntry {
+    QEMUPutKBDEvent *put_kbd_event;
+    void *opaque;
+
+    /* used internally by qemu for handling keyboards */
+    QTAILQ_ENTRY(QEMUPutKBDEntry) next;
+} QEMUPutKBDEntry;
+
+typedef struct QEMUPutLEDEntry {
+    QEMUPutLEDEvent *put_led;
+    void *opaque;
+    QTAILQ_ENTRY(QEMUPutLEDEntry) next;
+} QEMUPutLEDEntry;
+
 void qemu_add_kbd_event_handler(QEMUPutKBDEvent *func, void *opaque);
+void qemu_remove_kbd_event_handler(QEMUPutKBDEvent *func, void *opaque);
 QEMUPutMouseEntry *qemu_add_mouse_event_handler(QEMUPutMouseEvent *func,
                                                 void *opaque, int absolute,
                                                 const char *name);
 void qemu_remove_mouse_event_handler(QEMUPutMouseEntry *entry);
+void qemu_activate_mouse_event_handler(QEMUPutMouseEntry *entry);
+
+QEMUPutLEDEntry *qemu_add_led_event_handler(QEMUPutLEDEvent *func, void *opaque);
+void qemu_remove_led_event_handler(QEMUPutLEDEntry *entry);
 
 void kbd_put_keycode(int keycode);
+void kbd_put_ledstate(int ledstate);
 void kbd_mouse_event(int dx, int dy, int dz, int buttons_state);
+
+/* Does the current mouse generate absolute events */
 int kbd_mouse_is_absolute(void);
+void qemu_add_mouse_mode_change_notifier(Notifier *notify);
+void qemu_remove_mouse_mode_change_notifier(Notifier *notify);
+
+/* Of all the mice, is there one that generates absolute events */
+int kbd_mouse_has_absolute(void);
 
 struct MouseTransformInfo {
     /* Touchscreen resolution */
@@ -47,8 +89,9 @@ struct MouseTransformInfo {
     int a[7];
 };
 
-void do_info_mice(Monitor *mon);
-void do_mouse_set(Monitor *mon, int index);
+void do_info_mice_print(Monitor *mon, const QObject *data);
+void do_info_mice(Monitor *mon, QObject **ret_data);
+void do_mouse_set(Monitor *mon, const QDict *qdict);
 
 /* keysym is a unicode code except for special keys (see QEMU_KEY_xxx
    constants) */
@@ -101,6 +144,27 @@ struct DisplaySurface {
     struct PixelFormat pf;
 };
 
+/* cursor data format is 32bit RGBA */
+typedef struct QEMUCursor {
+    int                 width, height;
+    int                 hot_x, hot_y;
+    int                 refcount;
+    uint32_t            data[];
+} QEMUCursor;
+
+QEMUCursor *cursor_alloc(int width, int height);
+void cursor_get(QEMUCursor *c);
+void cursor_put(QEMUCursor *c);
+QEMUCursor *cursor_builtin_hidden(void);
+QEMUCursor *cursor_builtin_left_ptr(void);
+void cursor_print_ascii_art(QEMUCursor *c, const char *prefix);
+int cursor_get_mono_bpl(QEMUCursor *c);
+void cursor_set_mono(QEMUCursor *c,
+                     uint32_t foreground, uint32_t background, uint8_t *image,
+                     int transparent, uint8_t *mask);
+void cursor_get_mono_image(QEMUCursor *c, int foreground, uint8_t *mask);
+void cursor_get_mono_mask(QEMUCursor *c, int transparent, uint8_t *mask);
+
 struct DisplayChangeListener {
     int idle;
     uint64_t gui_timer_interval;
@@ -114,9 +178,28 @@ struct DisplayChangeListener {
     void (*dpy_fill)(struct DisplayState *s, int x, int y,
                      int w, int h, uint32_t c);
     void (*dpy_text_cursor)(struct DisplayState *s, int x, int y);
-
+#ifdef CONFIG_GLES2
+    void (*dpy_updatecaption)(void);
+#endif
+#ifdef CONFIG_SKINNING
+    void (*dpy_enablezoom)(struct DisplayState *s, int width, int height);
+    void (*dpy_getresolution)(int *width, int *height);
+#endif
     struct DisplayChangeListener *next;
 };
+
+#ifdef CONFIG_ANDROID
+/* The problem with DisplayChangeListener is that the callbacks can't
+ * differentiate between different DisplayChangeListeners. Instead of
+ * modifying the type above, which is going to generate conflicts with
+ * upstream changes, we define our own listener type here.
+ */
+typedef struct DisplayUpdateListener {
+    void* opaque;
+    void (*dpy_update)(void* opaque, int x, int y, int w, int h);
+    struct DisplayUpdateListener *next;
+} DisplayUpdateListener;
+#endif
 
 struct DisplayAllocator {
     DisplaySurface* (*create_displaysurface)(int width, int height);
@@ -131,30 +214,31 @@ struct DisplayState {
 
     struct DisplayAllocator* allocator;
     struct DisplayChangeListener* listeners;
-
+#ifdef CONFIG_ANDROID
+    struct DisplayUpdateListener* update_listeners;
+#endif
     void (*mouse_set)(int x, int y, int on);
-    void (*cursor_define)(int width, int height, int bpp, int hot_x, int hot_y,
-                          uint8_t *image, uint8_t *mask);
+    void (*cursor_define)(QEMUCursor *cursor);
 
     struct DisplayState *next;
 };
 
+void vga_fill_rect (DisplayState *ds, int posx, int posy,
+    int width, int height, uint32_t color);
 void register_displaystate(DisplayState *ds);
 DisplayState *get_displaystate(void);
 DisplaySurface* qemu_create_displaysurface_from(int width, int height, int bpp,
                                                 int linesize, uint8_t *data);
+void qemu_alloc_display(DisplaySurface *surface, int width, int height,
+                        int linesize, PixelFormat pf, int newflags);
 PixelFormat qemu_different_endianness_pixelformat(int bpp);
 PixelFormat qemu_default_pixelformat(int bpp);
 
-extern struct DisplayAllocator default_allocator;
 DisplayAllocator *register_displayallocator(DisplayState *ds, DisplayAllocator *da);
-DisplaySurface* defaultallocator_create_displaysurface(int width, int height);
-DisplaySurface* defaultallocator_resize_displaysurface(DisplaySurface *surface, int width, int height);
-void defaultallocator_free_displaysurface(DisplaySurface *surface);
 
 static inline DisplaySurface* qemu_create_displaysurface(DisplayState *ds, int width, int height)
 {
-    return ds->allocator->create_displaysurface(width, height);    
+    return ds->allocator->create_displaysurface(width, height);
 }
 
 static inline DisplaySurface* qemu_resize_displaysurface(DisplayState *ds, int width, int height)
@@ -177,7 +261,8 @@ static inline int is_surface_bgr(DisplaySurface *surface)
 
 static inline int is_buffer_shared(DisplaySurface *surface)
 {
-    return (!(surface->flags & QEMU_ALLOCATED_FLAG));
+    return (!(surface->flags & QEMU_ALLOCATED_FLAG) &&
+            !(surface->flags & QEMU_REALPIXELS_FLAG));
 }
 
 static inline void register_displaychangelistener(DisplayState *ds, DisplayChangeListener *dcl)
@@ -186,6 +271,16 @@ static inline void register_displaychangelistener(DisplayState *ds, DisplayChang
     ds->listeners = dcl;
 }
 
+#ifdef CONFIG_ANDROID
+static inline void register_displayupdatelistener(DisplayState *ds, DisplayUpdateListener *dul)
+{
+    dul->next = ds->update_listeners;
+    ds->update_listeners = dul;
+}
+
+void unregister_displayupdatelistener(DisplayState *ds, DisplayUpdateListener *dul);
+#endif
+
 static inline void dpy_update(DisplayState *s, int x, int y, int w, int h)
 {
     struct DisplayChangeListener *dcl = s->listeners;
@@ -193,7 +288,28 @@ static inline void dpy_update(DisplayState *s, int x, int y, int w, int h)
         dcl->dpy_update(s, x, y, w, h);
         dcl = dcl->next;
     }
+#ifdef CONFIG_ANDROID
+    DisplayUpdateListener* dul = s->update_listeners;
+    while (dul != NULL) {
+        dul->dpy_update(dul->opaque, x, y, w, h);
+        dul = dul->next;
+    }
+#endif
 }
+
+#ifdef CONFIG_GLES2
+static inline void dpy_updatecaption(DisplayState *s)
+{
+    struct DisplayChangeListener *dcl = s->listeners;
+    while (dcl != NULL) {
+        if(dcl->dpy_updatecaption != NULL)
+        {
+            dcl->dpy_updatecaption();
+        }
+        dcl = dcl->next;
+    }
+}
+#endif
 
 static inline void dpy_resize(DisplayState *s)
 {
@@ -251,6 +367,26 @@ static inline void dpy_cursor(struct DisplayState *s, int x, int y) {
     }
 }
 
+#ifdef CONFIG_SKINNING
+static inline void dpy_enablezoom(struct DisplayState *s, int width, int height)
+{
+    struct DisplayChangeListener *dcl = s->listeners;
+    while (dcl != NULL) {
+        if (dcl->dpy_enablezoom) dcl->dpy_enablezoom(s, width, height);
+        dcl = dcl->next;
+    }
+}
+
+static inline void dpy_getresolution(struct DisplayState *s, int *width, int *height)
+{
+    struct DisplayChangeListener *dcl = s->listeners;
+    while (dcl != NULL) {
+        if (dcl->dpy_getresolution) dcl->dpy_getresolution(width, height);
+        dcl = dcl->next;
+    }
+}
+#endif
+
 static inline int ds_get_linesize(DisplayState *ds)
 {
     return ds->surface->linesize;
@@ -284,7 +420,9 @@ static inline int ds_get_bytes_per_pixel(DisplayState *ds)
 typedef unsigned long console_ch_t;
 static inline void console_write_ch(console_ch_t *dest, uint32_t ch)
 {
-    cpu_to_le32wu((uint32_t *) dest, ch);
+    if (!(ch & 0xff))
+        ch |= ' ';
+    *dest = ch;
 }
 
 typedef void (*vga_hw_update_ptr)(void *);
@@ -305,7 +443,8 @@ void vga_hw_text_update(console_ch_t *chardata);
 
 int is_graphic_console(void);
 int is_fixedsize_console(void);
-CharDriverState *text_console_init(const char *p);
+CharDriverState *text_console_init(QemuOpts *opts);
+CharDriverState* text_console_init_compat(const char *label, const char *p);
 void text_consoles_set_display(DisplayState *ds);
 void console_select(unsigned int index);
 void console_color_init(DisplayState *ds);
@@ -329,5 +468,9 @@ char *vnc_display_local_addr(DisplayState *ds);
 
 /* curses.c */
 void curses_display_init(DisplayState *ds, int full_screen);
+
+#ifdef CONFIG_ANDROID
+void android_display_reset(DisplayState* ds, int width, int height, int bitspp);
+#endif
 
 #endif

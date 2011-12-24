@@ -34,7 +34,7 @@ static void usage(void)
 {
 	fprintf(stderr, "Usage: ip rule [ list | add | del | flush ] SELECTOR ACTION\n");
 	fprintf(stderr, "SELECTOR := [ not ] [ from PREFIX ] [ to PREFIX ] [ tos TOS ] [ fwmark FWMARK[/MASK] ]\n");
-	fprintf(stderr, "            [ dev STRING ] [ pref NUMBER ]\n");
+	fprintf(stderr, "            [ iif STRING ] [ oif STRING ] [ pref NUMBER ]\n");
 	fprintf(stderr, "ACTION := [ table TABLE_ID ]\n");
 	fprintf(stderr, "          [ prohibit | reject | unreachable ]\n");
 	fprintf(stderr, "          [ realms [SRCREALM/]DSTREALM ]\n");
@@ -142,7 +142,13 @@ int print_rule(const struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
 
 	if (tb[FRA_IFNAME]) {
 		fprintf(fp, "iif %s ", (char*)RTA_DATA(tb[FRA_IFNAME]));
-		if (r->rtm_flags & FIB_RULE_DEV_DETACHED)
+		if (r->rtm_flags & FIB_RULE_IIF_DETACHED)
+			fprintf(fp, "[detached] ");
+	}
+
+	if (tb[FRA_OIFNAME]) {
+		fprintf(fp, "oif %s ", (char*)RTA_DATA(tb[FRA_OIFNAME]));
+		if (r->rtm_flags & FIB_RULE_OIF_DETACHED)
 			fprintf(fp, "[detached] ");
 	}
 
@@ -264,7 +270,8 @@ static int iprule_modify(int cmd, int argc, char **argv)
 			if (get_u32(&pref, *argv, 0))
 				invarg("preference value is invalid\n", *argv);
 			addattr32(&req.n, sizeof(req), FRA_PRIORITY, pref);
-		} else if (strcmp(*argv, "tos") == 0) {
+		} else if (strcmp(*argv, "tos") == 0 ||
+			   matches(*argv, "dsfield") == 0) {
 			__u32 tos;
 			NEXT_ARG();
 			if (rtnl_dsfield_a2n(&tos, *argv))
@@ -307,6 +314,9 @@ static int iprule_modify(int cmd, int argc, char **argv)
 			   strcmp(*argv, "iif") == 0) {
 			NEXT_ARG();
 			addattr_l(&req.n, sizeof(req), FRA_IFNAME, *argv, strlen(*argv)+1);
+		} else if (strcmp(*argv, "oif") == 0) {
+			NEXT_ARG();
+			addattr_l(&req.n, sizeof(req), FRA_OIFNAME, *argv, strlen(*argv)+1);
 		} else if (strcmp(*argv, "nat") == 0 ||
 			   matches(*argv, "map-to") == 0) {
 			NEXT_ARG();
@@ -427,3 +437,24 @@ int do_iprule(int argc, char **argv)
 	exit(-1);
 }
 
+int do_multirule(int argc, char **argv)
+{
+	switch (preferred_family) {
+	case AF_UNSPEC:
+	case AF_INET:
+		preferred_family = RTNL_FAMILY_IPMR;
+		break;
+	case AF_INET6:
+		preferred_family = RTNL_FAMILY_IP6MR;
+		break;
+	case RTNL_FAMILY_IPMR:
+	case RTNL_FAMILY_IP6MR:
+		break;
+	default:
+		fprintf(stderr, "Multicast rules are only supported for IPv4/IPv6, was: %i\n",
+			preferred_family);
+		exit(-1);
+	}
+
+	return do_iprule(argc, argv);
+}

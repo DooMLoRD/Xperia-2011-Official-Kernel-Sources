@@ -41,7 +41,7 @@ int goldfish_device_bus_init(uint32_t base, uint32_t irq);
 qemu_irq *goldfish_interrupt_init(uint32_t base, qemu_irq parent_irq, qemu_irq parent_fiq);
 void goldfish_timer_and_rtc_init(uint32_t timerbase, int timerirq);
 int goldfish_tty_add(CharDriverState *cs, int id, uint32_t base, int irq);
-void goldfish_fb_init(DisplayState *ds, int id);
+void goldfish_fb_init(int id);
 void goldfish_audio_init(uint32_t base, int id, const char* input_source);
 void goldfish_battery_init();
 void goldfish_battery_set_prop(int ac, int property, int value);
@@ -55,4 +55,18 @@ void trace_dev_init();
 void events_dev_init(uint32_t base, qemu_irq irq);
 void nand_dev_init(uint32_t base);
 
+#ifdef TARGET_I386
+/* Maximum IRQ number available for a device on x86. */
+#define GFD_MAX_IRQ      16
+/* IRQ reserved for keyboard. */
+#define GFD_KBD_IRQ      1
+/* IRQ reserved for mouse. */
+#define GFD_MOUSE_IRQ    12
+/* IRQ reserved for error (raising an exception in TB code). */
+#define GFD_ERR_IRQ      13
+#else
+/* Maximum IRQ number available for a device on ARM. */
+#define GFD_MAX_IRQ     32
 #endif
+
+#endif  /* GOLDFISH_DEVICE_H */

@@ -7,4 +7,4 @@ IF EXIST "%PROGUARD_HOME%" GOTO home
 SET PROGUARD_HOME=..
 :home
 
-java -jar "%PROGUARD_HOME%"\lib\proguard.jar %1 %2 %3 %4 %5 %6 %7 %8 %9
+java -jar "%PROGUARD_HOME%"\lib\proguard.jar %*

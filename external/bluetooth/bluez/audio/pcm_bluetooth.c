@@ -4,8 +4,6 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2010, Code Aurora Forum
- *  Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  *
  *  This library is free software; you can redistribute it and/or
@@ -46,14 +44,7 @@
 #include "sbc.h"
 #include "rtp.h"
 
-//#define ENABLE_DEBUG
-
-#if defined(__BIONIC__) && defined(__GNUC__)
-/* Bionic doesn tag pthread_exit as a "return statement"
- * which causes a compilation error with gcc
- */
-void pthread_exit(void *value_ptr) __attribute__ ((__noreturn__));
-#endif
+/* #define ENABLE_DEBUG */
 
 #define UINT_SECS_MAX (UINT_MAX / 1000000 - 1)
 
@@ -143,22 +134,15 @@ struct bluetooth_data {
 	unsigned int link_mtu;				/* MTU for selected transport channel */
 	volatile struct pollfd stream;			/* Audio stream filedescriptor */
 	struct pollfd server;				/* Audio daemon filedescriptor */
-	size_t sizeof_scms_t;				/* Indicates protection hdr */
 	uint8_t buffer[BUFFER_SIZE];		/* Encoded transfer buffer */
 	unsigned int count;				/* Transfer buffer counter */
 	struct bluetooth_a2dp a2dp;			/* A2DP data */
 
 	pthread_t hw_thread;				/* Makes virtual hw pointer move */
-#ifdef __BIONIC__
-	volatile int hw_cancel;				/* Set != 0 to request exit of hw_thread */
-#endif
 	int pipefd[2];					/* Inter thread communication */
 	int stopped;
 	sig_atomic_t reset;				/* Request XRUN handling */
 };
-
-#define CP_TYPE_SCMS_T          0x0002
-#define SCMS_T_COPY_NOT_ALLOWED 0x00
 
 static int audioservice_send(int sk, const bt_audio_msg_header_t *msg);
 static int audioservice_expect(int sk, bt_audio_msg_header_t *outmsg,
@@ -232,23 +216,10 @@ static void *playback_hw_thread(void *param)
 			data->hw_ptr %= data->io.buffer_size;
 
 			for (n = 0; n < frags; n++) {
-#ifdef __BIONIC__
-				/* write() should be a cancellation point,
-				 * emulate this here */
-				if (data->hw_cancel)
-					pthread_exit(NULL);
-#endif
-
 				/* Notify user that hardware pointer
 				 * has moved * */
-#ifdef __BIONIC__
-				write(data->pipefd[1], &c, 1);
-				if (data->hw_cancel)
-					pthread_exit(NULL);
-#else
 				if (write(data->pipefd[1], &c, 1) < 0)
 					pthread_testcancel();
-#endif
 			}
 
 			/* Reset point of reference to avoid too big values
@@ -266,9 +237,11 @@ iter_sleep:
 		ret = poll(fds, 2, poll_timeout);
 
 		if (ret < 0) {
-			SNDERR("poll error: %s (%d)", strerror(errno), errno);
-			if (errno != EINTR)
+			if (errno != EINTR) {
+				SNDERR("poll error: %s (%d)", strerror(errno),
+								errno);
 				break;
+			}
 		} else if (ret > 0) {
 			ret = (fds[0].revents) ? 0 : 1;
 			SNDERR("poll fd %d revents %d", ret, fds[ret].revents);
@@ -277,12 +250,7 @@ iter_sleep:
 		}
 
 		/* Offer opportunity to be canceled by main thread */
-#ifdef __BIONIC__
-		if (data->hw_cancel)
-			pthread_exit(NULL);
-#else
 		pthread_testcancel();
-#endif
 	}
 
 	data->hw_thread = 0;
@@ -335,15 +303,8 @@ static void bluetooth_exit(struct bluetooth_data *data)
 		close(data->stream.fd);
 
 	if (data->hw_thread) {
-#ifdef __BIONIC__
-		data->hw_cancel = 1;
-#else
 		pthread_cancel(data->hw_thread);
-#endif
 		pthread_join(data->hw_thread, 0);
-#ifdef __BIONIC__
-		data->hw_cancel = 0;
-#endif
 	}
 
 	if (a2dp->sbc_initialized)
@@ -389,15 +350,8 @@ static int bluetooth_prepare(snd_pcm_ioplug_t *io)
 	/* As we're gonna receive messages on the server socket, we have to stop the
 	   hw thread that is polling on it, if any */
 	if (data->hw_thread) {
-#ifdef __BIONIC__
-		data->hw_cancel = 1;
-#else
 		pthread_cancel(data->hw_thread);
-#endif
 		pthread_join(data->hw_thread, 0);
-#ifdef __BIONIC__
-		data->hw_cancel = 0;
-#endif
 		data->hw_thread = 0;
 	}
 
@@ -795,12 +749,6 @@ static int bluetooth_a2dp_hw_params(snd_pcm_ioplug_t *io,
 
 	data->transport = BT_CAPABILITIES_TRANSPORT_A2DP;
 	data->link_mtu = rsp->link_mtu;
-	if (rsp->content_protection == CP_TYPE_SCMS_T) {
-		data->sizeof_scms_t = 1;
-	} else {
-		data->sizeof_scms_t = 0;
-	}
-	DBG("MTU: %d -- SCMS-T Enabled: %d", data->link_mtu, rsp->content_protection);
 
 	/* Setup SBC encoder now we agree on parameters */
 	bluetooth_a2dp_setup(a2dp);
@@ -872,7 +820,6 @@ static int bluetooth_playback_poll_revents(snd_pcm_ioplug_t *io,
 					unsigned short *revents)
 {
 	static char buf[1];
-	int ret;
 
 	DBG("");
 
@@ -883,17 +830,13 @@ static int bluetooth_playback_poll_revents(snd_pcm_ioplug_t *io,
 	assert(pfds[1].fd >= 0);
 
 	if (io->state != SND_PCM_STATE_PREPARED)
-		ret = read(pfds[0].fd, buf, 1);
-
-	/* Alsa lib does not check for POLLHUP */
-	if (pfds[1].revents & POLLHUP)
-		pfds[1].revents = (pfds[1].revents | POLLERR);
+		if (read(pfds[0].fd, buf, 1) < 0)
+			SYSERR("read error: %s (%d)", strerror(errno), errno);
 
 	if (pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL))
 		io->state = SND_PCM_STATE_DISCONNECTED;
 
-	revents[0] = (pfds[0].revents & POLLIN) ? POLLOUT : 0;
-	revents[1] = pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL);
+	*revents = (pfds[0].revents & POLLIN) ? POLLOUT : 0;
 
 	return 0;
 }
@@ -1031,13 +974,10 @@ static int avdtp_write(struct bluetooth_data *data)
 	struct bluetooth_a2dp *a2dp = &data->a2dp;
 
 	header = (void *) a2dp->buffer;
-	payload = (void *) (a2dp->buffer + sizeof(*header) + data->sizeof_scms_t);
+	payload = (void *) (a2dp->buffer + sizeof(*header));
 
-	memset(a2dp->buffer, 0, sizeof(*header) + sizeof(*payload) + data->sizeof_scms_t);
+	memset(a2dp->buffer, 0, sizeof(*header) + sizeof(*payload));
 
-	if (data->sizeof_scms_t) {
-		data->buffer[sizeof(*header)] = SCMS_T_COPY_NOT_ALLOWED;
-	}
 	payload->frame_count = a2dp->frame_count;
 	header->v = 2;
 	header->pt = 1;
@@ -1052,7 +992,7 @@ static int avdtp_write(struct bluetooth_data *data)
 	}
 
 	/* Reset buffer of data to send */
-	a2dp->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload) + data->sizeof_scms_t;
+	a2dp->count = sizeof(struct rtp_header) + sizeof(struct rtp_payload);
 	a2dp->frame_count = 0;
 	a2dp->samples = 0;
 	a2dp->seq_num++;
@@ -1112,8 +1052,11 @@ static snd_pcm_sframes_t bluetooth_a2dp_write(snd_pcm_ioplug_t *io,
 	}
 
 	/* Check if we have any left over data from the last write */
-	if (data->count > 0 && (bytes_left - data->count) >= a2dp->codesize) {
-		int additional_bytes_needed = a2dp->codesize - data->count;
+	if (data->count > 0) {
+		unsigned int additional_bytes_needed =
+						a2dp->codesize - data->count;
+		if (additional_bytes_needed > bytes_left)
+			goto out;
 
 		memcpy(data->buffer + data->count, buff,
 						additional_bytes_needed);
@@ -1184,6 +1127,7 @@ static snd_pcm_sframes_t bluetooth_a2dp_write(snd_pcm_ioplug_t *io,
 		}
 	}
 
+out:
 	/* Copy the extra to our temp buffer for the next write */
 	if (bytes_left > 0) {
 		memcpy(data->buffer + data->count, buff, bytes_left);

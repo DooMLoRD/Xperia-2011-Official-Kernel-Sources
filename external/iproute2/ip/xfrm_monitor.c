@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <endian.h>
 #include <linux/xfrm.h>
 #include "utils.h"
 #include "xfrm.h"

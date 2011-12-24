@@ -10,6 +10,8 @@
 ** GNU General Public License for more details.
 */
 #include "android/avd/info.h"
+#include "android/avd/util.h"
+#include "android/config/config.h"
 #include "android/utils/path.h"
 #include "android/utils/bufprint.h"
 #include "android/utils/filelock.h"
@@ -62,12 +64,6 @@ AvdInfo*        android_avdInfo;
  * with one of the usual options.
  */
 
-/* this is the subdirectory of $HOME/.android where all
- * root configuration files (and default content directories)
- * are located.
- */
-#define  ANDROID_AVD_DIR    "avd"
-
 /* the prefix of config.ini keys that will be used for search directories
  * of system images.
  */
@@ -83,6 +79,11 @@ AvdInfo*        android_avdInfo;
  */
 #define  SKIN_PATH       "skin.path"
 
+/* the config.ini key that will be used to indicate the default skin's name.
+ * this is ignored if there is a valid SKIN_PATH entry in the file.
+ */
+#define  SKIN_NAME       "skin.name"
+
 /* default skin name */
 #define  SKIN_DEFAULT    "HVGA"
 
@@ -91,6 +92,12 @@ AvdInfo*        android_avdInfo;
  * the content directory.
  */
 #define  SDCARD_PATH     "sdcard.path"
+
+/* the name of the .ini file that will contain the complete hardware
+ * properties for the AVD. This will be used to launch the corresponding
+ * core from the UI.
+ */
+#define  CORE_HARDWARE_INI   "hardware-qemu.ini"
 
 /* certain disk image files are mounted read/write by the emulator
  * to ensure that several emulators referencing the same files
@@ -123,6 +130,7 @@ struct AvdInfo {
     char      inAndroidBuild;
     char*     androidOut;
     char*     androidBuildRoot;
+    char*     targetArch;
 
     /* for the normal virtual device case */
     char*     deviceName;
@@ -131,13 +139,15 @@ struct AvdInfo {
     char*     searchPaths[ MAX_SEARCH_PATHS ];
     int       numSearchPaths;
     char*     contentPath;
-    IniFile*  rootIni;      /* root <foo>.ini file */
-    IniFile*  configIni;    /* virtual device's config.ini */
-    IniFile*  hardwareIni;  /* skin-specific hardware.ini */
+    IniFile*  rootIni;      /* root <foo>.ini file, empty if missing */
+    IniFile*  configIni;    /* virtual device's config.ini, NULL if missing */
+    IniFile*  skinHardwareIni;  /* skin-specific hardware.ini */
 
     /* for both */
+    int       apiLevel;
     char*     skinName;     /* skin name */
     char*     skinDirPath;  /* skin directory */
+    char*     coreHardwareIniPath;  /* core hardware.ini path */
 
     /* image files */
     char*     imagePath [ AVD_IMAGE_MAX ];
@@ -156,6 +166,7 @@ avdInfo_free( AvdInfo*  i )
 
         AFREE(i->skinName);
         AFREE(i->skinDirPath);
+        AFREE(i->coreHardwareIniPath);
 
         for (nn = 0; nn < i->numSearchPaths; nn++)
             AFREE(i->searchPaths[nn]);
@@ -167,9 +178,9 @@ avdInfo_free( AvdInfo*  i )
             i->configIni = NULL;
         }
 
-        if (i->hardwareIni) {
-            iniFile_free(i->hardwareIni);
-            i->hardwareIni = NULL;
+        if (i->skinHardwareIni) {
+            iniFile_free(i->skinHardwareIni);
+            i->skinHardwareIni = NULL;
         }
 
         if (i->rootIni) {
@@ -207,80 +218,55 @@ static const char*  const _imageFileText[ AVD_IMAGE_MAX ] = {
 /***************************************************************
  ***************************************************************
  *****
- *****    NORMAL VIRTUAL DEVICE SUPPORT
+ *****    UTILITY FUNCTIONS
+ *****
+ *****  The following functions do not depend on the AvdInfo
+ *****  structure and could easily be moved elsewhere.
  *****
  *****/
 
-/* compute path to the root SDK directory
- * assume we are in $SDKROOT/tools/emulator[.exe]
+/* Parse a given config.ini file and extract the list of SDK search paths
+ * from it. Returns the number of valid paths stored in 'searchPaths', or -1
+ * in case of problem.
+ *
+ * Relative search paths in the config.ini will be stored as full pathnames
+ * relative to 'sdkRootPath'.
+ *
+ * 'searchPaths' must be an array of char* pointers of at most 'maxSearchPaths'
+ * entries.
  */
 static int
-_getSdkRoot( AvdInfo*  i )
-{
-    const char*  env;
-    char         temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
-
-#define  SDK_ROOT_ENV  "ANDROID_SDK_ROOT"
-
-    env = getenv(SDK_ROOT_ENV);
-    if (env != NULL && env[0] != 0) {
-        if (path_exists(env)) {
-            D("found " SDK_ROOT_ENV ": %s", env);
-            i->sdkRootPath = ASTRDUP(env);
-            i->sdkRootPathFromEnv = 1;
-            return 0;
-        }
-        D(SDK_ROOT_ENV " points to unknown directory: %s", env);
-    }
-
-    (void) bufprint_app_dir(temp, end);
-
-    i->sdkRootPath = path_parent(temp, 1);
-    if (i->sdkRootPath == NULL) {
-        derror("can't find root of SDK directory");
-        return -1;
-    }
-    D("found SDK root at %s", i->sdkRootPath);
-    return 0;
-}
-
-static void
-_getSearchPaths( AvdInfo*  i )
+_getSearchPaths( IniFile*    configIni,
+                 const char* sdkRootPath,
+                 int         maxSearchPaths,
+                 char**      searchPaths )
 {
     char  temp[PATH_MAX], *p = temp, *end= p+sizeof temp;
     int   nn, count = 0;
 
-
-
-    for (nn = 0; nn < MAX_SEARCH_PATHS; nn++) {
+    for (nn = 0; nn < maxSearchPaths; nn++) {
         char*  path;
 
         p = bufprint(temp, end, "%s%d", SEARCH_PREFIX, nn+1 );
         if (p >= end)
             continue;
 
-        path = iniFile_getString( i->configIni, temp );
+        path = iniFile_getString(configIni, temp, NULL);
         if (path != NULL) {
             DD("    found image search path: %s", path);
             if (!path_is_absolute(path)) {
-                p = bufprint(temp, end, "%s/%s", i->sdkRootPath, path);
+                p = bufprint(temp, end, "%s/%s", sdkRootPath, path);
                 AFREE(path);
                 path = ASTRDUP(temp);
             }
-            i->searchPaths[count++] = path;
+            searchPaths[count++] = path;
         }
     }
-
-    i->numSearchPaths = count;
-    if (count == 0) {
-        derror("no search paths found in this AVD's configuration.\n"
-               "Weird, the AVD's config.ini file is malformed. Try re-creating it.\n");
-        exit(2);
-    }
-    else
-        DD("found a total of %d search paths for this AVD", count);
+    return count;
 }
 
+/* Check that an AVD name is valid. Returns 1 on success, 0 otherwise.
+ */
 static int
 _checkAvdName( const char*  name )
 {
@@ -291,513 +277,27 @@ _checkAvdName( const char*  name )
     return (len == len2);
 }
 
-/* parse the root config .ini file. it is located in
- * ~/.android/avd/<name>.ini or Windows equivalent
- */
-static int
-_getRootIni( AvdInfo*  i )
-{
-    char  temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
-
-    p = bufprint_config_path(temp, end);
-    p = bufprint(p, end, "/" ANDROID_AVD_DIR "/%s.ini", i->deviceName);
-    if (p >= end) {
-        derror("device name too long");
-        return -1;
-    }
-
-    i->rootIni = iniFile_newFromFile(temp);
-    if (i->rootIni == NULL) {
-        derror("unknown virtual device name: '%s'", i->deviceName);
-        return -1;
-    }
-    D("root virtual device file at %s", temp);
-    return 0;
-}
-
-/* the .ini variable name that points to the content directory
- * in a root AVD ini file. This is required */
-#   define  ROOT_PATH_KEY    "path"
-
-static int
-_getContentPath( AvdInfo*  i )
-{
-    i->contentPath = iniFile_getString(i->rootIni, ROOT_PATH_KEY);
-
-    if (i->contentPath == NULL) {
-        derror("bad config: %s",
-               "virtual device file lacks a "ROOT_PATH_KEY" entry");
-        return -1;
-    }
-    D("virtual device content at %s", i->contentPath);
-    return 0;
-}
-
-/* find and parse the config.ini file from the content directory */
-static int
-_getConfigIni(AvdInfo*  i)
-{
-    char  temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
-
-    p = bufprint(p, end, "%s/config.ini", i->contentPath);
-    if (p >= end) {
-        derror("can't access virtual device content directory");
-        return -1;
-    }
-
-#if 1   /* XXX: TODO: remove this in the future */
-    /* for now, allow a non-existing config.ini */
-    if (!path_exists(temp)) {
-        D("virtual device has no config file - no problem");
-        return 0;
-    }
-#endif
-
-    i->configIni = iniFile_newFromFile(temp);
-    if (i->configIni == NULL) {
-        derror("bad config: %s",
-               "virtual device directory lacks config.ini");
-        return -1;
-    }
-    D("virtual device config file: %s", temp);
-    return 0;
-}
-
-/***************************************************************
- ***************************************************************
- *****
- *****    KERNEL/DISK IMAGE LOADER
- *****
- *****/
-
-/* a structure used to handle the loading of
- * kernel/disk images.
- */
-typedef struct {
-    AvdInfo*        info;
-    AvdInfoParams*  params;
-    AvdImageType    id;
-    const char*     imageFile;
-    const char*     imageText;
-    char**          pPath;
-    char*           pState;
-    char            temp[PATH_MAX];
-} ImageLoader;
-
-static void
-imageLoader_init( ImageLoader*  l, AvdInfo*  info, AvdInfoParams*  params )
-{
-    memset(l, 0, sizeof(*l));
-    l->info    = info;
-    l->params  = params;
-}
-
-/* set the type of the image to load */
-static void
-imageLoader_set( ImageLoader*  l, AvdImageType  id )
-{
-    l->id        = id;
-    l->imageFile = _imageFileNames[id];
-    l->imageText = _imageFileText[id];
-    l->pPath     = &l->info->imagePath[id];
-    l->pState    = &l->info->imageState[id];
-
-    l->pState[0] = IMAGE_STATE_READONLY;
-}
-
-/* change the image path */
-static char*
-imageLoader_setPath( ImageLoader*  l, const char*  path )
-{
-    path = path ? ASTRDUP(path) : NULL;
-
-    AFREE(l->pPath[0]);
-    l->pPath[0] = (char*) path;
-
-    return (char*) path;
-}
-
-static char*
-imageLoader_extractPath( ImageLoader*  l )
-{
-    char*  result = l->pPath[0];
-    l->pPath[0] = NULL;
-    return result;
-}
-
-/* flags used when loading images */
-enum {
-    IMAGE_REQUIRED          = (1<<0),  /* image is required */
-    IMAGE_SEARCH_SDK        = (1<<1),  /* search image in SDK */
-    IMAGE_EMPTY_IF_MISSING  = (1<<2),  /* create empty file if missing */
-    IMAGE_DONT_LOCK         = (1<<4),  /* don't try to lock image */
-    IMAGE_IGNORE_IF_LOCKED  = (1<<5),  /* ignore file if it's locked */
-};
-
-#define  IMAGE_OPTIONAL  0
-
-/* find an image from the SDK search directories.
- * returns the full path or NULL if the file could not be found.
+/* Returns the full path of a given file.
  *
- * note: this stores the result in the image's path as well
+ * If 'fileName' is an absolute path, this returns a simple copy.
+ * Otherwise, this returns a new string corresponding to <rootPath>/<fileName>
+ *
+ * This returns NULL if the paths are too long.
  */
 static char*
-imageLoader_lookupSdk( ImageLoader*  l  )
+_getFullFilePath( const char* rootPath, const char* fileName )
 {
-    AvdInfo*     i     = l->info;
-    const char*  image = l->imageFile;
-    char*        temp  = l->temp, *p = temp, *end = p + sizeof(l->temp);
+    if (path_is_absolute(fileName)) {
+        return ASTRDUP(fileName);
+    } else {
+        char temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
 
-    do {
-        /* try the search paths */
-        int  nn;
-
-        for (nn = 0; nn < i->numSearchPaths; nn++) {
-            const char* searchDir = i->searchPaths[nn];
-
-            p = bufprint(temp, end, "%s/%s", searchDir, image);
-            if (p < end && path_exists(temp)) {
-                DD("found %s in search dir: %s", image, searchDir);
-                goto FOUND;
-            }
-            DD("    no %s in search dir: %s", image, searchDir);
+        p = bufprint(temp, end, "%s/%s", rootPath, fileName);
+        if (p >= end) {
+            return NULL;
         }
-
-        return NULL;
-
-    } while (0);
-
-FOUND:
-    l->pState[0] = IMAGE_STATE_READONLY;
-
-    return imageLoader_setPath(l, temp);
-}
-
-/* search for a file in the content directory.
- * returns NULL if the file cannot be found.
- *
- * note that this formats l->temp with the file's path
- * allowing you to retrieve it if the function returns NULL
- */
-static char*
-imageLoader_lookupContent( ImageLoader*  l )
-{
-    AvdInfo*  i     = l->info;
-    char*     temp  = l->temp, *p = temp, *end = p + sizeof(l->temp);
-
-    p = bufprint(temp, end, "%s/%s", i->contentPath, l->imageFile);
-    if (p >= end) {
-        derror("content directory path too long");
-        exit(2);
+        return ASTRDUP(temp);
     }
-    if (!path_exists(temp)) {
-        DD("    no %s in content directory", l->imageFile);
-        return NULL;
-    }
-    DD("found %s in content directory", l->imageFile);
-
-    /* assume content image files must be locked */
-    l->pState[0] = IMAGE_STATE_MUSTLOCK;
-
-    return imageLoader_setPath(l, temp);
-}
-
-/* lock a file image depending on its state and user flags
- * note that this clears l->pPath[0] if the lock could not
- * be acquired and that IMAGE_IGNORE_IF_LOCKED is used.
- */
-static void
-imageLoader_lock( ImageLoader*  l, unsigned  flags )
-{
-    const char*  path = l->pPath[0];
-
-    if (flags & IMAGE_DONT_LOCK)
-        return;
-
-    if (l->pState[0] != IMAGE_STATE_MUSTLOCK)
-        return;
-
-    D("    locking %s image at %s", l->imageText, path);
-
-    if (filelock_create(path) != NULL) {
-        /* succesful lock */
-        l->pState[0] = IMAGE_STATE_LOCKED;
-        return;
-    }
-
-    if (flags & IMAGE_IGNORE_IF_LOCKED) {
-        dwarning("ignoring locked %s image at %s", l->imageText, path);
-        imageLoader_setPath(l, NULL);
-        return;
-    }
-
-    derror("the %s image is used by another emulator. aborting",
-            l->imageText);
-    exit(2);
-}
-
-/* make a file image empty, this may require locking */
-static void
-imageLoader_empty( ImageLoader*  l, unsigned  flags )
-{
-    const char*  path;
-
-    imageLoader_lock(l, flags);
-
-    path = l->pPath[0];
-    if (path == NULL)  /* failed to lock, caller will handle it */
-        return;
-
-    if (path_empty_file(path) < 0) {
-        derror("could not create %s image at %s: %s",
-                l->imageText, path, strerror(errno));
-        exit(2);
-    }
-    l->pState[0] = IMAGE_STATE_LOCKED_EMPTY;
-}
-
-
-/* copy image file from a given source 
- * assumes locking is needed.
- */
-static void
-imageLoader_copyFrom( ImageLoader*  l, const char*  srcPath )
-{
-    const char*  dstPath = NULL;
-
-    /* find destination file */
-    if (l->params) {
-        dstPath = l->params->forcePaths[l->id];
-    }
-    if (!dstPath) {
-        imageLoader_lookupContent(l);
-        dstPath = l->temp;
-    }
-
-    /* lock destination */
-    imageLoader_setPath(l, dstPath);
-    l->pState[0] = IMAGE_STATE_MUSTLOCK;
-    imageLoader_lock(l, 0);
-
-    /* make the copy */
-    if (path_copy_file(dstPath, srcPath) < 0) {
-        derror("can't initialize %s image from SDK: %s: %s",
-               l->imageText, dstPath, strerror(errno));
-        exit(2);
-    }
-}
-
-/* this will load and eventually lock and image file, depending
- * on the flags being used. on exit, this function udpates
- * l->pState[0] and l->pPath[0]
- *
- * returns the path to the file. Note that it returns NULL
- * only if the file was optional and could not be found.
- *
- * if the file is required and missing, the function aborts
- * the program.
- */
-static char*
-imageLoader_load( ImageLoader*    l,
-                  unsigned        flags )
-{
-    const char*  path = NULL;
-
-    /* set image state */
-    l->pState[0] = (flags & IMAGE_DONT_LOCK) == 0
-                 ? IMAGE_STATE_MUSTLOCK 
-                 : IMAGE_STATE_READONLY;
-
-    /* check user-provided path */
-    path = l->params->forcePaths[l->id];
-    if (path != NULL) {
-        imageLoader_setPath(l, path);
-        if (path_exists(path)) {
-            DD("found user-provided %s image: %s", l->imageText, l->imageFile);
-            goto EXIT;
-        }
-        D("user-provided %s image does not exist: %s",
-          l->imageText, path);
-
-        /* if the file is required, abort */
-        if (flags & IMAGE_REQUIRED) {
-            derror("user-provided %s image at %s doesn't exist",
-                    l->imageText, path);
-            exit(2);
-        }
-    }
-    else {
-        const char*  contentFile;
-
-        /* second, look in the content directory */
-        path = imageLoader_lookupContent(l);
-        if (path) goto EXIT;
-
-        contentFile = ASTRDUP(l->temp);
-
-        /* it's not there */
-        if (flags & IMAGE_SEARCH_SDK) {
-            /* third, look in the SDK directory */
-            path = imageLoader_lookupSdk(l);
-            if (path) {
-                AFREE((char*)contentFile);
-                goto EXIT;
-            }
-        }
-        DD("found no %s image (%s)", l->imageText, l->imageFile);
-
-        /* if the file is required, abort */
-        if (flags & IMAGE_REQUIRED) {
-            AvdInfo*  i = l->info;
-
-            derror("could not find required %s image (%s).", 
-                   l->imageText, l->imageFile);
-
-            if (i->inAndroidBuild) {
-                dprint( "Did you build everything ?" );
-            } else if (!i->sdkRootPathFromEnv) {
-                dprint( "Maybe defining %s to point to a valid SDK "
-                        "installation path might help ?", SDK_ROOT_ENV );
-            } else {
-                dprint( "Your %s is probably wrong: %s", SDK_ROOT_ENV,
-                        i->sdkRootPath );
-            }
-            exit(2);
-        }
-
-        path = imageLoader_setPath(l, contentFile);
-        AFREE((char*)contentFile);
-    }
-
-    /* otherwise, do we need to create it ? */
-    if (flags & IMAGE_EMPTY_IF_MISSING) {
-        imageLoader_empty(l, flags);
-        return l->pPath[0];
-    }
-    return NULL;
-
-EXIT:
-    imageLoader_lock(l, flags);
-    return l->pPath[0];
-}
-
-
-
-/* find the correct path of all image files we're going to need
- * and lock the files that need it.
- */
-static int
-_getImagePaths(AvdInfo*  i, AvdInfoParams*  params )
-{
-    int   wipeData  = (params->flags & AVDINFO_WIPE_DATA) != 0;
-    int   wipeCache = (params->flags & AVDINFO_WIPE_CACHE) != 0;
-    int   noCache   = (params->flags & AVDINFO_NO_CACHE) != 0;
-    int   noSdCard  = (params->flags & AVDINFO_NO_SDCARD) != 0;
-
-    ImageLoader  l[1];
-
-    imageLoader_init(l, i, params);
-
-    /* pick up the kernel and ramdisk image files - these don't
-     * need a specific handling.
-     */
-    imageLoader_set ( l, AVD_IMAGE_KERNEL );
-    imageLoader_load( l, IMAGE_REQUIRED | IMAGE_SEARCH_SDK | IMAGE_DONT_LOCK );
-
-    imageLoader_set ( l, AVD_IMAGE_RAMDISK );
-    imageLoader_load( l, IMAGE_REQUIRED | IMAGE_SEARCH_SDK | IMAGE_DONT_LOCK );
-
-    /* the system image
-     *
-     * if there is one in the content directory just lock
-     * and use it.
-     */
-    imageLoader_set ( l, AVD_IMAGE_INITSYSTEM );
-    imageLoader_load( l, IMAGE_REQUIRED | IMAGE_SEARCH_SDK | IMAGE_DONT_LOCK );
-
-    /* the data partition - this one is special because if it
-     * is missing, we need to copy the initial image file into it.
-     *
-     * first, try to see if it is in the content directory
-     * (or the user-provided path)
-     */
-    imageLoader_set( l, AVD_IMAGE_USERDATA );
-    if ( !imageLoader_load( l, IMAGE_OPTIONAL |
-                               IMAGE_EMPTY_IF_MISSING |
-                               IMAGE_DONT_LOCK ) )
-    {
-        /* it's not, we're going to initialize it. simply
-         * forcing a data wipe should be enough */
-        D("initializing new data partition image: %s", l->pPath[0]);
-        wipeData = 1;
-    }
-
-    if (wipeData) {
-        /* find SDK source file */
-        const char*  srcPath;
-
-        imageLoader_set( l, AVD_IMAGE_INITDATA );
-        if (imageLoader_lookupSdk(l) == NULL) {
-            derror("can't locate initial %s image in SDK",
-                l->imageText);
-            exit(2);
-        }
-        srcPath = imageLoader_extractPath(l);
-
-        imageLoader_set( l, AVD_IMAGE_USERDATA );
-        imageLoader_copyFrom( l, srcPath );
-        AFREE((char*) srcPath);
-    }
-    else
-    {
-        /* lock the data partition image */
-        l->pState[0] = IMAGE_STATE_MUSTLOCK;
-        imageLoader_lock( l, 0 );
-    }
-
-    /* the cache partition: unless the user doesn't want one,
-     * we're going to create it in the content directory
-     */
-    if (!noCache) {
-        imageLoader_set (l, AVD_IMAGE_CACHE);
-        imageLoader_load(l, IMAGE_OPTIONAL |
-                            IMAGE_EMPTY_IF_MISSING );
-
-        if (wipeCache) {
-            if (path_empty_file(l->pPath[0]) < 0) {
-                derror("cannot wipe %s image at %s: %s",
-                       l->imageText, l->pPath[0],
-                       strerror(errno));
-                exit(2);
-            }
-        }
-    }
-
-    /* the SD Card image. unless the user doesn't want to, we're
-     * going to mount it if available. Note that if the image is
-     * already used, we must ignore it.
-     */
-    if (!noSdCard) {
-        imageLoader_set (l, AVD_IMAGE_SDCARD);
-        imageLoader_load(l, IMAGE_OPTIONAL |
-                            IMAGE_IGNORE_IF_LOCKED);
-
-        /* if the file was not found, ignore it */
-        if (l->pPath[0] && !path_exists(l->pPath[0])) 
-        {
-            D("ignoring non-existing %s at %s: %s",
-              l->imageText, l->pPath[0], strerror(errno));
-
-            /* if the user provided the SD Card path by hand,
-             * warn him. */
-            if (params->forcePaths[AVD_IMAGE_SDCARD] != NULL)
-                dwarning("ignoring non-existing SD Card image");
-
-            imageLoader_setPath(l, NULL);
-        }
-    }
-
-    return 0;
 }
 
 /* check that a given directory contains a valid skin.
@@ -816,39 +316,35 @@ _checkSkinPath( const char*  skinPath )
     return 1;
 }
 
-/* check that there is a skin named 'skinName' listed from 'skinDirRoot'
- * this returns 1 on success, 0 on failure
- * on success, the 'temp' buffer will get the path containing the real
- * skin directory (after alias expansion), including the skin name.
+/* Check that there is a skin named 'skinName' listed from 'skinDirRoot'
+ * this returns the full path of the skin directory (after alias expansions),
+ * including the skin name, or NULL on failure.
  */
-static int
-_checkSkinDir( char*        temp,
-               char*        end,
-               const char*  skinDirRoot,
-               const char*  skinName )
+static char*
+_checkSkinSkinsDir( const char*  skinDirRoot,
+                    const char*  skinName )
 {
     DirScanner*  scanner;
-    char        *p;
-    int          result;
+    char*        result;
+    char         temp[MAX_PATH], *p = temp, *end = p + sizeof(temp);
 
-    p = bufprint(temp, end, "%s/skins/%s",
-                 skinDirRoot, skinName);
-
+    p = bufprint(temp, end, "%s/skins/%s", skinDirRoot, skinName);
+    DD("Probing skin directory: %s", temp);
     if (p >= end || !path_exists(temp)) {
         DD("    ignore bad skin directory %s", temp);
-        return 0;
+        return NULL;
     }
 
     /* first, is this a normal skin directory ? */
     if (_checkSkinPath(temp)) {
         /* yes */
         DD("    found skin directory: %s", temp);
-        return 1;
+        return ASTRDUP(temp);
     }
 
     /* second, is it an alias to another skin ? */
     *p      = 0;
-    result  = 0;
+    result  = NULL;
     scanner = dirScanner_new(temp);
     if (scanner != NULL) {
         for (;;) {
@@ -860,14 +356,12 @@ _checkSkinDir( char*        temp,
             if (strncmp(file, "alias-", 6) || file[6] == 0)
                 continue;
 
-            p = bufprint(temp, end, "%s/skins/%s",
-                            skinDirRoot, file+6);
-
+            p = bufprint(temp, end, "%s/skins/%s", skinDirRoot, file+6);
             if (p < end && _checkSkinPath(temp)) {
                 /* yes, it's an alias */
                 DD("    skin alias '%s' points to skin directory: %s",
                    file+6, temp);
-                result = 1;
+                result = ASTRDUP(temp);
                 break;
             }
         }
@@ -878,10 +372,14 @@ _checkSkinDir( char*        temp,
 
 /* try to see if the skin name leads to a magic skin or skin path directly
  * returns 1 on success, 0 on error.
- * on success, this sets up 'skinDirPath' and 'skinName' in the AvdInfo.
+ *
+ * on success, this sets up '*pSkinName' and '*pSkinDir'
  */
 static int
-_getSkinPathFromName( AvdInfo*  i, const char*  skinName )
+_getSkinPathFromName( const char*  skinName,
+                      const char*  sdkRootPath,
+                      char**       pSkinName,
+                      char**       pSkinDir )
 {
     char  temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
 
@@ -893,19 +391,19 @@ _getSkinPathFromName( AvdInfo*  i, const char*  skinName )
         int  width, height;
         if (sscanf(skinName, "%dx%d", &width, &height) == 2) {
             D("'magic' skin format detected: %s", skinName);
-            i->skinName    = ASTRDUP(skinName);
-            i->skinDirPath = NULL;
+            *pSkinName = ASTRDUP(skinName);
+            *pSkinDir  = NULL;
             return 1;
         }
     }
 
     /* is the skin name a direct path to the skin directory ? */
-    if (_checkSkinPath(skinName)) {
+    if (path_is_absolute(skinName) && _checkSkinPath(skinName)) {
         goto FOUND_IT;
     }
 
     /* is the skin name a relative path from the SDK root ? */
-    p = bufprint(temp, end, "%s/%s", i->sdkRootPath, skinName);
+    p = bufprint(temp, end, "%s/%s", sdkRootPath, skinName);
     if (p < end && _checkSkinPath(temp)) {
         skinName = temp;
         goto FOUND_IT;
@@ -915,156 +413,300 @@ _getSkinPathFromName( AvdInfo*  i, const char*  skinName )
     return 0;
 
 FOUND_IT:
-    if (path_split(skinName, &i->skinDirPath, &i->skinName) < 0) {
+    if (path_split(skinName, pSkinDir, pSkinName) < 0) {
         derror("malformed skin name: %s", skinName);
         exit(2);
     }
-    D("found skin '%s' in directory: %s", i->skinName, i->skinDirPath);
+    D("found skin '%s' in directory: %s", *pSkinName, *pSkinDir);
     return 1;
 }
 
-/* return 0 on success, -1 on error */
+/***************************************************************
+ ***************************************************************
+ *****
+ *****    NORMAL VIRTUAL DEVICE SUPPORT
+ *****
+ *****/
+
+/* compute path to the root SDK directory
+ * assume we are in $SDKROOT/tools/emulator[.exe]
+ */
 static int
-_getSkin( AvdInfo*  i, AvdInfoParams*  params )
+_avdInfo_getSdkRoot( AvdInfo*  i )
 {
-    char*  skinName;
-    char   temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
-    char   explicitSkin = 1;
 
-    /* this function is used to compute the 'skinName' and 'skinDirPath'
-     * fields of the AvdInfo.
-     */
-
-    /* processing here is a bit tricky, so here's how it happens
-     *
-     * - command-line option '-skin <name>' can be used to specify the
-     *   name of a skin, to override the AVD settings.
-     *
-     * - skins are searched from <dir>/../skins for each <dir> in the
-     *   images search list, unless a '-skindir <path>' option has been
-     *   provided on the command-line
-     *
-     * - otherwise, the config.ini can also contain a SKIN_PATH key that
-     *   shall  give the full path to the skin directory, either relative
-     *   to the SDK root, or an absolute path.
-     *
-     * - skin names like '320x480' corresponds to "magic skins" that
-     *   simply display a framebuffer, without any ornaments of the
-     *   corresponding size. They do not correspond to any real skin
-     *   directory / files and are handled later. But they must be
-     *   recognized here and report a NULL skindir.
-     */
-    if (params->skinName) {
-        skinName = ASTRDUP(params->skinName);
-    } else {
-        skinName = iniFile_getString( i->configIni, SKIN_PATH );
-        explicitSkin = 0;
-    }
-
-    /* first, check that the skin name is not magic or a direct
-     * directory path
-     */
-    if (skinName != NULL && _getSkinPathFromName(i, skinName)) {
-        AFREE(skinName);
-        return 0;
-    }
-
-    /* if not, the default skinName is "HVGA" */
-    if (skinName == NULL) {
-        skinName = ASTRDUP(SKIN_DEFAULT);
-        explicitSkin = 0;
-    }
-
-    i->skinName = skinName;
-
-    /* now try to find the skin directory for that name -
-     * first try the content directory */
-    do {
-        /* if there is a single 'skin' directory in
-         * the content directory, assume that's what the
-         * user wants,  unless an explicit name was given
-         */
-        if (!explicitSkin) {
-            p = bufprint(temp, end, "%s/skin", i->contentPath);
-            if (p < end && _checkSkinPath(temp)) {
-                D("using skin content from %s", temp);
-                AFREE(i->skinName);
-                i->skinName    = ASTRDUP("skin");
-                i->skinDirPath = ASTRDUP(i->contentPath);
-                return 0;
-            }
-        }
-
-        /* look in content directory */
-        if (_checkSkinDir(temp, end, i->contentPath, skinName))
-            break;
-
-        /* look in the search paths. For each <dir> in the list,
-         * look the skins in <dir>/.. */
-        {
-            int  nn;
-            for (nn = 0; nn < i->numSearchPaths; nn++) {
-                char*  parentDir = path_parent(i->searchPaths[nn], 1);
-                int    ret;
-                if (parentDir == NULL)
-                    continue;
-                ret=_checkSkinDir(temp, end, parentDir, skinName);
-                AFREE(parentDir);
-                if (ret)
-                  break;
-            }
-            if (nn < i->numSearchPaths)
-                break;
-        }
-
-        /* didn't find it */
-        if (explicitSkin) {
-            derror("could not find directory for skin '%s',"
-                   " please use a different name", skinName);
-            exit(2);
-        } else {
-            dwarning("no skin directory matched '%s', so reverted to default",
-                     skinName);
-            AFREE(i->skinName);
-            params->skinName = SKIN_DEFAULT;
-            return _getSkin(i, params);
-        }
-
+    i->sdkRootPath = path_getSdkRoot(&i->sdkRootPathFromEnv);
+    if (i->sdkRootPath == NULL)
         return -1;
 
-    } while (0);
-
-    /* separate skin name from parent directory. the skin name
-     * returned in 'temp' might be different from the original
-     * one due to alias expansion so strip it.
-     */
-    AFREE(i->skinName);
-
-    if (path_split(temp, &i->skinDirPath, &i->skinName) < 0) {
-        derror("weird skin path: %s", temp);
-        return -1;
-    }
-    DD("found skin '%s' in directory: %s", i->skinName, i->skinDirPath);
     return 0;
 }
 
-/* If the user didn't explicitely provide an SD Card path,
- * check the SDCARD_PATH key in config.ini and use that if
- * available.
+/* parse the root config .ini file. it is located in
+ * ~/.android/avd/<name>.ini or Windows equivalent
+ */
+static int
+_avdInfo_getRootIni( AvdInfo*  i )
+{
+    char*  iniPath = path_getRootIniPath( i->deviceName );
+
+    if (iniPath == NULL) {
+        derror("unknown virtual device name: '%s'", i->deviceName);
+        return -1;
+    }
+
+    D("Android virtual device file at: %s", iniPath);
+
+    i->rootIni = iniFile_newFromFile(iniPath);
+    AFREE(iniPath);
+
+    if (i->rootIni == NULL) {
+        derror("Corrupt virtual device config file!");
+        return -1;
+    }
+    return 0;
+}
+
+/* Returns the AVD's content path, i.e. the directory that contains
+ * the AVD's content files (e.g. data partition, cache, sd card, etc...).
+ *
+ * We extract this by parsing the root config .ini file, looking for
+ * a "path" elements.
+ */
+static int
+_avdInfo_getContentPath( AvdInfo*  i )
+{
+#   define  ROOT_PATH_KEY    "path"
+
+    i->contentPath = iniFile_getString(i->rootIni, ROOT_PATH_KEY, NULL);
+
+    if (i->contentPath == NULL) {
+        derror("bad config: %s",
+               "virtual device file lacks a "ROOT_PATH_KEY" entry");
+        return -1;
+    }
+    D("virtual device content at %s", i->contentPath);
+    return 0;
+}
+
+static int
+_avdInfo_getApiLevel( AvdInfo*  i )
+{
+    char*       target;
+    const char* p;
+    const int   defaultLevel = 1000;
+    int         level        = defaultLevel;
+
+#    define ROOT_TARGET_KEY   "target"
+
+    target = iniFile_getString(i->rootIni, ROOT_TARGET_KEY, NULL);
+    if (target == NULL) {
+        D("No target field in root AVD .ini file?");
+        D("Defaulting to API level %d", level);
+        return level;
+    }
+
+    DD("Found target field in root AVD .ini file: '%s'", target);
+
+    /* There are two acceptable formats for the target key.
+     *
+     * 1/  android-<level>
+     * 2/  <vendor-name>:<add-on-name>:<level>
+     *
+     * Where <level> can be either a _name_ (for experimental/preview SDK builds)
+     * or a decimal number. Note that if a _name_, it can start with a digit.
+     */
+
+    /* First, extract the level */
+    if (!memcmp(target, "android-", 8))
+        p = target + 8;
+    else {
+        /* skip two columns */
+        p = strchr(target, ':');
+        if (p != NULL) {
+            p = strchr(p+1, ':');
+            if (p != NULL)
+                p += 1;
+        }
+    }
+    if (p == NULL || !isdigit(*p)) {
+        goto NOT_A_NUMBER;
+    } else {
+        char* end;
+        long  val = strtol(p, &end, 10);
+        if (end == NULL || *end != '\0' || val != (int)val) {
+            goto NOT_A_NUMBER;
+        }
+        level = (int)val;
+
+        /* Sanity check, we don't support anything prior to Android 1.5 */
+        if (level < 3)
+            level = 3;
+
+        D("Found AVD target API level: %d", level);
+    }
+EXIT:
+    AFREE(target);
+    return level;
+
+NOT_A_NUMBER:
+    if (p == NULL) {
+        D("Invalid target field in root AVD .ini file");
+    } else {
+        D("Target AVD api level is not a number");
+    }
+    D("Defaulting to API level %d", level);
+    goto EXIT;
+}
+
+/* Look for a named file inside the AVD's content directory.
+ * Returns NULL if it doesn't exist, or a strdup() copy otherwise.
+ */
+static char*
+_avdInfo_getContentFilePath(AvdInfo*  i, const char* fileName)
+{
+    char temp[MAX_PATH], *p = temp, *end = p + sizeof(temp);
+
+    p = bufprint(p, end, "%s/%s", i->contentPath, fileName);
+    if (p >= end) {
+        derror("can't access virtual device content directory");
+        return NULL;
+    }
+    if (!path_exists(temp)) {
+        return NULL;
+    }
+    return ASTRDUP(temp);
+}
+
+/* find and parse the config.ini file from the content directory */
+static int
+_avdInfo_getConfigIni(AvdInfo*  i)
+{
+    char*  iniPath = _avdInfo_getContentFilePath(i, "config.ini");
+
+    /* Allow non-existing config.ini */
+    if (iniPath == NULL) {
+        D("virtual device has no config file - no problem");
+        return 0;
+    }
+
+    D("virtual device config file: %s", iniPath);
+    i->configIni = iniFile_newFromFile(iniPath);
+    AFREE(iniPath);
+
+    if (i->configIni == NULL) {
+        derror("bad config: %s",
+               "virtual device has corrupted config.ini");
+        return -1;
+    }
+    return 0;
+}
+
+/* The AVD's config.ini contains a list of search paths (all beginning
+ * with SEARCH_PREFIX) which are directory locations searched for
+ * AVD platform files.
  */
 static void
-_getSDCardPath( AvdInfo*  i, AvdInfoParams*  params )
+_avdInfo_getSearchPaths( AvdInfo*  i )
 {
-    const char*  path;
-
-    if (params->forcePaths[AVD_IMAGE_SDCARD] != NULL)
+    if (i->configIni == NULL)
         return;
 
-    path = iniFile_getString(i->configIni, SDCARD_PATH);
+    i->numSearchPaths = _getSearchPaths( i->configIni,
+                                         i->sdkRootPath,
+                                         MAX_SEARCH_PATHS,
+                                         i->searchPaths );
+    if (i->numSearchPaths == 0) {
+        derror("no search paths found in this AVD's configuration.\n"
+               "Weird, the AVD's config.ini file is malformed. Try re-creating it.\n");
+        exit(2);
+    }
+    else
+        DD("found a total of %d search paths for this AVD", i->numSearchPaths);
+}
+
+/* Search a file in the SDK search directories. Return NULL if not found,
+ * or a strdup() otherwise.
+ */
+static char*
+_avdInfo_getSdkFilePath(AvdInfo*  i, const char*  fileName)
+{
+    char temp[MAX_PATH], *p = temp, *end = p + sizeof(temp);
+
+    do {
+        /* try the search paths */
+        int  nn;
+
+        for (nn = 0; nn < i->numSearchPaths; nn++) {
+            const char* searchDir = i->searchPaths[nn];
+
+            p = bufprint(temp, end, "%s/%s", searchDir, fileName);
+            if (p < end && path_exists(temp)) {
+                DD("found %s in search dir: %s", fileName, searchDir);
+                goto FOUND;
+            }
+            DD("    no %s in search dir: %s", fileName, searchDir);
+        }
+
+        return NULL;
+
+    } while (0);
+
+FOUND:
+    return ASTRDUP(temp);
+}
+
+/* Search for a file in the content directory, and if not found, in the
+ * SDK search directory. Returns NULL if not found.
+ */
+static char*
+_avdInfo_getContentOrSdkFilePath(AvdInfo*  i, const char*  fileName)
+{
+    char*  path;
+
+    path = _avdInfo_getContentFilePath(i, fileName);
+    if (path)
+        return path;
+
+    path = _avdInfo_getSdkFilePath(i, fileName);
+    if (path)
+        return path;
+
+    return NULL;
+}
+
+#if 0
+static int
+_avdInfo_findContentOrSdkImage(AvdInfo* i, AvdImageType id)
+{
+    const char* fileName = _imageFileNames[id];
+    char*       path     = _avdInfo_getContentOrSdkFilePath(i, fileName);
+
+    i->imagePath[id]  = path;
+    i->imageState[id] = IMAGE_STATE_READONLY;
+
     if (path == NULL)
-        return;
+        return -1;
+    else
+        return 0;
+}
+#endif
 
-    params->forcePaths[AVD_IMAGE_SDCARD] = path;
+/* Returns path to the core hardware .ini file. This contains the
+ * hardware configuration that is read by the core. The content of this
+ * file is auto-generated before launching a core, but we need to know
+ * its path before that.
+ */
+static int
+_avdInfo_getCoreHwIniPath( AvdInfo* i, const char* basePath )
+{
+    i->coreHardwareIniPath = _getFullFilePath(basePath, CORE_HARDWARE_INI);
+    if (i->coreHardwareIniPath == NULL) {
+        DD("Path too long for %s: %s", CORE_HARDWARE_INI, basePath);
+        return -1;
+    }
+    D("using core hw config path: %s", i->coreHardwareIniPath);
+    return 0;
 }
 
 AvdInfo*
@@ -1083,25 +725,23 @@ avdInfo_new( const char*  name, AvdInfoParams*  params )
     ANEW0(i);
     i->deviceName = ASTRDUP(name);
 
-    if ( _getSdkRoot(i)     < 0 ||
-         _getRootIni(i)     < 0 ||
-         _getContentPath(i) < 0 ||
-         _getConfigIni(i)   < 0 )
+    if ( _avdInfo_getSdkRoot(i) < 0     ||
+         _avdInfo_getRootIni(i) < 0     ||
+         _avdInfo_getContentPath(i) < 0 ||
+         _avdInfo_getConfigIni(i)   < 0 ||
+         _avdInfo_getCoreHwIniPath(i, i->contentPath) < 0 )
         goto FAIL;
+
+    i->apiLevel = _avdInfo_getApiLevel(i);
 
     /* look for image search paths. handle post 1.1/pre cupcake
      * obsolete SDKs.
      */
-    _getSearchPaths(i);
-    _getSDCardPath(i, params);
+    _avdInfo_getSearchPaths(i);
 
     /* don't need this anymore */
     iniFile_free(i->rootIni);
     i->rootIni = NULL;
-
-    if ( _getImagePaths(i, params) < 0 ||
-         _getSkin      (i, params) < 0 )
-        goto FAIL;
 
     return i;
 
@@ -1134,228 +774,31 @@ FAIL:
  *****      the content directory, no SDK images search path.
  *****/
 
-/* used to fake a config.ini located in the content directory */
-static int
-_getBuildConfigIni( AvdInfo*  i )
-{
-    /* a blank file is ok at the moment */
-    i->configIni = iniFile_newFromMemory( "", 0 );
-    return 0;
-}
-
-static int
-_getBuildImagePaths( AvdInfo*  i, AvdInfoParams*  params )
-{
-    int   wipeData  = (params->flags & AVDINFO_WIPE_DATA) != 0;
-    int   noCache   = (params->flags & AVDINFO_NO_CACHE) != 0;
-    int   noSdCard  = (params->flags & AVDINFO_NO_SDCARD) != 0;
-
-    char         temp[PATH_MAX], *p=temp, *end=p+sizeof temp;
-    char*        srcData;
-    ImageLoader  l[1];
-
-    imageLoader_init(l, i, params);
-
-    /** load the kernel image
-     **/
-
-    /* if it is not in the out directory, get it from prebuilt
-     */
-    imageLoader_set ( l, AVD_IMAGE_KERNEL );
-
-    if ( !imageLoader_load( l, IMAGE_OPTIONAL |
-                               IMAGE_DONT_LOCK ) )
-    {
-#define  PREBUILT_KERNEL_PATH   "prebuilt/android-arm/kernel/kernel-qemu"
-        p = bufprint(temp, end, "%s/%s", i->androidBuildRoot,
-                        PREBUILT_KERNEL_PATH);
-        if (p >= end || !path_exists(temp)) {
-            derror("bad workspace: cannot find prebuilt kernel in: %s", temp);
-            exit(1);
-        }
-        imageLoader_setPath(l, temp);
-    }
-
-    /** load the data partition. note that we use userdata-qemu.img
-     ** since we don't want to modify userdata.img at all
-     **/
-    imageLoader_set ( l, AVD_IMAGE_USERDATA );
-    imageLoader_load( l, IMAGE_OPTIONAL | IMAGE_DONT_LOCK );
-
-    /* get the path of the source file, and check that it actually exists
-     * if the user didn't provide an explicit data file
-     */
-    srcData = imageLoader_extractPath(l);
-    if (srcData == NULL && params->forcePaths[AVD_IMAGE_USERDATA] == NULL) {
-        derror("There is no %s image in your build directory. Please make a full build",
-                l->imageText, l->imageFile);
-        exit(2);
-    }
-
-    /* get the path of the target file */
-    l->imageFile = "userdata-qemu.img";
-    imageLoader_load( l, IMAGE_OPTIONAL |
-                         IMAGE_EMPTY_IF_MISSING |
-                         IMAGE_IGNORE_IF_LOCKED );
-
-    /* force a data wipe if we just created the image */
-    if (l->pState[0] == IMAGE_STATE_LOCKED_EMPTY)
-        wipeData = 1;
-
-    /* if the image was already locked, create a temp file
-     * then force a data wipe.
-     */
-    if (l->pPath[0] == NULL) {
-        TempFile*  temp = tempfile_create();
-        imageLoader_setPath(l, tempfile_path(temp));
-        dwarning( "Another emulator is running. user data changes will *NOT* be saved");
-        wipeData = 1;
-    }
-
-    /* in the case of a data wipe, copy userdata.img into
-     * the destination */
-    if (wipeData) {
-        if (srcData == NULL || !path_exists(srcData)) {
-            derror("There is no %s image in your build directory. Please make a full build",
-                   l->imageText, _imageFileNames[l->id]);
-            exit(2);
-        }
-        if (path_copy_file( l->pPath[0], srcData ) < 0) {
-            derror("could not initialize %s image from %s: %s",
-                   l->imageText, temp, strerror(errno));
-            exit(2);
-        }
-    }
-
-    AFREE(srcData);
-
-    /** load the ramdisk image
-     **/
-    imageLoader_set ( l, AVD_IMAGE_RAMDISK );
-    imageLoader_load( l, IMAGE_REQUIRED |
-                         IMAGE_DONT_LOCK );
-
-    /** load the system image. read-only. the caller must
-     ** take care of checking the state
-     **/
-    imageLoader_set ( l, AVD_IMAGE_INITSYSTEM );
-    imageLoader_load( l, IMAGE_REQUIRED | IMAGE_DONT_LOCK );
-
-    /* force the system image to read-only status */
-    l->pState[0] = IMAGE_STATE_READONLY;
-
-    /** cache partition handling
-     **/
-    if (!noCache) {
-        imageLoader_set (l, AVD_IMAGE_CACHE);
-
-        /* if the user provided one cache image, lock & use it */
-        if ( params->forcePaths[l->id] != NULL ) {
-            imageLoader_load(l, IMAGE_REQUIRED | 
-                                IMAGE_IGNORE_IF_LOCKED);
-        }
-    }
-
-    /** SD Card image
-     **/
-    if (!noSdCard) {
-        imageLoader_set (l, AVD_IMAGE_SDCARD);
-        imageLoader_load(l, IMAGE_OPTIONAL | IMAGE_IGNORE_IF_LOCKED);
-    }
-
-    return 0;
-}
-
-static int
-_getBuildSkin( AvdInfo*  i, AvdInfoParams*  params )
-{
-    /* the (current) default skin name for our build system */
-    const char*  skinName = params->skinName;
-    const char*  skinDir  = params->skinRootPath;
-    char         temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
-    char*        q;
-
-    if (!skinName) {
-        /* the (current) default skin name for the build system */
-        skinName = SKIN_DEFAULT;
-        D("selecting default skin name '%s'", skinName);
-    }
-
-    if (!skinDir) {
-
-#define  PREBUILT_SKINS_DIR  "sdk/emulator/skins"
-#define  PRODUCT_SKIN_DIR "skin"
-
-        do {
-            /* look for the product skin in $ANDROID_PRODUCT_OUT/skin if no skin name is defined */
-            if (!params->skinName) {
-                /* look for <product_out>/skin first */
-                p = bufprint( temp, end, "%s/skin",
-                              i->androidOut );
-                if (path_exists(temp)) {
-                    p = bufprint( temp, end, "%s",
-                                  i->androidOut );
-                    skinName = PRODUCT_SKIN_DIR;
-                    D("selecting default product skin at '%s/%s'", temp, skinName);
-                    break;
-                }
-            }
-
-            /* next try in <sysdir>/../skins */
-            p = bufprint( temp, end, "%s/../skins",
-                          i->androidBuildRoot );
-            if (path_exists(temp))
-                break;
-
-            /* the (current) default skin directory */
-            p = bufprint( temp, end, "%s/%s",
-                        i->androidBuildRoot, PREBUILT_SKINS_DIR );
-        } while (0);
-
-    } else {
-        p = bufprint( temp, end, "%s", skinDir );
-    }
-
-    i->skinName = ASTRDUP(skinName);
-
-    q  = bufprint(p, end, "/%s/layout", skinName);
-    if (q >= end || !path_exists(temp)) {
-        DD("skin content directory does not exist: %s", temp);
-        if (skinDir)
-            dwarning("could not find valid skin '%s' in %s:\n",
-                     skinName, temp);
-        return -1;
-    }
-    *p = 0;
-    DD("found skin path: %s", temp);
-    i->skinDirPath = ASTRDUP(temp);
-
-    return 0;
-}
-
 /* Read a hardware.ini if it is located in the skin directory */
 static int
-_getBuildHardwareIni( AvdInfo*  i )
+_avdInfo_getBuildSkinHardwareIni( AvdInfo*  i )
 {
+    char* skinName;
+    char* skinDirPath;
     char  temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
 
-    if (i->skinDirPath == NULL || i->skinName == NULL)
+    avdInfo_getSkinInfo(i, &skinName, &skinDirPath);
+    if (skinDirPath == NULL)
         return 0;
 
-    p = bufprint(temp, end, "%s/%s/hardware.ini", i->skinDirPath, i->skinName);
+    p = bufprint(temp, end, "%s/%s/hardware.ini", skinDirPath, skinName);
     if (p >= end || !path_exists(temp)) {
-        DD("no skin-specific hardware.ini in %s", i->skinDirPath);
+        DD("no skin-specific hardware.ini in %s", skinDirPath);
         return 0;
     }
 
     D("found skin-specific hardware.ini: %s", temp);
-    i->hardwareIni = iniFile_newFromFile(temp);
-    if (i->hardwareIni == NULL)
+    i->skinHardwareIni = iniFile_newFromFile(temp);
+    if (i->skinHardwareIni == NULL)
         return -1;
 
     return 0;
 }
-
 
 AvdInfo*
 avdInfo_newForAndroidBuild( const char*     androidBuildRoot,
@@ -1370,17 +813,20 @@ avdInfo_newForAndroidBuild( const char*     androidBuildRoot,
     i->androidBuildRoot = ASTRDUP(androidBuildRoot);
     i->androidOut       = ASTRDUP(androidOut);
     i->contentPath      = ASTRDUP(androidOut);
+    i->targetArch       = path_getBuildTargetArch(i->androidOut);
+    i->apiLevel         = path_getBuildTargetApiLevel(i->androidOut);
 
     /* TODO: find a way to provide better information from the build files */
     i->deviceName = ASTRDUP("<build>");
 
-    if (_getBuildConfigIni(i)          < 0 ||
-        _getBuildImagePaths(i, params) < 0 )
+    /* There is no config.ini in the build */
+    i->configIni = NULL;
+
+    if (_avdInfo_getCoreHwIniPath(i, i->androidOut) < 0 )
         goto FAIL;
 
-    /* we don't need to fail if there is no valid skin */
-    _getBuildSkin(i, params);
-    _getBuildHardwareIni(i);
+    /* Read the build skin's hardware.ini, if any */
+    _avdInfo_getBuildSkinHardwareIni(i);
 
     return i;
 
@@ -1428,44 +874,148 @@ avdInfo_isImageReadOnly( AvdInfo*  i, AvdImageType  imageType )
     return (i->imageState[imageType] == IMAGE_STATE_READONLY);
 }
 
-const char*
-avdInfo_getSkinName( AvdInfo*  i )
+char*
+avdInfo_getKernelPath( AvdInfo*  i )
 {
-    return i->skinName;
+    const char* imageName = _imageFileNames[ AVD_IMAGE_KERNEL ];
+
+    char*  kernelPath = _avdInfo_getContentOrSdkFilePath(i, imageName);
+
+    if (kernelPath == NULL && i->inAndroidBuild) {
+        /* When in the Android build, look into the prebuilt directory
+         * for our target architecture.
+         */
+        char temp[PATH_MAX], *p = temp, *end = p + sizeof(temp);
+        const char* suffix = "";
+        char* abi;
+
+        /* If the target ABI is armeabi-v7a, then look for
+         * kernel-qemu-armv7 instead of kernel-qemu in the prebuilt
+         * directory. */
+        abi = path_getBuildTargetAbi(i->androidOut);
+        if (!strcmp(abi,"armeabi-v7a")) {
+            suffix = "-armv7";
+        }
+        AFREE(abi);
+
+        p = bufprint(temp, end, "%s/prebuilt/android-%s/kernel/kernel-qemu%s",
+                     i->androidBuildRoot, i->targetArch, suffix);
+        if (p >= end || !path_exists(temp)) {
+            derror("bad workspace: cannot find prebuilt kernel in: %s", temp);
+            exit(1);
+        }
+        kernelPath = ASTRDUP(temp);
+    }
+    return kernelPath;
 }
 
-const char*
-avdInfo_getSkinDir ( AvdInfo*  i )
+
+char*
+avdInfo_getRamdiskPath( AvdInfo* i )
 {
-    return i->skinDirPath;
+    const char* imageName = _imageFileNames[ AVD_IMAGE_RAMDISK ];
+    return _avdInfo_getContentOrSdkFilePath(i, imageName);
+}
+
+char*  avdInfo_getCachePath( AvdInfo*  i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_CACHE ];
+    return _avdInfo_getContentFilePath(i, imageName);
+}
+
+char*  avdInfo_getDefaultCachePath( AvdInfo*  i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_CACHE ];
+    return _getFullFilePath(i->contentPath, imageName);
+}
+
+char*  avdInfo_getSdCardPath( AvdInfo* i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_SDCARD ];
+    char*       path;
+
+    /* Special case, the config.ini can have a SDCARD_PATH entry
+     * that gives the full path to the SD Card.
+     */
+    if (i->configIni != NULL) {
+        path = iniFile_getString(i->configIni, SDCARD_PATH, NULL);
+        if (path != NULL) {
+            if (path_exists(path))
+                return path;
+
+            dwarning("Ignoring invalid SDCard path: %s", path);
+            AFREE(path);
+        }
+    }
+
+    /* Otherwise, simply look into the content directory */
+    return _avdInfo_getContentFilePath(i, imageName);
+}
+
+char*
+avdInfo_getSnapStoragePath( AvdInfo* i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_SNAPSHOTS ];
+    return _avdInfo_getContentFilePath(i, imageName);
+}
+
+char*
+avdInfo_getSystemImagePath( AvdInfo*  i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_USERSYSTEM ];
+    return _avdInfo_getContentFilePath(i, imageName);
+}
+
+char*
+avdInfo_getSystemInitImagePath( AvdInfo*  i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_INITSYSTEM ];
+    return _avdInfo_getContentOrSdkFilePath(i, imageName);
+}
+
+char*
+avdInfo_getDataImagePath( AvdInfo*  i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_USERDATA ];
+    return _avdInfo_getContentFilePath(i, imageName);
+}
+
+char*
+avdInfo_getDefaultDataImagePath( AvdInfo*  i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_USERDATA ];
+    return _getFullFilePath(i->contentPath, imageName);
+}
+
+char*
+avdInfo_getDataInitImagePath( AvdInfo* i )
+{
+    const char* imageName = _imageFileNames[ AVD_IMAGE_INITDATA ];
+    return _avdInfo_getContentOrSdkFilePath(i, imageName);
 }
 
 int
-avdInfo_getHwConfig( AvdInfo*  i, AndroidHwConfig*  hw )
+avdInfo_initHwConfig( AvdInfo*  i, AndroidHwConfig*  hw )
 {
-    IniFile*   ini = i->configIni;
-    int        ret;
+    int  ret = 0;
 
-    if (ini == NULL)
-        ini = iniFile_newFromMemory("", 0);
+    androidHwConfig_init(hw, i->apiLevel);
 
-    ret = androidHwConfig_read(hw, ini);
-
-    if (ini != i->configIni)
-        iniFile_free(ini);
-
-    if (ret == 0 && i->hardwareIni != NULL) {
-        ret = androidHwConfig_read(hw, i->hardwareIni);
+    /* First read the config.ini, if any */
+    if (i->configIni != NULL) {
+        ret = androidHwConfig_read(hw, i->configIni);
     }
 
-    /* special product-specific hardware configuration */
-    if (i->androidOut != NULL)
-    {
+    /* The skin's hardware.ini can override values */
+    if (ret == 0 && i->skinHardwareIni != NULL) {
+        ret = androidHwConfig_read(hw, i->skinHardwareIni);
+    }
+
+    /* Auto-disable keyboard emulation on sapphire platform builds */
+    if (i->androidOut != NULL) {
         char*  p = strrchr(i->androidOut, '/');
-        if (p != NULL && p[0] != 0) {
-            if (p[1] == 's') {
-                hw->hw_keyboard = 0;
-            }
+        if (p != NULL && !strcmp(p,"sapphire")) {
+            hw->hw_keyboard = 0;
         }
     }
 
@@ -1485,6 +1035,16 @@ avdInfo_inAndroidBuild( AvdInfo*  i )
 }
 
 char*
+avdInfo_getTargetAbi( AvdInfo* i )
+{
+    /* For now, we can't get the ABI from SDK AVDs */
+    if (!i->inAndroidBuild)
+        return NULL;
+
+    return path_getBuildTargetAbi(i->androidOut);
+}
+
+char*
 avdInfo_getTracePath( AvdInfo*  i, const char*  traceName )
 {
     char   tmp[MAX_PATH], *p=tmp, *end=p + sizeof(tmp);
@@ -1500,4 +1060,145 @@ avdInfo_getTracePath( AvdInfo*  i, const char*  traceName )
                       i->contentPath, traceName );
     }
     return ASTRDUP(tmp);
+}
+
+const char*
+avdInfo_getCoreHwIniPath( AvdInfo* i )
+{
+    return i->coreHardwareIniPath;
+}
+
+
+void
+avdInfo_getSkinInfo( AvdInfo*  i, char** pSkinName, char** pSkinDir )
+{
+    char*  skinName = NULL;
+    char*  skinPath;
+    char   temp[PATH_MAX], *p=temp, *end=p+sizeof(temp);
+
+    *pSkinName = NULL;
+    *pSkinDir  = NULL;
+
+    /* First, see if the config.ini contains a SKIN_PATH entry that
+     * names the full directory path for the skin.
+     */
+    if ( i->configIni != NULL ) {
+        skinPath = iniFile_getString( i->configIni, SKIN_PATH, NULL );
+        if (skinPath != NULL) {
+            /* If this skin name is magic or a direct directory path
+            * we have our result right here.
+            */
+            if (_getSkinPathFromName(skinPath, i->sdkRootPath,
+                                     pSkinName, pSkinDir )) {
+                AFREE(skinPath);
+                return;
+            }
+        }
+
+        /* The SKIN_PATH entry was not valid, so look at SKIN_NAME */
+        D("Warning: config.ini contains invalid %s entry: %s", SKIN_PATH, skinPath);
+        AFREE(skinPath);
+
+        skinName = iniFile_getString( i->configIni, SKIN_NAME, NULL );
+    }
+
+    if (skinName == NULL) {
+        /* If there is no skin listed in the config.ini, try to see if
+         * there is one single 'skin' directory in the content directory.
+         */
+        p = bufprint(temp, end, "%s/skin", i->contentPath);
+        if (p < end && _checkSkinPath(temp)) {
+            D("using skin content from %s", temp);
+            AFREE(i->skinName);
+            *pSkinName = ASTRDUP("skin");
+            *pSkinDir  = ASTRDUP(i->contentPath);
+            return;
+        }
+
+        /* otherwise, use the default name */
+        skinName = ASTRDUP(SKIN_DEFAULT);
+    }
+
+    /* now try to find the skin directory for that name -
+     */
+    do {
+        /* first try the content directory, i.e. $CONTENT/skins/<name> */
+        skinPath = _checkSkinSkinsDir(i->contentPath, skinName);
+        if (skinPath != NULL)
+            break;
+
+#define  PREBUILT_SKINS_ROOT "development/tools/emulator"
+
+        /* if we are in the Android build, try the prebuilt directory */
+        if (i->inAndroidBuild) {
+            p = bufprint( temp, end, "%s/%s",
+                        i->androidBuildRoot, PREBUILT_SKINS_ROOT );
+            if (p < end) {
+                skinPath = _checkSkinSkinsDir(temp, skinName);
+                if (skinPath != NULL)
+                    break;
+            }
+
+            /* or in the parent directory of the system dir */
+            {
+                char* parentDir = path_parent(i->androidOut, 1);
+                if (parentDir != NULL) {
+                    skinPath = _checkSkinSkinsDir(parentDir, skinName);
+                    AFREE(parentDir);
+                    if (skinPath != NULL)
+                        break;
+                }
+            }
+        }
+
+        /* look in the search paths. For each <dir> in the list,
+         * look into <dir>/../skins/<name>/ */
+        {
+            int  nn;
+            for (nn = 0; nn < i->numSearchPaths; nn++) {
+                char*  parentDir = path_parent(i->searchPaths[nn], 1);
+                if (parentDir == NULL)
+                    continue;
+                skinPath = _checkSkinSkinsDir(parentDir, skinName);
+                AFREE(parentDir);
+                if (skinPath != NULL)
+                  break;
+            }
+            if (nn < i->numSearchPaths)
+                break;
+        }
+
+        /* We didn't find anything ! */
+        *pSkinName = skinName;
+        return;
+
+    } while (0);
+
+    if (path_split(skinPath, pSkinDir, pSkinName) < 0) {
+        derror("weird skin path: %s", skinPath);
+        AFREE(skinPath);
+        return;
+    }
+    DD("found skin '%s' in directory: %s", *pSkinName, *pSkinDir);
+    AFREE(skinPath);
+    return;
+}
+
+char*
+avdInfo_getCharmapFile( AvdInfo* i, const char* charmapName )
+{
+    char        fileNameBuff[PATH_MAX];
+    const char* fileName;
+
+    if (charmapName == NULL || charmapName[0] == '\0')
+        return NULL;
+
+    if (strstr(charmapName, ".kcm") == NULL) {
+        snprintf(fileNameBuff, sizeof fileNameBuff, "%s.kcm", charmapName);
+        fileName = fileNameBuff;
+    } else {
+        fileName = charmapName;
+    }
+
+    return _avdInfo_getContentOrSdkFilePath(i, fileName);
 }

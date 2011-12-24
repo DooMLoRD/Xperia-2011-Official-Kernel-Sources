@@ -210,11 +210,6 @@ void  sock_address_done( SockAddress*  a );
 
 int   sock_address_equal( const SockAddress*  a, const SockAddress*  b );
 
-/* THIS SHOULD DISAPPEAR SOON - TRANSITIONAL HELPER */
-int   sock_address_to_bsd( const SockAddress*  a, void*  sa, size_t* salen );
-int   sock_address_from_bsd( SockAddress*  a, const void*  sa, size_t  salen );
-int   sock_address_to_inet( SockAddress*  a, int  *paddr_ip, int  *paddr_port );
-
 /* return a static string describing the address */
 const char*  sock_address_to_string( const SockAddress*  a );
 
@@ -263,7 +258,8 @@ int  sock_address_get_numeric_info( SockAddress*  a,
 enum {
     SOCKET_LIST_PASSIVE    = (1 << 0),
     SOCKET_LIST_FORCE_INET = (1 << 1),
-    SOCKET_LIST_FORCE_IN6  = (1 << 2)
+    SOCKET_LIST_FORCE_IN6  = (1 << 2),
+    SOCKET_LIST_DGRAM      = (1 << 3),
 };
 
 /* resolve a host and service/port name into a list of SockAddress objects.
@@ -283,6 +279,28 @@ enum {
  */
 SockAddress**  sock_address_list_create( const char*  hostname,
                                          const char*  port,
+                                         unsigned     flags );
+
+/* resolve a string containing host and port name into a list of SockAddress
+ * objects. Parameter host_and_port should be in format [host:]port, where
+ * 'host' addresses the machine and must be resolvable into an IP address, and
+ * 'port' is a decimal numeric value for the port. 'host' is optional, and if
+ * ommited, localhost will be used.
+ * returns a NULL-terminated array of SockAddress pointers on success,
+ * or NULL in case of failure, with the value of errno set to one of the
+ * following:
+ *
+ *    EINVAL    : invalid argument
+ *    EHOSTDOWN : could not reach DNS server
+ *    ENOENT    : no host with this name, or host doesn't have IP address
+ *    ENOMEM    : not enough memory to perform request
+ *
+ * other system-level errors can also be set depending on the host sockets
+ * implementation.
+ *
+ * This function loops on EINTR so the caller shouldn't have to check for it.
+ */
+SockAddress**  sock_address_list_create2(const char*  host_and_port,
                                          unsigned     flags );
 
 void sock_address_list_free( SockAddress**  list );

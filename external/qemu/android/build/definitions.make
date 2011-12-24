@@ -13,6 +13,19 @@
 # limitations under the License.
 #
 
+# this turns off the suffix rules built into make
+.SUFFIXES:
+
+# this turns off the RCS / SCCS implicit rules of GNU Make
+% : RCS/%,v
+% : RCS/%
+% : %,v
+% : s.%
+% : SCCS/s.%
+
+# If a rule fails, delete $@.
+.DELETE_ON_ERROR:
+
 # shared definitions
 ifeq ($(strip $(SHOW)),)
 define pretty
@@ -22,7 +35,7 @@ hide := @
 else
 define pretty
 endef
-hide := 
+hide :=
 endif
 
 define my-dir
@@ -31,7 +44,7 @@ endef
 
 # return the directory containing the intermediate files for a given
 # kind of executable
-# $1 = type (EXECUTABLES or STATIC_LIBRARIES) 
+# $1 = type (EXECUTABLES or STATIC_LIBRARIES)
 # $2 = module name
 # $3 = ignored
 #
@@ -41,7 +54,7 @@ endef
 
 # Generate the full path of a given static library
 define library-path
-$(OBJS_DIR)/$(1).a
+$(OBJS_DIR)/libs/$(1).a
 endef
 
 define executable-path
@@ -55,7 +68,7 @@ SRC:=$(1)
 OBJ:=$$(LOCAL_OBJS_DIR)/$$(SRC:%.c=%.o)
 LOCAL_OBJECTS += $$(OBJ)
 DEPENDENCY_DIRS += $$(dir $$(OBJ))
-$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(OBJS_DIR)
+$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(LOCAL_OBJS_DIR)
 $$(OBJ): PRIVATE_CC     := $$(LOCAL_CC)
 $$(OBJ): PRIVATE_OBJ    := $$(OBJ)
 $$(OBJ): PRIVATE_MODULE := $$(LOCAL_MODULE)
@@ -75,7 +88,7 @@ SRC:=$(1)
 OBJ:=$$(LOCAL_OBJS_DIR)/$$(SRC:%$(LOCAL_CPP_EXTENSION)=%.o)
 LOCAL_OBJECTS += $$(OBJ)
 DEPENDENCY_DIRS += $$(dir $$(OBJ))
-$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(OBJS_DIR)
+$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(LOCAL_OBJS_DIR)
 $$(OBJ): PRIVATE_CXX    := $$(LOCAL_CC)
 $$(OBJ): PRIVATE_OBJ    := $$(OBJ)
 $$(OBJ): PRIVATE_MODULE := $$(LOCAL_MODULE)
@@ -92,16 +105,36 @@ endef
 #
 define  compile-objc-source
 SRC:=$(1)
-OBJ:=$$(LOCAL_OBJS_DIR)/$$(SRC:%.m=%.o)
+OBJ:=$$(LOCAL_OBJS_DIR)/$$(notdir $$(SRC:%.m=%.o))
 LOCAL_OBJECTS += $$(OBJ)
 DEPENDENCY_DIRS += $$(dir $$(OBJ))
-$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(OBJS_DIR)
+$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(LOCAL_OBJS_DIR)
 $$(OBJ): PRIVATE_CC     := $$(LOCAL_CC)
 $$(OBJ): PRIVATE_OBJ    := $$(OBJ)
 $$(OBJ): PRIVATE_MODULE := $$(LOCAL_MODULE)
 $$(OBJ): PRIVATE_SRC    := $$(SRC_PATH)/$$(SRC)
 $$(OBJ): PRIVATE_SRC0   := $$(SRC)
 $$(OBJ): $$(SRC_PATH)/$$(SRC)
+	@mkdir -p $$(dir $$(PRIVATE_OBJ))
+	@echo "Compile: $$(PRIVATE_MODULE) <= $$(PRIVATE_SRC0)"
+	$(hide) $$(PRIVATE_CC) $$(PRIVATE_CFLAGS) -c -o $$(PRIVATE_OBJ) -MMD -MP -MF $$(PRIVATE_OBJ).d.tmp $$(PRIVATE_SRC)
+	$(hide) $$(BUILD_SYSTEM)/mkdeps.sh $$(PRIVATE_OBJ) $$(PRIVATE_OBJ).d.tmp $$(PRIVATE_OBJ).d
+endef
+
+# Compile a generated C source files#
+#
+define compile-generated-c-source
+SRC:=$(1)
+OBJ:=$$(LOCAL_OBJS_DIR)/$$(notdir $$(SRC:%.c=%.o))
+LOCAL_OBJECTS += $$(OBJ)
+DEPENDENCY_DIRS += $$(dir $$(OBJ))
+$$(OBJ): PRIVATE_CFLAGS := $$(CFLAGS) $$(LOCAL_CFLAGS) -I$$(LOCAL_PATH) -I$$(LOCAL_OBJS_DIR)
+$$(OBJ): PRIVATE_CC     := $$(LOCAL_CC)
+$$(OBJ): PRIVATE_OBJ    := $$(OBJ)
+$$(OBJ): PRIVATE_MODULE := $$(LOCAL_MODULE)
+$$(OBJ): PRIVATE_SRC    := $$(SRC)
+$$(OBJ): PRIVATE_SRC0   := $$(SRC)
+$$(OBJ): $$(SRC)
 	@mkdir -p $$(dir $$(PRIVATE_OBJ))
 	@echo "Compile: $$(PRIVATE_MODULE) <= $$(PRIVATE_SRC0)"
 	$(hide) $$(PRIVATE_CC) $$(PRIVATE_CFLAGS) -c -o $$(PRIVATE_OBJ) -MMD -MP -MF $$(PRIVATE_OBJ).d.tmp $$(PRIVATE_SRC)
@@ -128,7 +161,7 @@ endef
 define copy-prebuilt-lib
 _SRC := $(1)
 _SRC1 := $$(notdir $$(_SRC))
-_DST := $$(OBJS_DIR)/$$(_SRC1)
+_DST := $$(LIBS_DIR)/$$(_SRC1)
 LIBRARIES += $$(_DST)
 $$(_DST): PRIVATE_DST := $$(_DST)
 $$(_DST): PRIVATE_SRC := $$(_SRC)

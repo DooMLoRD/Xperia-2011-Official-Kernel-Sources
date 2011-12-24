@@ -5,11 +5,11 @@
 <VisualStudioPropertySheet
 	ProjectType="Visual C++"
 	Version="8.00"
-	Name="FeatureDefines"
+	Name="FeatureDefinesCairo"
 	>
   <Tool
 		Name="VCCLCompilerTool"
-		PreprocessorDefinitions="$(ENABLE_3D_CANVAS);$(ENABLE_3D_RENDERING);$(ENABLE_CHANNEL_MESSAGING);$(ENABLE_CLIENT_BASED_GEOLOCATION);$(ENABLE_DATABASE);$(ENABLE_DATAGRID);$(ENABLE_DATALIST);$(ENABLE_DOM_STORAGE);$(ENABLE_EVENTSOURCE);$(ENABLE_FILTERS);$(ENABLE_GEOLOCATION);$(ENABLE_ICONDATABASE);$(ENABLE_INDEXED_DATABASE);$(ENABLE_JAVASCRIPT_DEBUGGER);$(ENABLE_MATHML);$(ENABLE_NOTIFICATIONS);$(ENABLE_OFFLINE_WEB_APPLICATIONS);$(ENABLE_SHARED_WORKERS);$(ENABLE_SVG);$(ENABLE_SVG_ANIMATION);$(ENABLE_SVG_AS_IMAGE);$(ENABLE_SVG_DOM_OBJC_BINDINGS);$(ENABLE_SVG_FONTS);$(ENABLE_SVG_FOREIGN_OBJECT);$(ENABLE_SVG_USE);$(ENABLE_VIDEO);$(ENABLE_WEB_SOCKETS);$(ENABLE_WML);$(ENABLE_WORKERS);$(ENABLE_XHTMLMP);$(ENABLE_XPATH);$(ENABLE_XSLT)"
+		PreprocessorDefinitions="$(ENABLE_3D_CANVAS);$(ENABLE_3D_RENDERING);$(ENABLE_ACCELERATED_2D_CANVAS);$(ENABLE_BLOB);$(ENABLE_CHANNEL_MESSAGING);$(ENABLE_CLIENT_BASED_GEOLOCATION);$(ENABLE_DATABASE);$(ENABLE_DATAGRID);$(ENABLE_DATALIST);$(DATA_TRANSFER_ITEMS);$(ENABLE_DEVICE_ORIENTATION);$(ENABLE_DIRECTORY_UPLOAD);$(ENABLE_DOM_STORAGE);$(ENABLE_EVENTSOURCE);$(ENABLE_FILTERS);$(ENABLE_FILE_SYSTEM);$(ENABLE_FULLSCREEN_API);$(ENABLE_GEOLOCATION);$(ENABLE_ICONDATABASE);$(ENABLE_IMAGE_RESIZER);$(ENABLE_INDEXED_DATABASE);$(ENABLE_INPUT_SPEECH);$(ENABLE_JAVASCRIPT_DEBUGGER);$(ENABLE_LINK_PREFETCH);$(ENABLE_MATHML);$(ENABLE_METER_TAG);$(ENABLE_NOTIFICATIONS);$(ENABLE_OFFLINE_WEB_APPLICATIONS);$(ENABLE_PROGRESS_TAG);$(ENABLE_QUOTA);$(ENABLE_REGISTER_PROTOCOL_HANDLER);$(ENABLE_SHARED_WORKERS);$(ENABLE_SVG);$(ENABLE_SVG_ANIMATION);$(ENABLE_SVG_AS_IMAGE);$(ENABLE_SVG_DOM_OBJC_BINDINGS);$(ENABLE_SVG_FONTS);$(ENABLE_SVG_FOREIGN_OBJECT);$(ENABLE_SVG_USE);$(ENABLE_VIDEO);$(ENABLE_MEDIA_STATISTICS);$(ENABLE_WEB_SOCKETS);$(ENABLE_WEB_TIMING);$(ENABLE_WML);$(ENABLE_WORKERS);$(ENABLE_XHTMLMP);$(ENABLE_XPATH);$(ENABLE_XSLT)"
 	/>
   <UserMacro
 		Name="ENABLE_3D_CANVAS"
@@ -18,6 +18,16 @@
 	/>
   <UserMacro
 		Name="ENABLE_3D_RENDERING"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_ACCELERATED_2D_CANVAS"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_BLOB"
 		Value=""
 		PerformEnvironmentSet="true"
 	/>
@@ -47,6 +57,21 @@
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
+		Name="ENABLE_DATA_TRANSFER_ITEMS"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_DEVICE_ORIENTATION"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+                Name="ENABLE_DIRECTORY_UPLOAD"
+                Value=""
+                PerformEnvironmentSet="true"
+        />
+  <UserMacro
 		Name="ENABLE_DOM_STORAGE"
 		Value="ENABLE_DOM_STORAGE"
 		PerformEnvironmentSet="true"
@@ -62,6 +87,16 @@
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
+		Name="ENABLE_FILE_SYSTEM"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_FULLSCREEN_API"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
 		Name="ENABLE_GEOLOCATION"
 		Value=""
 		PerformEnvironmentSet="true"
@@ -72,7 +107,17 @@
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
+		Name="ENABLE_IMAGE_RESIZER"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
 		Name="ENABLE_INDEXED_DATABASE"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_INPUT_SPEECH"
 		Value=""
 		PerformEnvironmentSet="true"
 	/>
@@ -82,8 +127,18 @@
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
-		Name="ENABLE_MATHML"
+		Name="ENABLE_LINK_PREFETCH"
 		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_MATHML"
+		Value="ENABLE_MATHML"
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_METER_TAG"
+		Value="ENABLE_METER_TAG"
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
@@ -94,6 +149,21 @@
   <UserMacro
 		Name="ENABLE_OFFLINE_WEB_APPLICATIONS"
 		Value="ENABLE_OFFLINE_WEB_APPLICATIONS"
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_PROGRESS_TAG"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_QUOTA"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_REGISTER_PROTOCOL_HANDLER"
+		Value=""
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
@@ -142,8 +212,23 @@
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro
+		Name="ENABLE_MEDIA_STATISTICS"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_WEB_AUDIO"
+		Value=""
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
 		Name="ENABLE_WEB_SOCKETS"
 		Value="ENABLE_WEB_SOCKETS"
+		PerformEnvironmentSet="true"
+	/>
+  <UserMacro
+		Name="ENABLE_WEB_TIMING"
+		Value=""
 		PerformEnvironmentSet="true"
 	/>
   <UserMacro

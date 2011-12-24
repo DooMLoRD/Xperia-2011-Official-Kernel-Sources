@@ -35,8 +35,6 @@
 #include <sys/ioctl.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/l2cap.h>
 
 #include <glib.h>
 #include <dbus/dbus.h>
@@ -44,153 +42,12 @@
 
 #include "log.h"
 
-#include "manager.h"
 #include "adapter.h"
-#include "dbus-hci.h"
+#include "manager.h"
+#include "event.h"
 #include "dbus-common.h"
 
-#define BLUEZ_NAME "org.bluez"
-
-#define RECONNECT_RETRY_TIMEOUT	5000
-
-static gboolean system_bus_reconnect(void *data)
-{
-	DBusConnection *conn = get_dbus_connection();
-	struct hci_dev_list_req *dl = NULL;
-	struct hci_dev_req *dr;
-	int sk, i;
-	gboolean ret_val = TRUE;
-
-	if (conn) {
-		if (dbus_connection_get_is_connected(conn))
-			return FALSE;
-	}
-
-	if (hcid_dbus_init() < 0)
-		return TRUE;
-
-	/* Create and bind HCI socket */
-	sk = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
-	if (sk < 0) {
-		error("Can't open HCI socket: %s (%d)",
-				strerror(errno), errno);
-		return TRUE;
-	}
-
-	dl = g_malloc0(HCI_MAX_DEV * sizeof(*dr) + sizeof(*dl));
-
-	dl->dev_num = HCI_MAX_DEV;
-	dr = dl->dev_req;
-
-	if (ioctl(sk, HCIGETDEVLIST, (void *) dl) < 0) {
-		info("Can't get device list: %s (%d)",
-			strerror(errno), errno);
-		goto failed;
-	}
-
-	/* reset the default device */
-	manager_set_default_adapter(-1);
-
-	/* FIXME: it shouldn't be needed to register adapters again */
-	for (i = 0; i < dl->dev_num; i++, dr++)
-		manager_register_adapter(dr->dev_id, TRUE);
-
-	ret_val = FALSE;
-
-failed:
-	if (sk >= 0)
-		close(sk);
-
-	g_free(dl);
-
-	return ret_val;
-}
-
-static void disconnect_callback(DBusConnection *conn, void *user_data)
-{
-	set_dbus_connection(NULL);
-
-	g_timeout_add(RECONNECT_RETRY_TIMEOUT,
-				system_bus_reconnect, NULL);
-}
-
-void hcid_dbus_unregister(void)
-{
-	DBusConnection *conn = get_dbus_connection();
-	char **children;
-	int i;
-	uint16_t dev_id;
-
-	if (!conn || !dbus_connection_get_is_connected(conn))
-		return;
-
-	/* Unregister all paths in Adapter path hierarchy */
-	if (!dbus_connection_list_registered(conn, "/", &children))
-		return;
-
-	for (i = 0; children[i]; i++) {
-		char path[MAX_PATH_LENGTH];
-		struct btd_adapter *adapter;
-
-		if (children[i][0] != 'h')
-			continue;
-
-		snprintf(path, sizeof(path), "/%s", children[i]);
-
-		adapter = manager_find_adapter_by_path(path);
-		if (!adapter)
-			continue;
-
-		dev_id = adapter_get_dev_id(adapter);
-		manager_unregister_adapter(dev_id);
-	}
-
-	dbus_free_string_array(children);
-}
-
-void hcid_dbus_exit(void)
-{
-	DBusConnection *conn = get_dbus_connection();
-
-	if (!conn || !dbus_connection_get_is_connected(conn))
-		return;
-
-	manager_cleanup(conn, "/");
-
-	set_dbus_connection(NULL);
-
-	dbus_connection_unref(conn);
-}
-
-int hcid_dbus_init(void)
-{
-	DBusConnection *conn;
-	DBusError err;
-
-	dbus_error_init(&err);
-
-	conn = g_dbus_setup_bus(DBUS_BUS_SYSTEM, BLUEZ_NAME, &err);
-	if (!conn) {
-		if (dbus_error_is_set(&err)) {
-			dbus_error_free(&err);
-			return -EIO;
-		}
-		return -EALREADY;
-	}
-
-	if (g_dbus_set_disconnect_function(conn, disconnect_callback,
-							NULL, NULL) == FALSE) {
-		dbus_connection_unref(conn);
-		return -EIO;
-	}
-
-	if (!manager_init(conn, "/"))
-		return -EIO;
-
-	set_dbus_connection(conn);
-
-	return 0;
-}
+static DBusConnection *connection = NULL;
 
 static void append_variant(DBusMessageIter *iter, int type, void *val)
 {
@@ -204,13 +61,12 @@ static void append_variant(DBusMessageIter *iter, int type, void *val)
 	dbus_message_iter_close_container(iter, &value);
 }
 
-static void append_array_variant(DBusMessageIter *iter, int type, void *val)
+static void append_array_variant(DBusMessageIter *iter, int type, void *val,
+							int n_elements)
 {
 	DBusMessageIter variant, array;
 	char type_sig[2] = { type, '\0' };
 	char array_sig[3] = { DBUS_TYPE_ARRAY, type, '\0' };
-	const char ***str_array = val;
-	int i;
 
 	dbus_message_iter_open_container(iter, DBUS_TYPE_VARIANT,
 						array_sig, &variant);
@@ -218,9 +74,17 @@ static void append_array_variant(DBusMessageIter *iter, int type, void *val)
 	dbus_message_iter_open_container(&variant, DBUS_TYPE_ARRAY,
 						type_sig, &array);
 
-	for (i = 0; (*str_array)[i]; i++)
-		dbus_message_iter_append_basic(&array, type,
-						&((*str_array)[i]));
+	if (dbus_type_is_fixed(type) == TRUE) {
+		dbus_message_iter_append_fixed_array(&array, type, val,
+							n_elements);
+	} else if (type == DBUS_TYPE_STRING || type == DBUS_TYPE_OBJECT_PATH) {
+		const char ***str_array = val;
+		int i;
+
+		for (i = 0; i < n_elements; i++)
+			dbus_message_iter_append_basic(&array, type,
+							&((*str_array)[i]));
+	}
 
 	dbus_message_iter_close_container(&variant, &array);
 
@@ -258,7 +122,7 @@ void dict_append_array(DBusMessageIter *dict, const char *key, int type,
 
 	dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
 
-	append_array_variant(&entry, type, val);
+	append_array_variant(&entry, type, val, n_elements);
 
 	dbus_message_iter_close_container(dict, &entry);
 }
@@ -293,7 +157,7 @@ dbus_bool_t emit_array_property_changed(DBusConnection *conn,
 					const char *path,
 					const char *interface,
 					const char *name,
-					int type, void *value)
+					int type, void *value, int num)
 {
 	DBusMessage *signal;
 	DBusMessageIter iter;
@@ -310,7 +174,81 @@ dbus_bool_t emit_array_property_changed(DBusConnection *conn,
 
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &name);
 
-	append_array_variant(&iter, type, value);
+	append_array_variant(&iter, type, value, num);
 
 	return g_dbus_send_message(conn, signal);
+}
+
+void set_dbus_connection(DBusConnection *conn)
+{
+	connection = conn;
+}
+
+DBusConnection *get_dbus_connection(void)
+{
+	return connection;
+}
+
+const char *class_to_icon(uint32_t class)
+{
+	switch ((class & 0x1f00) >> 8) {
+	case 0x01:
+		return "computer";
+	case 0x02:
+		switch ((class & 0xfc) >> 2) {
+		case 0x01:
+		case 0x02:
+		case 0x03:
+		case 0x05:
+			return "phone";
+		case 0x04:
+			return "modem";
+		}
+		break;
+	case 0x03:
+		return "network-wireless";
+	case 0x04:
+		switch ((class & 0xfc) >> 2) {
+		case 0x01:
+		case 0x02:
+			return "audio-card";	/* Headset */
+		case 0x06:
+			return "audio-card";	/* Headphone */
+		case 0x0b: /* VCR */
+		case 0x0c: /* Video Camera */
+		case 0x0d: /* Camcorder */
+			return "camera-video";
+		default:
+			return "audio-card";	/* Other audio device */
+		}
+		break;
+	case 0x05:
+		switch ((class & 0xc0) >> 6) {
+		case 0x00:
+			switch ((class & 0x1e) >> 2) {
+			case 0x01:
+			case 0x02:
+				return "input-gaming";
+			}
+			break;
+		case 0x01:
+			return "input-keyboard";
+		case 0x02:
+			switch ((class & 0x1e) >> 2) {
+			case 0x05:
+				return "input-tablet";
+			default:
+				return "input-mouse";
+			}
+		}
+		break;
+	case 0x06:
+		if (class & 0x80)
+			return "printer";
+		if (class & 0x20)
+			return "camera-photo";
+		break;
+	}
+
+	return NULL;
 }

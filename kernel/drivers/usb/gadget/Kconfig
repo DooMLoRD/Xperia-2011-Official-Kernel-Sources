@@ -954,11 +954,11 @@ config USB_REMOTE_WAKEUP
 	help
 	  USB remote wakeup support.
 
-config USB_ANDROID_MTP_ARICENT
-	boolean "Aricent USB Media Transfer Protocol driver"
+config USB_ANDROID_MTP
+	boolean "USB Media Transfer Protocol driver"
 	depends on USB_ANDROID
 	help
-	  Enabling this option adds Aricent MTP support to the
+	  Enabling this option adds MTP support to the
 	  android gadget.
 
 	default n

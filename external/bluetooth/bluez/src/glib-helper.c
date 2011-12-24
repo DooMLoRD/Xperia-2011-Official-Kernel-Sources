@@ -27,22 +27,18 @@
 
 #include <stdlib.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
-#include <bluetooth/rfcomm.h>
-#include <bluetooth/l2cap.h>
-#include <bluetooth/sco.h>
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
 #include <glib.h>
 
+#include "btio.h"
+#include "sdpd.h"
 #include "glib-helper.h"
 
 /* Number of seconds to keep a sdp_session_t in the cache */
@@ -56,13 +52,6 @@ struct cached_sdp_session {
 };
 
 static GSList *cached_sdp_sessions = NULL;
-
-struct hci_cmd_data {
-	bt_hci_result_t		cb;
-	uint16_t		handle;
-	uint16_t		ocf;
-	gpointer		caller_data;
-};
 
 static gboolean cached_session_expired(gpointer user_data)
 {
@@ -102,7 +91,7 @@ static sdp_session_t *get_sdp_session(const bdaddr_t *src, const bdaddr_t *dst)
 }
 
 static void cache_sdp_session(bdaddr_t *src, bdaddr_t *dst,
-				sdp_session_t *session)
+						sdp_session_t *session)
 {
 	struct cached_sdp_session *cached;
 
@@ -118,25 +107,6 @@ static void cache_sdp_session(bdaddr_t *src, bdaddr_t *dst,
 	cached->timer = g_timeout_add_seconds(CACHE_TIMEOUT,
 						cached_session_expired,
 						cached);
-}
-
-int set_nonblocking(int fd)
-{
-	long arg;
-
-	arg = fcntl(fd, F_GETFL);
-	if (arg < 0)
-		return -errno;
-
-	/* Return if already nonblocking */
-	if (arg & O_NONBLOCK)
-		return 0;
-
-	arg |= O_NONBLOCK;
-	if (fcntl(fd, F_SETFL, arg) < 0)
-		return -errno;
-
-	return 0;
 }
 
 struct search_context {
@@ -215,8 +185,8 @@ done:
 	search_context_cleanup(ctxt);
 }
 
-static gboolean search_process_cb(GIOChannel *chan,
-			GIOCondition cond, void *user_data)
+static gboolean search_process_cb(GIOChannel *chan, GIOCondition cond,
+							gpointer user_data)
 {
 	struct search_context *ctxt = user_data;
 	int err = 0;
@@ -245,7 +215,8 @@ failed:
 	return FALSE;
 }
 
-static gboolean connect_watch(GIOChannel *chan, GIOCondition cond, gpointer user_data)
+static gboolean connect_watch(GIOChannel *chan, GIOCondition cond,
+							gpointer user_data)
 {
 	struct search_context *ctxt = user_data;
 	sdp_list_t *search, *attrids;
@@ -302,8 +273,9 @@ failed:
 }
 
 static int create_search_context(struct search_context **ctxt,
-				const bdaddr_t *src, const bdaddr_t *dst,
-				uuid_t *uuid)
+					const bdaddr_t *src,
+					const bdaddr_t *dst,
+					uuid_t *uuid)
 {
 	sdp_session_t *s;
 	GIOChannel *chan;
@@ -358,17 +330,7 @@ int bt_search_service(const bdaddr_t *src, const bdaddr_t *dst,
 	return 0;
 }
 
-int bt_discover_services(const bdaddr_t *src, const bdaddr_t *dst,
-		bt_callback_t cb, void *user_data, bt_destroy_t destroy)
-{
-	uuid_t uuid;
-
-	sdp_uuid16_create(&uuid, PUBLIC_BROWSE_GROUP);
-
-	return bt_search_service(src, dst, &uuid, cb, user_data, destroy);
-}
-
-static int find_by_bdaddr(const void *data, const void *user_data)
+static gint find_by_bdaddr(gconstpointer data, gconstpointer user_data)
 {
 	const struct search_context *ctxt = data, *search = user_data;
 
@@ -378,19 +340,20 @@ static int find_by_bdaddr(const void *data, const void *user_data)
 
 int bt_cancel_discovery(const bdaddr_t *src, const bdaddr_t *dst)
 {
-	struct search_context search, *ctxt;
-	GSList *match;
+	struct search_context match, *ctxt;
+	GSList *l;
 
-	memset(&search, 0, sizeof(search));
-	bacpy(&search.src, src);
-	bacpy(&search.dst, dst);
+	memset(&match, 0, sizeof(match));
+	bacpy(&match.src, src);
+	bacpy(&match.dst, dst);
 
 	/* Ongoing SDP Discovery */
-	match = g_slist_find_custom(context_list, &search, find_by_bdaddr);
-	if (!match)
-		return -ENODATA;
+	l = g_slist_find_custom(context_list, &match, find_by_bdaddr);
+	if (l == NULL)
+		return -ENOENT;
 
-	ctxt = match->data;
+	ctxt = l->data;
+
 	if (!ctxt->session)
 		return -ENOTCONN;
 
@@ -401,6 +364,7 @@ int bt_cancel_discovery(const bdaddr_t *src, const bdaddr_t *dst)
 		sdp_close(ctxt->session);
 
 	search_context_cleanup(ctxt);
+
 	return 0;
 }
 
@@ -472,7 +436,7 @@ static struct {
 	{ }
 };
 
-uint16_t bt_name2class(const char *pattern)
+static uint16_t name2class(const char *pattern)
 {
 	int i;
 
@@ -493,6 +457,24 @@ static inline gboolean is_uuid128(const char *string)
 			string[23] == '-');
 }
 
+static int string2uuid16(uuid_t *uuid, const char *string)
+{
+	int length = strlen(string);
+	char *endptr = NULL;
+	uint16_t u16;
+
+	if (length != 4 && length != 6)
+		return -EINVAL;
+
+	u16 = strtol(string, &endptr, 16);
+	if (endptr && *endptr == '\0') {
+		sdp_uuid16_create(uuid, u16);
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
 char *bt_name2string(const char *pattern)
 {
 	uuid_t uuid;
@@ -504,7 +486,7 @@ char *bt_name2string(const char *pattern)
 		return g_strdup(pattern);
 
 	/* Friendly service name format */
-	uuid16 = bt_name2class(pattern);
+	uuid16 = name2class(pattern);
 	if (uuid16)
 		goto proceed;
 
@@ -551,14 +533,14 @@ int bt_string2uuid(uuid_t *uuid, const char *string)
 
 		return 0;
 	} else {
-		uint16_t class = bt_name2class(string);
+		uint16_t class = name2class(string);
 		if (class) {
 			sdp_uuid16_create(uuid, class);
 			return 0;
 		}
-	}
 
-	return -1;
+		return string2uuid16(uuid, string);
+	}
 }
 
 gchar *bt_list2string(GSList *list)
@@ -602,184 +584,4 @@ GSList *bt_string2list(const gchar *str)
 	g_free(uuids);
 
 	return l;
-}
-
-static gboolean hci_event_watch(GIOChannel *io,
-			GIOCondition cond, gpointer user_data)
-{
-	unsigned char buf[HCI_MAX_EVENT_SIZE], *body;
-	struct hci_cmd_data *cmd = user_data;
-	evt_cmd_status *evt_status;
-	evt_auth_complete *evt_auth;
-	evt_encrypt_change *evt_enc;
-	hci_event_hdr *hdr;
-	set_conn_encrypt_cp cp;
-	int dd;
-	uint16_t ocf;
-	uint8_t status = HCI_OE_POWER_OFF;
-
-	if (cond & G_IO_NVAL) {
-		cmd->cb(status, cmd->caller_data);
-		return FALSE;
-	}
-
-	if (cond & (G_IO_ERR | G_IO_HUP))
-		goto failed;
-
-	dd = g_io_channel_unix_get_fd(io);
-
-	if (read(dd, buf, sizeof(buf)) < 0)
-		goto failed;
-
-	hdr = (hci_event_hdr *) (buf + 1);
-	body = buf + (1 + HCI_EVENT_HDR_SIZE);
-
-	switch (hdr->evt) {
-	case EVT_CMD_STATUS:
-		evt_status = (evt_cmd_status *) body;
-		ocf = cmd_opcode_ocf(evt_status->opcode);
-		if (ocf != cmd->ocf)
-			return TRUE;
-		switch (ocf) {
-		case OCF_AUTH_REQUESTED:
-		case OCF_SET_CONN_ENCRYPT:
-			if (evt_status->status != 0) {
-				/* Baseband rejected command */
-				status = evt_status->status;
-				goto failed;
-			}
-			break;
-		default:
-			return TRUE;
-		}
-		/* Wait for the next event */
-		return TRUE;
-	case EVT_AUTH_COMPLETE:
-		evt_auth = (evt_auth_complete *) body;
-		if (evt_auth->handle != cmd->handle) {
-			/* Skipping */
-			return TRUE;
-		}
-
-		if (evt_auth->status != 0x00) {
-			status = evt_auth->status;
-			/* Abort encryption */
-			goto failed;
-		}
-
-		memset(&cp, 0, sizeof(cp));
-		cp.handle  = cmd->handle;
-		cp.encrypt = 1;
-
-		cmd->ocf = OCF_SET_CONN_ENCRYPT;
-
-		if (hci_send_cmd(dd, OGF_LINK_CTL, OCF_SET_CONN_ENCRYPT,
-					SET_CONN_ENCRYPT_CP_SIZE, &cp) < 0) {
-			status = HCI_COMMAND_DISALLOWED;
-			goto failed;
-		}
-		/* Wait for encrypt change event */
-		return TRUE;
-	case EVT_ENCRYPT_CHANGE:
-		evt_enc = (evt_encrypt_change *) body;
-		if (evt_enc->handle != cmd->handle)
-			return TRUE;
-
-		/* Procedure finished: reporting status */
-		status = evt_enc->status;
-		break;
-	default:
-		/* Skipping */
-		return TRUE;
-	}
-
-failed:
-	cmd->cb(status, cmd->caller_data);
-	g_io_channel_shutdown(io, TRUE, NULL);
-
-	return FALSE;
-}
-
-int bt_acl_encrypt(const bdaddr_t *src, const bdaddr_t *dst,
-			bt_hci_result_t cb, gpointer user_data)
-{
-	GIOChannel *io;
-	struct hci_cmd_data *cmd;
-	struct hci_conn_info_req *cr;
-	auth_requested_cp cp;
-	struct hci_filter nf;
-	int dd, dev_id, err;
-	char src_addr[18];
-	uint32_t link_mode;
-	uint16_t handle;
-
-	ba2str(src, src_addr);
-	dev_id = hci_devid(src_addr);
-	if (dev_id < 0)
-		return -errno;
-
-	dd = hci_open_dev(dev_id);
-	if (dd < 0)
-		return -errno;
-
-	cr = g_malloc0(sizeof(*cr) + sizeof(struct hci_conn_info));
-	cr->type = ACL_LINK;
-	bacpy(&cr->bdaddr, dst);
-
-	err = ioctl(dd, HCIGETCONNINFO, cr);
-	link_mode = cr->conn_info->link_mode;
-	handle = cr->conn_info->handle;
-	g_free(cr);
-
-	if (err < 0) {
-		err = errno;
-		goto failed;
-	}
-
-	if (link_mode & HCI_LM_ENCRYPT) {
-		/* Already encrypted */
-		err = EALREADY;
-		goto failed;
-	}
-
-	memset(&cp, 0, sizeof(cp));
-	cp.handle = htobs(handle);
-
-	if (hci_send_cmd(dd, OGF_LINK_CTL, OCF_AUTH_REQUESTED,
-				AUTH_REQUESTED_CP_SIZE, &cp) < 0) {
-		err = errno;
-		goto failed;
-	}
-
-	cmd = g_new0(struct hci_cmd_data, 1);
-	cmd->handle = handle;
-	cmd->ocf = OCF_AUTH_REQUESTED;
-	cmd->cb	= cb;
-	cmd->caller_data = user_data;
-
-	hci_filter_clear(&nf);
-	hci_filter_set_ptype(HCI_EVENT_PKT, &nf);
-	hci_filter_set_event(EVT_CMD_STATUS, &nf);
-	hci_filter_set_event(EVT_AUTH_COMPLETE, &nf);
-	hci_filter_set_event(EVT_ENCRYPT_CHANGE, &nf);
-
-	if (setsockopt(dd, SOL_HCI, HCI_FILTER, &nf, sizeof(nf)) < 0) {
-		err = errno;
-		g_free(cmd);
-		goto failed;
-	}
-
-	io = g_io_channel_unix_new(dd);
-	g_io_channel_set_close_on_unref(io, FALSE);
-	g_io_add_watch_full(io, G_PRIORITY_DEFAULT,
-			G_IO_HUP | G_IO_ERR | G_IO_NVAL | G_IO_IN,
-			hci_event_watch, cmd, g_free);
-	g_io_channel_unref(io);
-
-	return 0;
-
-failed:
-	close(dd);
-
-	return -err;
 }

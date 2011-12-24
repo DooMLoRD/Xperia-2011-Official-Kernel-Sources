@@ -1,9 +1,12 @@
 #ifndef HW_ISA_H
 #define HW_ISA_H
+
 /* ISA bus */
 
 #include "ioport.h"
 #include "qdev.h"
+
+extern target_phys_addr_t isa_mem_base;
 
 void isa_mmio_init(target_phys_addr_t base, target_phys_addr_t size);
 

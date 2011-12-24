@@ -5,6 +5,8 @@
  * 'tty.h' defines some structures used by tty_io.c and some defines.
  */
 
+#define N_CAIF		20	/* CAIF protocol for talking to modems */
+
 #ifdef __KERNEL__
 #include <linux/fs.h>
 #include <linux/major.h>

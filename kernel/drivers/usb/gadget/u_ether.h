@@ -114,7 +114,8 @@ int eem_bind_config(struct usb_configuration *c);
 
 #if defined(CONFIG_USB_ETH_RNDIS) || defined(CONFIG_USB_ANDROID_RNDIS)
 
-int rndis_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
+int rndis_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
+						u32 vendorID, const char *manufacturer);
 
 #else
 

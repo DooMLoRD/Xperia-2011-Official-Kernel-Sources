@@ -15,16 +15,11 @@
  * memchecker framework.
  */
 
-/* This file should compile iff qemu is built with memory checking
- * configuration turned on. */
-#ifndef CONFIG_MEMCHECK
-#error CONFIG_MEMCHECK is not defined.
-#endif  // CONFIG_MEMCHECK
-
 #include "elff/elff_api.h"
 #include "memcheck.h"
 #include "memcheck_proc_management.h"
 #include "memcheck_logging.h"
+#include "memcheck_util.h"
 
 /* Current thread id.
  * This value is updated with each call to memcheck_switch, saving here

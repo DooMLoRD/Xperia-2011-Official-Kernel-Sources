@@ -63,88 +63,66 @@ char *batostr(const bdaddr_t *ba)
 
 bdaddr_t *strtoba(const char *str)
 {
-	const char *ptr = str;
-	int i;
+	bdaddr_t b;
+	bdaddr_t *ba = bt_malloc(sizeof(*ba));
 
-	uint8_t *ba = bt_malloc(sizeof(bdaddr_t));
-	if (!ba)
-		return NULL;
-
-	for (i = 0; i < 6; i++) {
-		ba[i] = (uint8_t) strtol(ptr, NULL, 16);
-		if (i != 5 && !(ptr = strchr(ptr,':')))
-			ptr = ":00:00:00:00:00";
-		ptr++;
+	if (ba) {
+		str2ba(str, &b);
+		baswap(ba, &b);
 	}
 
-	return (bdaddr_t *) ba;
+	return ba;
 }
 
 int ba2str(const bdaddr_t *ba, char *str)
 {
-	uint8_t b[6];
-
-	baswap((bdaddr_t *) b, ba);
 	return sprintf(str, "%2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X",
-		b[0], b[1], b[2], b[3], b[4], b[5]);
+		ba->b[5], ba->b[4], ba->b[3], ba->b[2], ba->b[1], ba->b[0]);
 }
 
 int str2ba(const char *str, bdaddr_t *ba)
 {
-	uint8_t b[6];
-	const char *ptr = str;
+	bdaddr_t b;
 	int i;
 
-	for (i = 0; i < 6; i++) {
-		b[i] = (uint8_t) strtol(ptr, NULL, 16);
-		if (i != 5 && !(ptr = strchr(ptr, ':')))
-			ptr = ":00:00:00:00:00";
-		ptr++;
+	if (bachk(str) < 0) {
+		memset(ba, 0, sizeof(*ba));
+		return -1;
 	}
 
-	baswap(ba, (bdaddr_t *) b);
+	for (i = 0; i < 6; i++, str += 3)
+		b.b[i] = strtol(str, NULL, 16);
+
+	baswap(ba, &b);
 
 	return 0;
 }
 
 int ba2oui(const bdaddr_t *ba, char *str)
 {
-	uint8_t b[6];
-
-	baswap((bdaddr_t *) b, ba);
-
-	return sprintf(str, "%2.2X-%2.2X-%2.2X", b[0], b[1], b[2]);
+	return sprintf(str, "%2.2X-%2.2X-%2.2X", ba->b[5], ba->b[4], ba->b[3]);
 }
 
 int bachk(const char *str)
 {
-	char tmp[18], *ptr = tmp;
-
 	if (!str)
 		return -1;
 
 	if (strlen(str) != 17)
 		return -1;
 
-	memcpy(tmp, str, 18);
-
-	while (*ptr) {
-		*ptr = toupper(*ptr);
-		if (*ptr < '0'|| (*ptr > '9' && *ptr < 'A') || *ptr > 'F')
+	while (*str) {
+		if (!isxdigit(*str++))
 			return -1;
-		ptr++;
 
-		*ptr = toupper(*ptr);
-		if (*ptr < '0'|| (*ptr > '9' && *ptr < 'A') || *ptr > 'F')
+		if (!isxdigit(*str++))
 			return -1;
-		ptr++;
 
-		*ptr = toupper(*ptr);
-		if (*ptr == 0)
+		if (*str == 0)
 			break;
-		if (*ptr != ':')
+
+		if (*str++ != ':')
 			return -1;
-		ptr++;
 	}
 
 	return 0;
@@ -480,6 +458,10 @@ char *bt_compidtostr(int compid)
 		return "Wicentric, Inc.";
 	case 96:
 		return "RivieraWaves S.A.S";
+	case 97:
+		return "RDA Microelectronics";
+	case 98:
+		return "Gibson Guitars";
 	case 65535:
 		return "internal use";
 	default:

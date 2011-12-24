@@ -2,7 +2,7 @@
  *
  *  D-Bus helper library
  *
- *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2004-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -50,6 +50,13 @@ struct interface_data {
 	const GDBusPropertyTable *properties;
 	void *user_data;
 	GDBusDestroyFunction destroy;
+};
+
+struct security_data {
+	GDBusPendingReply pending;
+	DBusMessage *message;
+	const GDBusMethodTable *method;
+	void *iface_user_data;
 };
 
 static void print_arguments(GString *gstr, const char *sig,
@@ -155,7 +162,7 @@ static void generate_introspection_xml(DBusConnection *conn,
 
 	gstr = g_string_new(DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE);
 
-	g_string_append_printf(gstr, "<node name=\"%s\">\n", path);
+	g_string_append_printf(gstr, "<node>\n");
 
 	for (list = data->interfaces; list; list = list->next) {
 		struct interface_data *iface = list->data;
@@ -194,18 +201,194 @@ static DBusMessage *introspect(DBusConnection *connection,
 		return NULL;
 	}
 
-	if (!data->introspect)
+	if (data->introspect == NULL)
 		generate_introspection_xml(connection, data,
 						dbus_message_get_path(message));
 
 	reply = dbus_message_new_method_return(message);
-	if (!reply)
+	if (reply == NULL)
 		return NULL;
 
 	dbus_message_append_args(reply, DBUS_TYPE_STRING, &data->introspect,
 					DBUS_TYPE_INVALID);
 
 	return reply;
+}
+
+static DBusHandlerResult process_message(DBusConnection *connection,
+			DBusMessage *message, const GDBusMethodTable *method,
+							void *iface_user_data)
+{
+	DBusMessage *reply;
+
+	reply = method->function(connection, message, iface_user_data);
+
+	if (method->flags & G_DBUS_METHOD_FLAG_NOREPLY) {
+		if (reply != NULL)
+			dbus_message_unref(reply);
+		return DBUS_HANDLER_RESULT_HANDLED;
+	}
+
+	if (method->flags & G_DBUS_METHOD_FLAG_ASYNC) {
+		if (reply == NULL)
+			return DBUS_HANDLER_RESULT_HANDLED;
+	}
+
+	if (reply == NULL)
+		return DBUS_HANDLER_RESULT_NEED_MEMORY;
+
+	dbus_connection_send(connection, reply, NULL);
+	dbus_message_unref(reply);
+
+	return DBUS_HANDLER_RESULT_HANDLED;
+}
+
+static GDBusPendingReply next_pending = 1;
+static GSList *pending_security = NULL;
+
+static const GDBusSecurityTable *security_table = NULL;
+
+void g_dbus_pending_success(DBusConnection *connection,
+					GDBusPendingReply pending)
+{
+	GSList *list;
+
+        for (list = pending_security; list; list = list->next) {
+		struct security_data *secdata = list->data;
+
+		if (secdata->pending != pending)
+			continue;
+
+		pending_security = g_slist_remove(pending_security, secdata);
+
+		process_message(connection, secdata->message,
+				secdata->method, secdata->iface_user_data);
+
+		dbus_message_unref(secdata->message);
+		g_free(secdata);
+		return;
+        }
+}
+
+void g_dbus_pending_error_valist(DBusConnection *connection,
+				GDBusPendingReply pending, const char *name,
+					const char *format, va_list args)
+{
+	GSList *list;
+
+        for (list = pending_security; list; list = list->next) {
+		struct security_data *secdata = list->data;
+		DBusMessage *reply;
+
+		if (secdata->pending != pending)
+			continue;
+
+		pending_security = g_slist_remove(pending_security, secdata);
+
+		reply = g_dbus_create_error_valist(secdata->message,
+							name, format, args);
+		if (reply != NULL) {
+			dbus_connection_send(connection, reply, NULL);
+			dbus_message_unref(reply);
+		}
+
+		dbus_message_unref(secdata->message);
+		g_free(secdata);
+		return;
+        }
+}
+
+void g_dbus_pending_error(DBusConnection *connection,
+				GDBusPendingReply pending,
+				const char *name, const char *format, ...)
+{
+	va_list args;
+
+	va_start(args, format);
+
+	g_dbus_pending_error_valist(connection, pending, name, format, args);
+
+	va_end(args);
+}
+
+int polkit_check_authorization(DBusConnection *conn,
+				const char *action, gboolean interaction,
+				void (*function) (dbus_bool_t authorized,
+							void *user_data),
+						void *user_data, int timeout);
+
+struct builtin_security_data {
+	DBusConnection *conn;
+	GDBusPendingReply pending;
+};
+
+static void builtin_security_result(dbus_bool_t authorized, void *user_data)
+{
+	struct builtin_security_data *data = user_data;
+
+	if (authorized == TRUE)
+		g_dbus_pending_success(data->conn, data->pending);
+	else
+		g_dbus_pending_error(data->conn, data->pending,
+						DBUS_ERROR_AUTH_FAILED, NULL);
+
+	g_free(data);
+}
+
+static void builtin_security_function(DBusConnection *conn,
+						const char *action,
+						gboolean interaction,
+						GDBusPendingReply pending)
+{
+	struct builtin_security_data *data;
+
+	data = g_new0(struct builtin_security_data, 1);
+	data->conn = conn;
+	data->pending = pending;
+
+	if (polkit_check_authorization(conn, action, interaction,
+				builtin_security_result, data, 30000) < 0)
+		g_dbus_pending_error(conn, pending, NULL, NULL);
+}
+
+static gboolean check_privilege(DBusConnection *conn, DBusMessage *msg,
+			const GDBusMethodTable *method, void *iface_user_data)
+{
+	const GDBusSecurityTable *security;
+
+	for (security = security_table; security && security->privilege;
+								security++) {
+		struct security_data *secdata;
+		gboolean interaction;
+
+		if (security->privilege != method->privilege)
+			continue;
+
+		secdata = g_new(struct security_data, 1);
+		secdata->pending = next_pending++;
+		secdata->message = dbus_message_ref(msg);
+		secdata->method = method;
+		secdata->iface_user_data = iface_user_data;
+
+		pending_security = g_slist_prepend(pending_security, secdata);
+
+		if (security->flags & G_DBUS_SECURITY_FLAG_ALLOW_INTERACTION)
+			interaction = TRUE;
+		else
+			interaction = FALSE;
+
+		if (!(security->flags & G_DBUS_SECURITY_FLAG_BUILTIN) &&
+							security->function)
+			security->function(conn, security->action,
+						interaction, secdata->pending);
+		else
+			builtin_security_function(conn, security->action,
+						interaction, secdata->pending);
+
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 static void generic_unregister(DBusConnection *connection, void *user_data)
@@ -221,7 +404,7 @@ static struct interface_data *find_interface(GSList *interfaces,
 {
 	GSList *list;
 
-	if (!name)
+	if (name == NULL)
 		return NULL;
 
 	for (list = interfaces; list; list = list->next) {
@@ -244,13 +427,11 @@ static DBusHandlerResult generic_message(DBusConnection *connection,
 	interface = dbus_message_get_interface(message);
 
 	iface = find_interface(data->interfaces, interface);
-	if (!iface)
+	if (iface == NULL)
 		return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 
 	for (method = iface->methods; method &&
 			method->name && method->function; method++) {
-		DBusMessage *reply;
-
 		if (dbus_message_is_method_call(message, iface->name,
 							method->name) == FALSE)
 			continue;
@@ -259,26 +440,12 @@ static DBusHandlerResult generic_message(DBusConnection *connection,
 						method->signature) == FALSE)
 			continue;
 
-		reply = method->function(connection, message, iface->user_data);
-
-		if (method->flags & G_DBUS_METHOD_FLAG_NOREPLY) {
-			if (reply != NULL)
-				dbus_message_unref(reply);
+		if (check_privilege(connection, message, method,
+						iface->user_data) == TRUE)
 			return DBUS_HANDLER_RESULT_HANDLED;
-		}
 
-		if (method->flags & G_DBUS_METHOD_FLAG_ASYNC) {
-			if (reply == NULL)
-				return DBUS_HANDLER_RESULT_HANDLED;
-		}
-
-		if (reply == NULL)
-			return DBUS_HANDLER_RESULT_NEED_MEMORY;
-
-		dbus_connection_send(connection, reply, NULL);
-		dbus_message_unref(reply);
-
-		return DBUS_HANDLER_RESULT_HANDLED;
+		return process_message(connection, message, method,
+							iface->user_data);
 	}
 
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -296,7 +463,7 @@ static void invalidate_parent_data(DBusConnection *conn, const char *child_path)
 
 	parent_path = g_strdup(child_path);
 	slash = strrchr(parent_path, '/');
-	if (!slash)
+	if (slash == NULL)
 		goto done;
 
 	if (slash == parent_path && parent_path[1] != '\0')
@@ -307,13 +474,14 @@ static void invalidate_parent_data(DBusConnection *conn, const char *child_path)
 	if (!strlen(parent_path))
 		goto done;
 
-	if (!dbus_connection_get_object_path_data(conn, parent_path,
-							(void *) &data)) {
-		invalidate_parent_data(conn, parent_path);
+	if (dbus_connection_get_object_path_data(conn, parent_path,
+							(void *) &data) == FALSE) {
 		goto done;
 	}
 
-	if (!data)
+	invalidate_parent_data(conn, parent_path);
+
+	if (data == NULL)
 		goto done;
 
 	g_free(data->introspect);
@@ -362,10 +530,9 @@ static struct generic_data *object_path_ref(DBusConnection *connection,
 	}
 
 	data = g_new0(struct generic_data, 1);
+	data->refcount = 1;
 
 	data->introspect = g_strdup(DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE "<node></node>");
-
-	data->refcount = 1;
 
 	if (!dbus_connection_register_object_path(connection, path,
 						&generic_table, data)) {
@@ -387,7 +554,7 @@ static gboolean remove_interface(struct generic_data *data, const char *name)
 	struct interface_data *iface;
 
 	iface = find_interface(data->interfaces, name);
-	if (!iface)
+	if (iface == NULL)
 		return FALSE;
 
 	data->interfaces = g_slist_remove(data->interfaces, iface);
@@ -434,14 +601,14 @@ static gboolean check_signal(DBusConnection *conn, const char *path,
 
 	*args = NULL;
 	if (!dbus_connection_get_object_path_data(conn, path,
-					(void *) &data) || !data) {
+					(void *) &data) || data == NULL) {
 		error("dbus_connection_emit_signal: path %s isn't registered",
 				path);
 		return FALSE;
 	}
 
 	iface = find_interface(data->interfaces, interface);
-	if (!iface) {
+	if (iface == NULL) {
 		error("dbus_connection_emit_signal: %s does not implement %s",
 				path, interface);
 		return FALSE;
@@ -454,7 +621,7 @@ static gboolean check_signal(DBusConnection *conn, const char *path,
 		}
 	}
 
-	if (!*args) {
+	if (*args == NULL) {
 		error("No signal named %s on interface %s", name, interface);
 		return FALSE;
 	}
@@ -477,7 +644,7 @@ static dbus_bool_t emit_signal_valist(DBusConnection *conn,
 		return FALSE;
 
 	signal = dbus_message_new_signal(path, interface, name);
-	if (!signal) {
+	if (signal == NULL) {
 		error("Unable to allocate new %s.%s signal", interface,  name);
 		return FALSE;
 	}
@@ -535,7 +702,7 @@ gboolean g_dbus_unregister_interface(DBusConnection *connection,
 {
 	struct generic_data *data = NULL;
 
-	if (!path)
+	if (path == NULL)
 		return FALSE;
 
 	if (dbus_connection_get_object_path_data(connection, path,
@@ -552,6 +719,23 @@ gboolean g_dbus_unregister_interface(DBusConnection *connection,
 	data->introspect = NULL;
 
 	object_path_unref(connection, path);
+
+	return TRUE;
+}
+
+gboolean g_dbus_register_security(const GDBusSecurityTable *security)
+{
+	if (security_table != NULL)
+		return FALSE;
+
+	security_table = security;
+
+	return TRUE;
+}
+
+gboolean g_dbus_unregister_security(const GDBusSecurityTable *security)
+{
+	security_table = NULL;
 
 	return TRUE;
 }

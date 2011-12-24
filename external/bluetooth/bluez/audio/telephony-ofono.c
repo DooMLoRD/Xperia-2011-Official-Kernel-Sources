@@ -48,6 +48,7 @@ struct voice_call {
 	char *obj_path;
 	int status;
 	gboolean originating;
+	gboolean conference;
 	char *number;
 	guint watch;
 };
@@ -56,17 +57,16 @@ static DBusConnection *connection = NULL;
 static char *modem_obj_path = NULL;
 static char *last_dialed_number = NULL;
 static GSList *calls = NULL;
+static GSList *watches = NULL;
+static GSList *pending = NULL;
 
 #define OFONO_BUS_NAME "org.ofono"
 #define OFONO_PATH "/"
+#define OFONO_MODEM_INTERFACE "org.ofono.Modem"
 #define OFONO_MANAGER_INTERFACE "org.ofono.Manager"
 #define OFONO_NETWORKREG_INTERFACE "org.ofono.NetworkRegistration"
 #define OFONO_VCMANAGER_INTERFACE "org.ofono.VoiceCallManager"
 #define OFONO_VC_INTERFACE "org.ofono.VoiceCall"
-
-static guint registration_watch = 0;
-static guint voice_watch = 0;
-static guint device_watch = 0;
 
 /* HAL battery namespace key values */
 static int battchg_cur = -1;    /* "battery.charge_level.current" */
@@ -87,14 +87,6 @@ static const char *chld_str = "0,1,1x,2,2x,3,4";
 static char *subscriber_number = NULL;
 
 static gboolean events_enabled = FALSE;
-
-/* Response and hold state
- * -1 = none
- *  0 = incoming call is put on hold in the AG
- *  1 = held incoming call is accepted in the AG
- *  2 = held incoming call is rejected in the AG
- */
-static int response_and_hold = -1;
 
 static struct indicator ofono_indicators[] =
 {
@@ -136,9 +128,46 @@ static struct voice_call *find_vc_with_status(int status)
 	return NULL;
 }
 
+static struct voice_call *find_vc_without_status(int status)
+{
+	GSList *l;
+
+	for (l = calls; l != NULL; l = l->next) {
+		struct voice_call *call = l->data;
+
+		if (call->status != status)
+			return call;
+	}
+
+	return NULL;
+}
+
+static int number_type(const char *number)
+{
+	if (number == NULL)
+		return NUMBER_TYPE_TELEPHONY;
+
+	if (number[0] == '+' || strncmp(number, "00", 2) == 0)
+		return NUMBER_TYPE_INTERNATIONAL;
+
+	return NUMBER_TYPE_TELEPHONY;
+}
+
 void telephony_device_connected(void *telephony_device)
 {
+	struct voice_call *coming;
+
 	DBG("telephony-ofono: device %p connected", telephony_device);
+
+	coming = find_vc_with_status(CALL_STATUS_ALERTING);
+	if (coming) {
+		if (find_vc_with_status(CALL_STATUS_ACTIVE))
+			telephony_call_waiting_ind(coming->number,
+						number_type(coming->number));
+		else
+			telephony_incoming_call_ind(coming->number,
+						number_type(coming->number));
+	}
 }
 
 void telephony_device_disconnected(void *telephony_device)
@@ -156,11 +185,8 @@ void telephony_event_reporting_req(void *telephony_device, int ind)
 
 void telephony_response_and_hold_req(void *telephony_device, int rh)
 {
-	response_and_hold = rh;
-
-	telephony_response_and_hold_ind(response_and_hold);
-
-	telephony_response_and_hold_rsp(telephony_device, CME_ERROR_NONE);
+	telephony_response_and_hold_rsp(telephony_device,
+						CME_ERROR_NOT_SUPPORTED);
 }
 
 void telephony_last_dialed_number_req(void *telephony_device)
@@ -211,48 +237,129 @@ static int send_method_call(const char *dest, const char *path,
 	}
 
 	dbus_pending_call_set_notify(call, cb, user_data, NULL);
-	dbus_pending_call_unref(call);
+	pending = g_slist_prepend(pending, call);
 	dbus_message_unref(msg);
 
 	return 0;
 }
 
+static int answer_call(struct voice_call *vc)
+{
+	DBG("%s", vc->number);
+	return send_method_call(OFONO_BUS_NAME, vc->obj_path,
+						OFONO_VC_INTERFACE, "Answer",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
+static int release_call(struct voice_call *vc)
+{
+	DBG("%s", vc->number);
+	return send_method_call(OFONO_BUS_NAME, vc->obj_path,
+						OFONO_VC_INTERFACE, "Hangup",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
+static int release_answer_calls(void)
+{
+	DBG("");
+	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
+						OFONO_VCMANAGER_INTERFACE,
+						"ReleaseAndAnswer",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
+static int split_call(struct voice_call *call)
+{
+	DBG("%s", call->number);
+	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
+						OFONO_VCMANAGER_INTERFACE,
+						"PrivateChat",
+						NULL, NULL,
+						DBUS_TYPE_OBJECT_PATH,
+						call->obj_path,
+						DBUS_TYPE_INVALID);
+	return -1;
+}
+
+static int swap_calls(void)
+{
+	DBG("");
+	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
+						OFONO_VCMANAGER_INTERFACE,
+						"SwapCalls",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
+static int create_conference(void)
+{
+	DBG("");
+	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
+						OFONO_VCMANAGER_INTERFACE,
+						"CreateMultiparty",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
+static int release_conference(void)
+{
+	DBG("");
+	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
+						OFONO_VCMANAGER_INTERFACE,
+						"HangupMultiparty",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
+static int call_transfer(void)
+{
+	DBG("");
+	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
+						OFONO_VCMANAGER_INTERFACE,
+						"Transfer",
+						NULL, NULL, DBUS_TYPE_INVALID);
+}
+
 void telephony_terminate_call_req(void *telephony_device)
 {
-	struct voice_call *vc;
-	int ret;
+	struct voice_call *call;
+	struct voice_call *alerting;
+	int err;
 
-	if ((vc = find_vc_with_status(CALL_STATUS_ACTIVE))) {
-	} else if ((vc = find_vc_with_status(CALL_STATUS_DIALING))) {
-	} else if ((vc = find_vc_with_status(CALL_STATUS_ALERTING))) {
-	} else if ((vc = find_vc_with_status(CALL_STATUS_INCOMING))) {
-	}
+	call = find_vc_with_status(CALL_STATUS_ACTIVE);
+	if (!call)
+		call = calls->data;
 
-	if (!vc) {
-		error("in telephony_terminate_call_req, no active call");
+	if (!call) {
+		error("No active call");
 		telephony_terminate_call_rsp(telephony_device,
-					CME_ERROR_NOT_ALLOWED);
+						CME_ERROR_NOT_ALLOWED);
 		return;
 	}
 
-	ret = send_method_call(OFONO_BUS_NAME, vc->obj_path,
-					OFONO_VC_INTERFACE,
-					"Hangup", NULL,
-					NULL, DBUS_TYPE_INVALID);
+	alerting = find_vc_with_status(CALL_STATUS_ALERTING);
+	if (call->status == CALL_STATUS_HELD && alerting)
+		err = release_call(alerting);
+	else if (call->conference)
+		err = release_conference();
+	else
+		err = release_call(call);
 
-	if (ret < 0) {
-		telephony_answer_call_rsp(telephony_device,
-					CME_ERROR_AG_FAILURE);
-		return;
-	}
-
-	telephony_answer_call_rsp(telephony_device, CME_ERROR_NONE);
+	if (err < 0)
+		telephony_terminate_call_rsp(telephony_device,
+						CME_ERROR_AG_FAILURE);
+	else
+		telephony_terminate_call_rsp(telephony_device, CME_ERROR_NONE);
 }
 
 void telephony_answer_call_req(void *telephony_device)
 {
-	struct voice_call *vc = find_vc_with_status(CALL_STATUS_INCOMING);
+	struct voice_call *vc;
 	int ret;
+
+	vc = find_vc_with_status(CALL_STATUS_INCOMING);
+	if (!vc)
+		vc = find_vc_with_status(CALL_STATUS_ALERTING);
+
+	if (!vc)
+		vc = find_vc_with_status(CALL_STATUS_WAITING);
 
 	if (!vc) {
 		telephony_answer_call_rsp(telephony_device,
@@ -260,11 +367,7 @@ void telephony_answer_call_req(void *telephony_device)
 		return;
 	}
 
-	ret = send_method_call(OFONO_BUS_NAME, vc->obj_path,
-			OFONO_VC_INTERFACE,
-			"Answer", NULL,
-			NULL, DBUS_TYPE_INVALID);
-
+	ret = answer_call(vc);
 	if (ret < 0) {
 		telephony_answer_call_rsp(telephony_device,
 					CME_ERROR_AG_FAILURE);
@@ -358,15 +461,22 @@ void telephony_list_current_calls_req(void *telephony_device)
 
 	for (l = calls, i = 1; l != NULL; l = l->next, i++) {
 		struct voice_call *vc = l->data;
-		int direction;
+		int direction, multiparty;
 
 		direction = vc->originating ?
 				CALL_DIR_OUTGOING : CALL_DIR_INCOMING;
 
+		multiparty = vc->conference ?
+				CALL_MULTIPARTY_YES : CALL_MULTIPARTY_NO;
+
+		DBG("call %s direction %d multiparty %d", vc->number,
+							direction, multiparty);
+
 		telephony_list_current_call_ind(i, direction, vc->status,
-					CALL_MODE_VOICE, CALL_MULTIPARTY_NO,
-					vc->number, NUMBER_TYPE_TELEPHONY);
+					CALL_MODE_VOICE, multiparty,
+					vc->number, number_type(vc->number));
 	}
+
 	telephony_list_current_calls_rsp(telephony_device, CME_ERROR_NONE);
 }
 
@@ -379,10 +489,84 @@ void telephony_operator_selection_req(void *telephony_device)
 	telephony_operator_selection_rsp(telephony_device, CME_ERROR_NONE);
 }
 
+static void foreach_vc_with_status(int status,
+					int (*func)(struct voice_call *vc))
+{
+	GSList *l;
+
+	for (l = calls; l != NULL; l = l->next) {
+		struct voice_call *call = l->data;
+
+		if (call->status == status)
+			func(call);
+	}
+}
+
 void telephony_call_hold_req(void *telephony_device, const char *cmd)
 {
+	const char *idx;
+	struct voice_call *call;
+	int err = 0;
+
 	DBG("telephony-ofono: got call hold request %s", cmd);
-	telephony_call_hold_rsp(telephony_device, CME_ERROR_NONE);
+
+	if (strlen(cmd) > 1)
+		idx = &cmd[1];
+	else
+		idx = NULL;
+
+	if (idx)
+		call = g_slist_nth_data(calls, strtol(idx, NULL, 0) - 1);
+	else
+		call = NULL;
+
+	switch (cmd[0]) {
+	case '0':
+		if (find_vc_with_status(CALL_STATUS_WAITING))
+			foreach_vc_with_status(CALL_STATUS_WAITING,
+								release_call);
+		else
+			foreach_vc_with_status(CALL_STATUS_HELD, release_call);
+		break;
+	case '1':
+		if (idx) {
+			if (call)
+				err = release_call(call);
+			break;
+		}
+		err = release_answer_calls();
+		break;
+	case '2':
+		if (idx) {
+			if (call)
+				err = split_call(call);
+		} else {
+			call = find_vc_with_status(CALL_STATUS_WAITING);
+
+			if (call)
+				err = answer_call(call);
+			else
+				err = swap_calls();
+		}
+		break;
+	case '3':
+		if (find_vc_with_status(CALL_STATUS_HELD) ||
+				find_vc_with_status(CALL_STATUS_WAITING))
+			err = create_conference();
+		break;
+	case '4':
+		err = call_transfer();
+		break;
+	default:
+		DBG("Unknown call hold request");
+		break;
+	}
+
+	if (err)
+		telephony_call_hold_rsp(telephony_device,
+					CME_ERROR_AG_FAILURE);
+	else
+		telephony_call_hold_rsp(telephony_device, CME_ERROR_NONE);
 }
 
 void telephony_nr_and_ec_req(void *telephony_device, gboolean enable)
@@ -395,8 +579,27 @@ void telephony_nr_and_ec_req(void *telephony_device, gboolean enable)
 
 void telephony_key_press_req(void *telephony_device, const char *keys)
 {
+	struct voice_call *active, *incoming;
+	int err;
+
 	DBG("telephony-ofono: got key press request for %s", keys);
-	telephony_key_press_rsp(telephony_device, CME_ERROR_NONE);
+
+	incoming = find_vc_with_status(CALL_STATUS_INCOMING);
+
+	active = find_vc_with_status(CALL_STATUS_ACTIVE);
+
+	if (incoming)
+		err = answer_call(incoming);
+	else if (active)
+		err = release_call(active);
+	else
+		err = 0;
+
+	if (err < 0)
+		telephony_key_press_rsp(telephony_device,
+							CME_ERROR_AG_FAILURE);
+	else
+		telephony_key_press_rsp(telephony_device, CME_ERROR_NONE);
 }
 
 void telephony_voice_dial_req(void *telephony_device, gboolean enable)
@@ -435,13 +638,258 @@ static gboolean iter_get_basic_args(DBusMessageIter *iter,
 	return type == DBUS_TYPE_INVALID ? TRUE : FALSE;
 }
 
-static void handle_registration_property(const char *property, DBusMessageIter sub)
+static void call_free(struct voice_call *vc)
+{
+	DBG("%s", vc->obj_path);
+
+	if (vc->status == CALL_STATUS_ACTIVE)
+		telephony_update_indicator(ofono_indicators, "call",
+							EV_CALL_INACTIVE);
+	else
+		telephony_update_indicator(ofono_indicators, "callsetup",
+							EV_CALLSETUP_INACTIVE);
+
+	if (vc->status == CALL_STATUS_INCOMING)
+		telephony_calling_stopped_ind();
+
+	g_dbus_remove_watch(connection, vc->watch);
+	g_free(vc->obj_path);
+	g_free(vc->number);
+	g_free(vc);
+}
+
+static gboolean handle_vc_property_changed(DBusConnection *conn,
+					DBusMessage *msg, void *data)
+{
+	struct voice_call *vc = data;
+	const char *obj_path = dbus_message_get_path(msg);
+	DBusMessageIter iter, sub;
+	const char *property, *state;
+
+	DBG("path %s", obj_path);
+
+	dbus_message_iter_init(msg, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
+		error("Unexpected signature in vc PropertyChanged signal");
+		return TRUE;
+	}
+
+	dbus_message_iter_get_basic(&iter, &property);
+	DBG("property %s", property);
+
+	dbus_message_iter_next(&iter);
+	dbus_message_iter_recurse(&iter, &sub);
+	if (g_str_equal(property, "State")) {
+		dbus_message_iter_get_basic(&sub, &state);
+		DBG("State %s", state);
+		if (g_str_equal(state, "disconnected")) {
+			calls = g_slist_remove(calls, vc);
+			call_free(vc);
+		} else if (g_str_equal(state, "active")) {
+			telephony_update_indicator(ofono_indicators,
+							"call", EV_CALL_ACTIVE);
+			telephony_update_indicator(ofono_indicators,
+							"callsetup",
+							EV_CALLSETUP_INACTIVE);
+			if (vc->status == CALL_STATUS_INCOMING)
+				telephony_calling_stopped_ind();
+			vc->status = CALL_STATUS_ACTIVE;
+		} else if (g_str_equal(state, "alerting")) {
+			telephony_update_indicator(ofono_indicators,
+					"callsetup", EV_CALLSETUP_ALERTING);
+			vc->status = CALL_STATUS_ALERTING;
+			vc->originating = TRUE;
+		} else if (g_str_equal(state, "incoming")) {
+			/* state change from waiting to incoming */
+			telephony_update_indicator(ofono_indicators,
+					"callsetup", EV_CALLSETUP_INCOMING);
+			telephony_incoming_call_ind(vc->number,
+						NUMBER_TYPE_TELEPHONY);
+			vc->status = CALL_STATUS_INCOMING;
+			vc->originating = FALSE;
+		} else if (g_str_equal(state, "held")) {
+			vc->status = CALL_STATUS_HELD;
+			if (find_vc_without_status(CALL_STATUS_HELD))
+				telephony_update_indicator(ofono_indicators,
+							"callheld",
+							EV_CALLHELD_MULTIPLE);
+			else
+				telephony_update_indicator(ofono_indicators,
+							"callheld",
+							EV_CALLHELD_ON_HOLD);
+		}
+	} else if (g_str_equal(property, "Multiparty")) {
+		dbus_bool_t multiparty;
+
+		dbus_message_iter_get_basic(&sub, &multiparty);
+		DBG("Multiparty %s", multiparty ? "True" : "False");
+		vc->conference = multiparty;
+	}
+
+	return TRUE;
+}
+
+static struct voice_call *call_new(const char *path, DBusMessageIter *properties)
+{
+	struct voice_call *vc;
+
+	DBG("%s", path);
+
+	vc = g_new0(struct voice_call, 1);
+	vc->obj_path = g_strdup(path);
+	vc->watch = g_dbus_add_signal_watch(connection, NULL, path,
+					OFONO_VC_INTERFACE, "PropertyChanged",
+					handle_vc_property_changed, vc, NULL);
+
+	while (dbus_message_iter_get_arg_type(properties)
+						== DBUS_TYPE_DICT_ENTRY) {
+		DBusMessageIter entry, value;
+		const char *property, *cli, *state;
+		dbus_bool_t multiparty;
+
+		dbus_message_iter_recurse(properties, &entry);
+		dbus_message_iter_get_basic(&entry, &property);
+
+		dbus_message_iter_next(&entry);
+		dbus_message_iter_recurse(&entry, &value);
+
+		if (g_str_equal(property, "LineIdentification")) {
+			dbus_message_iter_get_basic(&value, &cli);
+			DBG("cli %s", cli);
+			vc->number = g_strdup(cli);
+		} else if (g_str_equal(property, "State")) {
+			dbus_message_iter_get_basic(&value, &state);
+			DBG("state %s", state);
+			if (g_str_equal(state, "incoming"))
+				vc->status = CALL_STATUS_INCOMING;
+			else if (g_str_equal(state, "dialing"))
+				vc->status = CALL_STATUS_DIALING;
+			else if (g_str_equal(state, "alerting"))
+				vc->status = CALL_STATUS_ALERTING;
+			else if (g_str_equal(state, "waiting"))
+				vc->status = CALL_STATUS_WAITING;
+			else if (g_str_equal(state, "held"))
+				vc->status = CALL_STATUS_HELD;
+		} else if (g_str_equal(property, "Multiparty")) {
+			dbus_message_iter_get_basic(&value, &multiparty);
+			DBG("Multipary %s", multiparty ? "True" : "False");
+			vc->conference = multiparty;
+		}
+
+		dbus_message_iter_next(properties);
+	}
+
+	switch (vc->status) {
+	case CALL_STATUS_INCOMING:
+		DBG("CALL_STATUS_INCOMING");
+		vc->originating = FALSE;
+		telephony_update_indicator(ofono_indicators, "callsetup",
+					EV_CALLSETUP_INCOMING);
+		telephony_incoming_call_ind(vc->number, NUMBER_TYPE_TELEPHONY);
+		break;
+	case CALL_STATUS_DIALING:
+		DBG("CALL_STATUS_DIALING");
+		vc->originating = TRUE;
+		g_free(last_dialed_number);
+		last_dialed_number = g_strdup(vc->number);
+		telephony_update_indicator(ofono_indicators, "callsetup",
+					EV_CALLSETUP_OUTGOING);
+		break;
+	case CALL_STATUS_ALERTING:
+		DBG("CALL_STATUS_ALERTING");
+		vc->originating = TRUE;
+		g_free(last_dialed_number);
+		last_dialed_number = g_strdup(vc->number);
+		telephony_update_indicator(ofono_indicators, "callsetup",
+					EV_CALLSETUP_ALERTING);
+		break;
+	case CALL_STATUS_WAITING:
+		DBG("CALL_STATUS_WAITING");
+		vc->originating = FALSE;
+		telephony_update_indicator(ofono_indicators, "callsetup",
+					EV_CALLSETUP_INCOMING);
+		telephony_call_waiting_ind(vc->number, NUMBER_TYPE_TELEPHONY);
+		break;
+	}
+
+	return vc;
+}
+
+static void remove_pending(DBusPendingCall *call)
+{
+	pending = g_slist_remove(pending, call);
+	dbus_pending_call_unref(call);
+}
+
+static void call_added(const char *path, DBusMessageIter *properties)
+{
+	struct voice_call *vc;
+
+	DBG("%s", path);
+
+	vc = find_vc(path);
+	if (vc)
+		return;
+
+	vc = call_new(path, properties);
+	calls = g_slist_prepend(calls, vc);
+}
+
+static void get_calls_reply(DBusPendingCall *call, void *user_data)
+{
+	DBusError err;
+	DBusMessage *reply;
+	DBusMessageIter iter, entry;
+
+	DBG("");
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&err);
+	if (dbus_set_error_from_message(&err, reply)) {
+		error("ofono replied with an error: %s, %s",
+				err.name, err.message);
+		dbus_error_free(&err);
+		goto done;
+	}
+
+	dbus_message_iter_init(reply, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
+		error("Unexpected signature");
+		goto done;
+	}
+
+	dbus_message_iter_recurse(&iter, &entry);
+
+	while (dbus_message_iter_get_arg_type(&entry)
+						== DBUS_TYPE_STRUCT) {
+		const char *path;
+		DBusMessageIter value, properties;
+
+		dbus_message_iter_recurse(&entry, &value);
+		dbus_message_iter_get_basic(&value, &path);
+
+		dbus_message_iter_next(&value);
+		dbus_message_iter_recurse(&value, &properties);
+
+		call_added(path, &properties);
+
+		dbus_message_iter_next(&entry);
+	}
+
+done:
+	dbus_message_unref(reply);
+	remove_pending(call);
+}
+
+static void handle_network_property(const char *property, DBusMessageIter *variant)
 {
 	const char *status, *operator;
 	unsigned int signals_bar;
 
 	if (g_str_equal(property, "Status")) {
-		dbus_message_iter_get_basic(&sub, &status);
+		dbus_message_iter_get_basic(variant, &status);
 		DBG("Status is %s", status);
 		if (g_str_equal(status, "registered")) {
 			net.status = NETWORK_REG_STATUS_HOME;
@@ -462,13 +910,13 @@ static void handle_registration_property(const char *property, DBusMessageIter s
 			telephony_update_indicator(ofono_indicators,
 						"service", EV_SERVICE_NONE);
 		}
-	} else if (g_str_equal(property, "Operator")) {
-		dbus_message_iter_get_basic(&sub, &operator);
+	} else if (g_str_equal(property, "Name")) {
+		dbus_message_iter_get_basic(variant, &operator);
 		DBG("Operator is %s", operator);
 		g_free(net.operator_name);
 		net.operator_name = g_strdup(operator);
 	} else if (g_str_equal(property, "SignalStrength")) {
-		dbus_message_iter_get_basic(&sub, &signals_bar);
+		dbus_message_iter_get_basic(variant, &signals_bar);
 		DBG("SignalStrength is %d", signals_bar);
 		net.signals_bar = signals_bar;
 		telephony_update_indicator(ofono_indicators, "signal",
@@ -476,91 +924,55 @@ static void handle_registration_property(const char *property, DBusMessageIter s
 	}
 }
 
-static void get_registration_reply(DBusPendingCall *call, void *user_data)
+static int parse_network_properties(DBusMessageIter *properties)
 {
-	DBusError err;
-	DBusMessage *reply;
-	DBusMessageIter iter, iter_entry;
 	uint32_t features = AG_FEATURE_EC_ANDOR_NR |
+				AG_FEATURE_INBAND_RINGTONE |
 				AG_FEATURE_REJECT_A_CALL |
 				AG_FEATURE_ENHANCED_CALL_STATUS |
-				AG_FEATURE_EXTENDED_ERROR_RESULT_CODES;
+				AG_FEATURE_ENHANCED_CALL_CONTROL |
+				AG_FEATURE_EXTENDED_ERROR_RESULT_CODES |
+				AG_FEATURE_THREE_WAY_CALLING;
+	int i;
 
-	reply = dbus_pending_call_steal_reply(call);
-
-	dbus_error_init(&err);
-	if (dbus_set_error_from_message(&err, reply)) {
-		error("ofono replied with an error: %s, %s",
-				err.name, err.message);
-		dbus_error_free(&err);
-		goto done;
+	/* Reset indicators */
+	for (i = 0; ofono_indicators[i].desc != NULL; i++) {
+		if (g_str_equal(ofono_indicators[i].desc, "battchg"))
+			ofono_indicators[i].val = 5;
+		else
+			ofono_indicators[i].val = 0;
 	}
 
-	dbus_message_iter_init(reply, &iter);
+	while (dbus_message_iter_get_arg_type(properties)
+						== DBUS_TYPE_DICT_ENTRY) {
+		const char *key;
+		DBusMessageIter value, entry;
 
-	/* ARRAY -> ENTRY -> VARIANT */
-	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
-		error("Unexpected signature in GetProperties return");
-		goto done;
+		dbus_message_iter_recurse(properties, &entry);
+		dbus_message_iter_get_basic(&entry, &key);
+
+		dbus_message_iter_next(&entry);
+		dbus_message_iter_recurse(&entry, &value);
+
+		handle_network_property(key, &value);
+
+		dbus_message_iter_next(properties);
 	}
 
-	dbus_message_iter_recurse(&iter, &iter_entry);
+	telephony_ready_ind(features, ofono_indicators, BTRH_NOT_SUPPORTED,
+								chld_str);
 
-	if (dbus_message_iter_get_arg_type(&iter_entry)
-					!= DBUS_TYPE_DICT_ENTRY) {
-		error("Unexpected signature in GetProperties return");
-		goto done;
-	}
-
-	while (dbus_message_iter_get_arg_type(&iter_entry)
-					!= DBUS_TYPE_INVALID) {
-		DBusMessageIter iter_property, sub;
-		char *property;
-
-		dbus_message_iter_recurse(&iter_entry, &iter_property);
-		if (dbus_message_iter_get_arg_type(&iter_property)
-					!= DBUS_TYPE_STRING) {
-			error("Unexpected signature in GetProperties return");
-			goto done;
-		}
-
-		dbus_message_iter_get_basic(&iter_property, &property);
-
-		dbus_message_iter_next(&iter_property);
-		dbus_message_iter_recurse(&iter_property, &sub);
-
-		handle_registration_property(property, sub);
-
-                dbus_message_iter_next(&iter_entry);
-        }
-
-	telephony_ready_ind(features, ofono_indicators,
-				response_and_hold, chld_str);
-
-done:
-	dbus_message_unref(reply);
+	return 0;
 }
 
-static int get_registration_and_signal_status()
-{
-	if (!modem_obj_path)
-		return -ENOENT;
-
-	return send_method_call(OFONO_BUS_NAME, modem_obj_path,
-			OFONO_NETWORKREG_INTERFACE,
-			"GetProperties", get_registration_reply,
-			NULL, DBUS_TYPE_INVALID);
-}
-
-static void list_modem_reply(DBusPendingCall *call, void *user_data)
+static void get_properties_reply(DBusPendingCall *call, void *user_data)
 {
 	DBusError err;
 	DBusMessage *reply;
-	DBusMessageIter iter, iter_entry, iter_property, iter_arrary, sub;
-	char *property, *modem_obj_path_local;
-	int ret;
+	DBusMessageIter iter, properties;
+	int ret = 0;
 
-	DBG("list_modem_reply is called\n");
+	DBG("");
 	reply = dbus_pending_call_steal_reply(call);
 
 	dbus_error_init(&err);
@@ -574,49 +986,185 @@ static void list_modem_reply(DBusPendingCall *call, void *user_data)
 	dbus_message_iter_init(reply, &iter);
 
 	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
-		error("Unexpected signature in ListModems return");
+		error("Unexpected signature");
 		goto done;
 	}
 
-	dbus_message_iter_recurse(&iter, &iter_entry);
+	dbus_message_iter_recurse(&iter, &properties);
 
-	if (dbus_message_iter_get_arg_type(&iter_entry)
-					!= DBUS_TYPE_DICT_ENTRY) {
-		error("Unexpected signature in ListModems return 2, %c",
-				dbus_message_iter_get_arg_type(&iter_entry));
+	ret = parse_network_properties(&properties);
+	if (ret < 0) {
+		error("Unable to parse %s.GetProperty reply",
+						OFONO_NETWORKREG_INTERFACE);
 		goto done;
 	}
 
-	dbus_message_iter_recurse(&iter_entry, &iter_property);
-
-	dbus_message_iter_get_basic(&iter_property, &property);
-
-	dbus_message_iter_next(&iter_property);
-	dbus_message_iter_recurse(&iter_property, &iter_arrary);
-	dbus_message_iter_recurse(&iter_arrary, &sub);
-	while (dbus_message_iter_get_arg_type(&sub) != DBUS_TYPE_INVALID) {
-
-		dbus_message_iter_get_basic(&sub, &modem_obj_path_local);
-		modem_obj_path = g_strdup(modem_obj_path_local);
-		if (modem_obj_path != NULL) {
-			DBG("modem_obj_path is %p, %s\n", modem_obj_path,
-							modem_obj_path);
-			break;
-		}
-		dbus_message_iter_next(&sub);
-	}
-
-	ret = get_registration_and_signal_status();
+	ret = send_method_call(OFONO_BUS_NAME, modem_obj_path,
+				OFONO_VCMANAGER_INTERFACE, "GetCalls",
+				get_calls_reply, NULL, DBUS_TYPE_INVALID);
 	if (ret < 0)
-		error("get_registration_and_signal_status() failed(%d)", ret);
+		error("Unable to send %s.GetCalls",
+						OFONO_VCMANAGER_INTERFACE);
+
 done:
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
-static gboolean handle_registration_property_changed(DBusConnection *conn,
+static void network_found(const char *path)
+{
+	int ret;
+
+	DBG("%s", path);
+
+	modem_obj_path = g_strdup(path);
+
+	ret = send_method_call(OFONO_BUS_NAME, path,
+				OFONO_NETWORKREG_INTERFACE, "GetProperties",
+				get_properties_reply, NULL, DBUS_TYPE_INVALID);
+	if (ret < 0)
+		error("Unable to send %s.GetProperties",
+						OFONO_NETWORKREG_INTERFACE);
+}
+
+static void modem_removed(const char *path)
+{
+	if (g_strcmp0(modem_obj_path, path) != 0)
+		return;
+
+	DBG("%s", path);
+
+	g_slist_foreach(calls, (GFunc) call_free, NULL);
+	g_slist_free(calls);
+	calls = NULL;
+
+	g_free(net.operator_name);
+	net.operator_name = NULL;
+	net.status = NETWORK_REG_STATUS_NOSERV;
+	net.signals_bar = 0;
+
+	g_free(modem_obj_path);
+	modem_obj_path = NULL;
+}
+
+static void parse_modem_interfaces(const char *path, DBusMessageIter *ifaces)
+{
+	DBG("%s", path);
+
+	while (dbus_message_iter_get_arg_type(ifaces) == DBUS_TYPE_STRING) {
+		const char *iface;
+
+		dbus_message_iter_get_basic(ifaces, &iface);
+
+		if (g_str_equal(iface, OFONO_NETWORKREG_INTERFACE)) {
+			network_found(path);
+			return;
+		}
+
+		dbus_message_iter_next(ifaces);
+	}
+
+	modem_removed(path);
+}
+
+static void modem_added(const char *path, DBusMessageIter *properties)
+{
+	if (modem_obj_path != NULL) {
+		DBG("Ignoring, modem already exist");
+		return;
+	}
+
+	DBG("%s", path);
+
+	while (dbus_message_iter_get_arg_type(properties)
+						== DBUS_TYPE_DICT_ENTRY) {
+		const char *key;
+		DBusMessageIter interfaces, value, entry;
+
+		dbus_message_iter_recurse(properties, &entry);
+		dbus_message_iter_get_basic(&entry, &key);
+
+		dbus_message_iter_next(&entry);
+		dbus_message_iter_recurse(&entry, &value);
+
+		if (strcasecmp(key, "Interfaces") != 0)
+			goto next;
+
+		if (dbus_message_iter_get_arg_type(&value)
+							!= DBUS_TYPE_ARRAY) {
+			error("Invalid Signature");
+			return;
+		}
+
+		dbus_message_iter_recurse(&value, &interfaces);
+
+		parse_modem_interfaces(path, &interfaces);
+
+		if (modem_obj_path != NULL)
+			return;
+
+	next:
+		dbus_message_iter_next(properties);
+	}
+}
+
+static void get_modems_reply(DBusPendingCall *call, void *user_data)
+{
+	DBusError err;
+	DBusMessage *reply;
+	DBusMessageIter iter, entry;
+
+	DBG("");
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&err);
+	if (dbus_set_error_from_message(&err, reply)) {
+		error("ofono replied with an error: %s, %s",
+				err.name, err.message);
+		dbus_error_free(&err);
+		goto done;
+	}
+
+	/* Skip modem selection if a modem already exist */
+	if (modem_obj_path != NULL)
+		goto done;
+
+	dbus_message_iter_init(reply, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
+		error("Unexpected signature");
+		goto done;
+	}
+
+	dbus_message_iter_recurse(&iter, &entry);
+
+	while (dbus_message_iter_get_arg_type(&entry)
+						== DBUS_TYPE_STRUCT) {
+		const char *path;
+		DBusMessageIter item, properties;
+
+		dbus_message_iter_recurse(&entry, &item);
+		dbus_message_iter_get_basic(&item, &path);
+
+		dbus_message_iter_next(&item);
+		dbus_message_iter_recurse(&item, &properties);
+
+		modem_added(path, &properties);
+		if (modem_obj_path != NULL)
+			break;
+
+		dbus_message_iter_next(&entry);
+	}
+
+done:
+	dbus_message_unref(reply);
+	remove_pending(call);
+}
+
+static gboolean handle_network_property_changed(DBusConnection *conn,
 						DBusMessage *msg, void *data)
 {
-	DBusMessageIter iter, sub;
+	DBusMessageIter iter, variant;
 	const char *property;
 
 	dbus_message_iter_init(msg, &iter);
@@ -631,260 +1179,173 @@ static gboolean handle_registration_property_changed(DBusConnection *conn,
 					" the property is %s", property);
 
 	dbus_message_iter_next(&iter);
-	dbus_message_iter_recurse(&iter, &sub);
+	dbus_message_iter_recurse(&iter, &variant);
 
-	handle_registration_property(property, sub);
-
-	return TRUE;
-}
-
-static void vc_getproperties_reply(DBusPendingCall *call, void *user_data)
-{
-	DBusMessage *reply;
-	DBusError err;
-	DBusMessageIter iter, iter_entry;
-	const char *path = user_data;
-	struct voice_call *vc;
-
-	DBG("in vc_getproperties_reply");
-
-	reply = dbus_pending_call_steal_reply(call);
-	dbus_error_init(&err);
-	if (dbus_set_error_from_message(&err, reply)) {
-		error("ofono replied with an error: %s, %s",
-				err.name, err.message);
-		dbus_error_free(&err);
-		goto done;
-	}
-
-	vc = find_vc(path);
-	if (!vc) {
-		error("in vc_getproperties_reply, vc is NULL");
-		goto done;
-	}
-
-	dbus_message_iter_init(reply, &iter);
-
-	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
-		error("Unexpected signature in vc_getproperties_reply()");
-		goto done;
-	}
-
-	dbus_message_iter_recurse(&iter, &iter_entry);
-
-	if (dbus_message_iter_get_arg_type(&iter_entry)
-			!= DBUS_TYPE_DICT_ENTRY) {
-		error("Unexpected signature in vc_getproperties_reply()");
-		goto done;
-	}
-
-	while (dbus_message_iter_get_arg_type(&iter_entry)
-			!= DBUS_TYPE_INVALID) {
-		DBusMessageIter iter_property, sub;
-		char *property, *cli, *state;
-
-		dbus_message_iter_recurse(&iter_entry, &iter_property);
-		if (dbus_message_iter_get_arg_type(&iter_property)
-				!= DBUS_TYPE_STRING) {
-			error("Unexpected signature in"
-					" vc_getproperties_reply()");
-			goto done;
-		}
-
-		dbus_message_iter_get_basic(&iter_property, &property);
-
-		dbus_message_iter_next(&iter_property);
-		dbus_message_iter_recurse(&iter_property, &sub);
-		if (g_str_equal(property, "LineIdentification")) {
-			dbus_message_iter_get_basic(&sub, &cli);
-			DBG("in vc_getproperties_reply(), cli is %s", cli);
-			vc->number = g_strdup(cli);
-		} else if (g_str_equal(property, "State")) {
-			dbus_message_iter_get_basic(&sub, &state);
-			DBG("in vc_getproperties_reply(),"
-					" state is %s", state);
-			if (g_str_equal(state, "incoming"))
-				vc->status = CALL_STATUS_INCOMING;
-			else if (g_str_equal(state, "dialing"))
-				vc->status = CALL_STATUS_DIALING;
-			else if (g_str_equal(state, "alerting"))
-				vc->status = CALL_STATUS_ALERTING;
-			else if (g_str_equal(state, "waiting"))
-				vc->status = CALL_STATUS_WAITING;
-		}
-
-		dbus_message_iter_next(&iter_entry);
-	}
-
-	switch (vc->status) {
-	case CALL_STATUS_INCOMING:
-		printf("in CALL_STATUS_INCOMING: case\n");
-		vc->originating = FALSE;
-		telephony_update_indicator(ofono_indicators, "callsetup",
-					EV_CALLSETUP_INCOMING);
-		telephony_incoming_call_ind(vc->number, NUMBER_TYPE_TELEPHONY);
-		break;
-	case CALL_STATUS_DIALING:
-		printf("in CALL_STATUS_DIALING: case\n");
-		vc->originating = TRUE;
-		g_free(last_dialed_number);
-		last_dialed_number = g_strdup(vc->number);
-		telephony_update_indicator(ofono_indicators, "callsetup",
-					EV_CALLSETUP_OUTGOING);
-		break;
-	case CALL_STATUS_ALERTING:
-		printf("in CALL_STATUS_ALERTING: case\n");
-		vc->originating = TRUE;
-		g_free(last_dialed_number);
-		last_dialed_number = g_strdup(vc->number);
-		telephony_update_indicator(ofono_indicators, "callsetup",
-					EV_CALLSETUP_ALERTING);
-		break;
-	case CALL_STATUS_WAITING:
-		DBG("in CALL_STATUS_WAITING: case");
-		vc->originating = FALSE;
-		telephony_update_indicator(ofono_indicators, "callsetup",
-					EV_CALLSETUP_INCOMING);
-		telephony_call_waiting_ind(vc->number, NUMBER_TYPE_TELEPHONY);
-		break;
-	}
-done:
-	dbus_message_unref(reply);
-}
-
-static void vc_free(struct voice_call *vc)
-{
-	if (!vc)
-		return;
-
-	g_dbus_remove_watch(connection, vc->watch);
-	g_free(vc->obj_path);
-	g_free(vc->number);
-	g_free(vc);
-}
-
-static gboolean handle_vc_property_changed(DBusConnection *conn,
-					DBusMessage *msg, void *data)
-{
-	struct voice_call *vc = data;
-	const char *obj_path = dbus_message_get_path(msg);
-	DBusMessageIter iter, sub;
-	const char *property, *state;
-
-	DBG("in handle_vc_property_changed, obj_path is %s", obj_path);
-
-	dbus_message_iter_init(msg, &iter);
-
-	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
-		error("Unexpected signature in vc PropertyChanged signal");
-		return TRUE;
-	}
-
-	dbus_message_iter_get_basic(&iter, &property);
-	DBG("in handle_vc_property_changed(), the property is %s", property);
-
-	dbus_message_iter_next(&iter);
-	dbus_message_iter_recurse(&iter, &sub);
-	if (g_str_equal(property, "State")) {
-		dbus_message_iter_get_basic(&sub, &state);
-		DBG("in handle_vc_property_changed(), State is %s", state);
-		if (g_str_equal(state, "disconnected")) {
-			printf("in disconnected case\n");
-			if (vc->status == CALL_STATUS_ACTIVE)
-				telephony_update_indicator(ofono_indicators,
-						"call", EV_CALL_INACTIVE);
-			else
-				telephony_update_indicator(ofono_indicators,
-					"callsetup", EV_CALLSETUP_INACTIVE);
-			if (vc->status == CALL_STATUS_INCOMING)
-				telephony_calling_stopped_ind();
-			calls = g_slist_remove(calls, vc);
-			vc_free(vc);
-		} else if (g_str_equal(state, "active")) {
-			telephony_update_indicator(ofono_indicators,
-							"call", EV_CALL_ACTIVE);
-			telephony_update_indicator(ofono_indicators,
-							"callsetup",
-							EV_CALLSETUP_INACTIVE);
-			if (vc->status == CALL_STATUS_INCOMING)
-				telephony_calling_stopped_ind();
-			vc->status = CALL_STATUS_ACTIVE;
-			DBG("vc status is CALL_STATUS_ACTIVE");
-		} else if (g_str_equal(state, "alerting")) {
-			telephony_update_indicator(ofono_indicators,
-					"callsetup", EV_CALLSETUP_ALERTING);
-			vc->status = CALL_STATUS_ALERTING;
-			DBG("vc status is CALL_STATUS_ALERTING");
-		} else if (g_str_equal(state, "incoming")) {
-			/* state change from waiting to incoming */
-			telephony_update_indicator(ofono_indicators,
-					"callsetup", EV_CALLSETUP_INCOMING);
-			telephony_incoming_call_ind(vc->number,
-						NUMBER_TYPE_TELEPHONY);
-			vc->status = CALL_STATUS_INCOMING;
-			DBG("vc status is CALL_STATUS_INCOMING");
-		}
-	}
+	handle_network_property(property, &variant);
 
 	return TRUE;
 }
 
-static gboolean handle_vcmanager_property_changed(DBusConnection *conn,
+static void handle_modem_property(const char *path, const char *property,
+						DBusMessageIter *variant)
+{
+	DBG("%s", property);
+
+	if (g_str_equal(property, "Interfaces")) {
+		DBusMessageIter interfaces;
+
+		if (dbus_message_iter_get_arg_type(variant)
+							!= DBUS_TYPE_ARRAY) {
+			error("Invalid signature");
+			return;
+		}
+
+		dbus_message_iter_recurse(variant, &interfaces);
+		parse_modem_interfaces(path, &interfaces);
+	}
+}
+
+static gboolean handle_modem_property_changed(DBusConnection *conn,
 						DBusMessage *msg, void *data)
 {
-	DBusMessageIter iter, sub, array;
-	const char *property, *vc_obj_path = NULL;
-	struct voice_call *vc, *vc_new = NULL;
+	DBusMessageIter iter, variant;
+	const char *property, *path;
 
-	DBG("in handle_vcmanager_property_changed");
+	path = dbus_message_get_path(msg);
+
+	/* Ignore if modem already exist and paths doesn't match */
+	if (modem_obj_path != NULL &&
+				g_str_equal(path, modem_obj_path) == FALSE)
+		return TRUE;
 
 	dbus_message_iter_init(msg, &iter);
 
 	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING) {
-		error("Unexpected signature in vcmanager"
-					" PropertyChanged signal");
+		error("Unexpected signature in %s.%s PropertyChanged signal",
+					dbus_message_get_interface(msg),
+					dbus_message_get_member(msg));
 		return TRUE;
 	}
 
 	dbus_message_iter_get_basic(&iter, &property);
-	DBG("in handle_vcmanager_property_changed(),"
-				" the property is %s", property);
 
 	dbus_message_iter_next(&iter);
-	dbus_message_iter_recurse(&iter, &sub);
-	if (dbus_message_iter_get_arg_type(&sub) != DBUS_TYPE_ARRAY) {
-		error("Unexpected signature in vcmanager"
-					" PropertyChanged signal");
-		return TRUE;
-	}
-	dbus_message_iter_recurse(&sub, &array);
-	while (dbus_message_iter_get_arg_type(&array) != DBUS_TYPE_INVALID) {
-		dbus_message_iter_get_basic(&array, &vc_obj_path);
-		vc = find_vc(vc_obj_path);
-		if (vc) {
-			DBG("in handle_vcmanager_property_changed,"
-					" found an existing vc");
-		} else {
-			vc_new = g_new0(struct voice_call, 1);
-			vc_new->obj_path = g_strdup(vc_obj_path);
-			calls = g_slist_append(calls, vc_new);
-			vc_new->watch = g_dbus_add_signal_watch(connection,
-					NULL, vc_obj_path,
-					OFONO_VC_INTERFACE,
-					"PropertyChanged",
-					handle_vc_property_changed,
-					vc_new, NULL);
-		}
-		dbus_message_iter_next(&array);
-	}
+	dbus_message_iter_recurse(&iter, &variant);
 
-	if (!vc_new)
+	handle_modem_property(path, property, &variant);
+
+	return TRUE;
+}
+
+static gboolean handle_vcmanager_call_added(DBusConnection *conn,
+						DBusMessage *msg, void *data)
+{
+	DBusMessageIter iter, properties;
+	const char *path = dbus_message_get_path(msg);
+
+	/* Ignore call if modem path doesn't math */
+	if (g_strcmp0(modem_obj_path, path) != 0)
 		return TRUE;
 
-	send_method_call(OFONO_BUS_NAME, vc_new->obj_path,
-				OFONO_VC_INTERFACE,
-				"GetProperties", vc_getproperties_reply,
-				vc_new->obj_path, DBUS_TYPE_INVALID);
+	dbus_message_iter_init(msg, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter)
+						!= DBUS_TYPE_OBJECT_PATH) {
+		error("Unexpected signature in %s.%s signal",
+					dbus_message_get_interface(msg),
+					dbus_message_get_member(msg));
+		return TRUE;
+	}
+
+	dbus_message_iter_get_basic(&iter, &path);
+	dbus_message_iter_next(&iter);
+	dbus_message_iter_recurse(&iter, &properties);
+
+	call_added(path, &properties);
+
+	return TRUE;
+}
+
+static void call_removed(const char *path)
+{
+	struct voice_call *vc;
+
+	DBG("%s", path);
+
+	vc = find_vc(path);
+	if (vc == NULL)
+		return;
+
+	calls = g_slist_remove(calls, vc);
+	call_free(vc);
+}
+
+static gboolean handle_vcmanager_call_removed(DBusConnection *conn,
+						DBusMessage *msg, void *data)
+{
+	const char *path = dbus_message_get_path(msg);
+
+	/* Ignore call if modem path doesn't math */
+	if (g_strcmp0(modem_obj_path, path) != 0)
+		return TRUE;
+
+	if (!dbus_message_get_args(msg, NULL,
+				DBUS_TYPE_OBJECT_PATH, &path,
+				DBUS_TYPE_INVALID)) {
+		error("Unexpected signature in %s.%s signal",
+					dbus_message_get_interface(msg),
+					dbus_message_get_member(msg));
+		return TRUE;
+	}
+
+	call_removed(path);
+
+	return TRUE;
+}
+
+static gboolean handle_manager_modem_added(DBusConnection *conn,
+						DBusMessage *msg, void *data)
+{
+	DBusMessageIter iter, properties;
+	const char *path;
+
+	if (modem_obj_path != NULL)
+		return TRUE;
+
+	dbus_message_iter_init(msg, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter)
+						!= DBUS_TYPE_OBJECT_PATH) {
+		error("Unexpected signature in %s.%s signal",
+					dbus_message_get_interface(msg),
+					dbus_message_get_member(msg));
+		return TRUE;
+	}
+
+	dbus_message_iter_get_basic(&iter, &path);
+	dbus_message_iter_next(&iter);
+	dbus_message_iter_recurse(&iter, &properties);
+
+	modem_added(path, &properties);
+
+	return TRUE;
+}
+
+static gboolean handle_manager_modem_removed(DBusConnection *conn,
+						DBusMessage *msg, void *data)
+{
+	const char *path;
+
+	if (!dbus_message_get_args(msg, NULL,
+				DBUS_TYPE_OBJECT_PATH, &path,
+				DBUS_TYPE_INVALID)) {
+		error("Unexpected signature in %s.%s signal",
+					dbus_message_get_interface(msg),
+					dbus_message_get_member(msg));
+		return TRUE;
+	}
+
+	modem_removed(path);
 
 	return TRUE;
 }
@@ -942,6 +1403,7 @@ static void hal_battery_level_reply(DBusPendingCall *call, void *user_data)
 	}
 done:
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
 static void hal_get_integer(const char *path, const char *key, void *user_data)
@@ -1009,6 +1471,18 @@ static gboolean handle_hal_property_modified(DBusConnection *conn,
 	return TRUE;
 }
 
+static void add_watch(const char *sender, const char *path,
+				const char *interface, const char *member,
+				GDBusSignalFunction function)
+{
+	guint watch;
+
+	watch = g_dbus_add_signal_watch(connection, sender, path, interface,
+					member, function, NULL, NULL);
+
+	watches = g_slist_prepend(watches, GUINT_TO_POINTER(watch));
+}
+
 static void hal_find_device_reply(DBusPendingCall *call, void *user_data)
 {
 	DBusMessage *reply;
@@ -1049,43 +1523,63 @@ static void hal_find_device_reply(DBusPendingCall *call, void *user_data)
 
 	DBG("telephony-ofono: found battery device at %s", path);
 
-	device_watch = g_dbus_add_signal_watch(connection, NULL, path,
-					"org.freedesktop.Hal.Device",
-					"PropertyModified",
-					handle_hal_property_modified,
-					NULL, NULL);
+	add_watch(NULL, path, "org.freedesktop.Hal.Device",
+			"PropertyModified", handle_hal_property_modified);
 
 	hal_get_integer(path, "battery.charge_level.last_full", &battchg_last);
 	hal_get_integer(path, "battery.charge_level.current", &battchg_cur);
 	hal_get_integer(path, "battery.charge_level.design", &battchg_design);
 done:
 	dbus_message_unref(reply);
+	remove_pending(call);
+}
+
+static void handle_service_connect(DBusConnection *conn, void *user_data)
+{
+	DBG("telephony-ofono: %s found", OFONO_BUS_NAME);
+
+	send_method_call(OFONO_BUS_NAME, OFONO_PATH,
+				OFONO_MANAGER_INTERFACE, "GetModems",
+				get_modems_reply, NULL, DBUS_TYPE_INVALID);
+}
+
+static void handle_service_disconnect(DBusConnection *conn, void *user_data)
+{
+	DBG("telephony-ofono: %s exitted", OFONO_BUS_NAME);
+
+	if (modem_obj_path)
+		modem_removed(modem_obj_path);
 }
 
 int telephony_init(void)
 {
 	const char *battery_cap = "battery";
 	int ret;
+	guint watch;
 
 	connection = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
 
-	registration_watch = g_dbus_add_signal_watch(connection, NULL, NULL,
-					OFONO_NETWORKREG_INTERFACE,
-					"PropertyChanged",
-					handle_registration_property_changed,
-					NULL, NULL);
+	add_watch(OFONO_BUS_NAME, NULL, OFONO_MODEM_INTERFACE,
+			"PropertyChanged", handle_modem_property_changed);
+	add_watch(OFONO_BUS_NAME, NULL, OFONO_NETWORKREG_INTERFACE,
+			"PropertyChanged", handle_network_property_changed);
+	add_watch(OFONO_BUS_NAME, NULL, OFONO_MANAGER_INTERFACE,
+			"ModemAdded", handle_manager_modem_added);
+	add_watch(OFONO_BUS_NAME, NULL, OFONO_MANAGER_INTERFACE,
+			"ModemRemoved", handle_manager_modem_removed);
+	add_watch(OFONO_BUS_NAME, NULL, OFONO_VCMANAGER_INTERFACE,
+			"CallAdded", handle_vcmanager_call_added);
+	add_watch(OFONO_BUS_NAME, NULL, OFONO_VCMANAGER_INTERFACE,
+			"CallRemoved", handle_vcmanager_call_removed);
 
-	voice_watch = g_dbus_add_signal_watch(connection, NULL, NULL,
-					OFONO_VCMANAGER_INTERFACE,
-					"PropertyChanged",
-					handle_vcmanager_property_changed,
-					NULL, NULL);
+	watch = g_dbus_add_service_watch(connection, OFONO_BUS_NAME,
+						handle_service_connect,
+						handle_service_disconnect,
+						NULL, NULL);
+	if (watch == 0)
+		return -ENOMEM;
 
-	ret = send_method_call(OFONO_BUS_NAME, OFONO_PATH,
-				OFONO_MANAGER_INTERFACE, "GetProperties",
-				list_modem_reply, NULL, DBUS_TYPE_INVALID);
-	if (ret < 0)
-		return ret;
+	watches = g_slist_prepend(watches, GUINT_TO_POINTER(watch));
 
 	ret = send_method_call("org.freedesktop.Hal",
 				"/org/freedesktop/Hal/Manager",
@@ -1102,21 +1596,32 @@ int telephony_init(void)
 	return ret;
 }
 
+static void remove_watch(gpointer data)
+{
+	g_dbus_remove_watch(connection, GPOINTER_TO_UINT(data));
+}
+
 void telephony_exit(void)
 {
-	g_free(net.operator_name);
+	DBG("");
 
-	g_free(modem_obj_path);
 	g_free(last_dialed_number);
+	last_dialed_number = NULL;
 
-	g_slist_foreach(calls, (GFunc) vc_free, NULL);
-	g_slist_free(calls);
-	calls = NULL;
+	if (modem_obj_path)
+		modem_removed(modem_obj_path);
 
-	g_dbus_remove_watch(connection, registration_watch);
-	g_dbus_remove_watch(connection, voice_watch);
-	g_dbus_remove_watch(connection, device_watch);
+	g_slist_foreach(watches, (GFunc) remove_watch, NULL);
+	g_slist_free(watches);
+	watches = NULL;
+
+	g_slist_foreach(pending, (GFunc) dbus_pending_call_cancel, NULL);
+	g_slist_foreach(pending, (GFunc) dbus_pending_call_unref, NULL);
+	g_slist_free(pending);
+	pending = NULL;
 
 	dbus_connection_unref(connection);
 	connection = NULL;
+
+	telephony_deinit();
 }

@@ -21,7 +21,6 @@
  */
 
 #include "ipc.h"
-#include <string.h>
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 

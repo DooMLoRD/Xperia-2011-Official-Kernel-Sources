@@ -62,8 +62,33 @@ iniFile_alloc( void )
 }
 
 static void
-iniFile_addPair( IniFile*  i, const char*  key,   int  keyLen,
-                                    const char*  value, int  valueLen )
+iniPair_init( IniPair* pair, const char* key, int keyLen,
+                             const char* value, int valueLen )
+{
+    AARRAY_NEW(pair->key, keyLen + valueLen + 2);
+    memcpy(pair->key, key, keyLen);
+    pair->key[keyLen] = 0;
+
+    pair->value = pair->key + keyLen + 1;
+    memcpy(pair->value, value, valueLen);
+    pair->value[valueLen] = 0;
+}
+
+static void
+iniPair_replaceValue( IniPair* pair, const char* value )
+{
+    char* key      = pair->key;
+    int   keyLen   = strlen(key);
+    int   valueLen = strlen(value);
+
+    iniPair_init(pair, key, keyLen, value, valueLen);
+    AFREE(key);
+}
+
+static void
+iniFile_addPair( IniFile*  i,
+                 const char*  key,   int  keyLen,
+                 const char*  value, int  valueLen )
 {
     IniPair*  pair;
 
@@ -76,53 +101,39 @@ iniFile_addPair( IniFile*  i, const char*  key,   int  keyLen,
     }
 
     pair = i->pairs + i->numPairs;
-
-    AARRAY_NEW(pair->key, keyLen + valueLen + 2);
-    memcpy(pair->key, key, keyLen);
-    pair->key[keyLen] = 0;
-
-    pair->value = pair->key + keyLen + 1;
-    memcpy(pair->value, value, valueLen);
-    pair->value[valueLen] = 0;
+    iniPair_init(pair, key, keyLen, value, valueLen);
 
     i->numPairs += 1;
 }
 
-const char*
-iniFile_getValue( IniFile*  i, const char*  key )
+static IniPair*
+iniFile_getPair( IniFile* i, const char* key )
 {
     if (i && key) {
         int  nn;
 
         for (nn = 0; nn < i->numPairs; nn++) {
             if (!strcmp(i->pairs[nn].key,key))
-                return i->pairs[nn].value;
+                return &i->pairs[nn];
         }
     }
     return NULL;
+}
+
+const char*
+iniFile_getValue( IniFile*  i, const char*  key )
+{
+    IniPair* pair = iniFile_getPair(i, key);
+    if (pair)
+        return pair->value;
+    else
+        return NULL;
 }
 
 int
 iniFile_getPairCount( IniFile*  i )
 {
     return i ? i->numPairs : 0;
-}
-
-void
-iniFile_getPair( IniFile*   i, 
-                    int           index, 
-                    const char*  *pKey,
-                    const char*  *pValue )
-{
-    const char*  key   = NULL;
-    const char*  value = NULL;
-
-    if (i && index >= 0 && index < i->numPairs) {
-        key   = i->pairs[index].key;
-        value = i->pairs[index].value;
-    }
-    *pKey   = key;
-    *pValue = value;
 }
 
 /* NOTE: we avoid using <ctype.h> functions to avoid locale-specific
@@ -251,6 +262,7 @@ iniFile_newFromFile( const char*  filepath )
     char*        text;
     long         size;
     IniFile*     ini = NULL;
+    size_t       len;
 
     if (fp == NULL) {
         D("could not open .ini file: %s: %s",
@@ -275,8 +287,8 @@ iniFile_newFromFile( const char*  filepath )
 
     /* read the file, add a sentinel at the end of it */
     AARRAY_NEW(text, size+1);
-    fread(text, 1, size, fp);
-    text[size] = 0;
+    len = fread(text, 1, size, fp);
+    text[len] = 0;
 
     ini = iniFile_newFromMemory(text, filepath);
     AFREE(text);
@@ -314,12 +326,15 @@ iniFile_saveToFile( IniFile*  f, const char*  filepath )
 }
 
 char*
-iniFile_getString( IniFile*  f, const char*  key )
+iniFile_getString( IniFile*  f, const char*  key, const char* defaultValue )
 {
     const char*  val = iniFile_getValue(f, key);
 
-    if (!val)
-        return NULL;
+    if (!val) {
+        if (!defaultValue)
+            return NULL;
+        val= defaultValue;
+    }
 
     return ASTRDUP(val);
 }
@@ -414,3 +429,78 @@ iniFile_getInt64( IniFile*  f, const char*  key, int64_t  defaultValue )
     return value;
 }
 
+void
+iniFile_setValue( IniFile* f, const char* key, const char* value )
+{
+    IniPair* pair;
+
+    if (f == NULL || key == NULL || value == NULL)
+        return;
+
+    pair = iniFile_getPair(f, key);
+    if (pair != NULL) {
+        iniPair_replaceValue(pair, value);
+    } else {
+        iniFile_addPair(f, key, strlen(key), value, strlen(value));
+    }
+}
+
+void
+iniFile_setInteger( IniFile* f, const char* key, int value )
+{
+    char temp[16];
+    snprintf(temp, sizeof temp, "%d", value);
+    iniFile_setValue(f, key, temp);
+}
+
+void
+iniFile_setInt64( IniFile* f, const char* key, int64_t value )
+{
+    char temp[32];
+    snprintf(temp, sizeof temp, "%" PRId64, value);
+    iniFile_setValue(f, key, temp);
+}
+
+void
+iniFile_setDouble( IniFile* f, const char* key, double value )
+{
+    char temp[32];
+    snprintf(temp, sizeof temp, "%g", value);
+    iniFile_setValue(f, key, temp);
+}
+
+void
+iniFile_setBoolean( IniFile* f, const char* key, int value )
+{
+    iniFile_setValue(f, key, value ? "yes" : "no");
+}
+
+void
+iniFile_setDiskSize( IniFile* f, const char* key, int64_t size )
+{
+    char     temp[32];
+    int64_t  divisor = 0;
+    const int64_t  kilo = 1024;
+    const int64_t  mega = 1024*kilo;
+    const int64_t  giga = 1024*mega;
+    char     suffix = '\0';
+
+    if (size >= giga && !(size % giga)) {
+        divisor = giga;
+        suffix = 'g';
+    }
+    else if (size >= mega && !(size % mega)) {
+        divisor = mega;
+        suffix  = 'm';
+    }
+    else if (size >= kilo && !(size % kilo)) {
+        divisor = kilo;
+        suffix = 'k';
+    }
+    if (divisor) {
+        snprintf(temp, sizeof temp, "%" PRId64 "%c", size/divisor, suffix);
+    } else {
+        snprintf(temp, sizeof temp, "%" PRId64, size);
+    }
+    iniFile_setValue(f, key, temp);
+}

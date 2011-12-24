@@ -17,7 +17,7 @@
 #ifndef ELFF_ELF_DEFS_H_
 #define ELFF_ELF_DEFS_H_
 
-#include "elf.h"
+#include "elff_elf.h"
 
 //=============================================================================
 // Macros.
@@ -131,5 +131,13 @@ is_little_endian_cpu(void) {
   /* Lets see if byte has flipped for little-endian. */
   return get_byte(&tmp, 0) == 0xFF;
 }
+
+/* Use in printf() statements to dump 64-bit values
+ */
+#ifdef _WIN32
+#  define FMT_I64  "I64"
+#else
+#  define FMT_I64  "ll"
+#endif
 
 #endif  // ELFF_ELF_DEFS_H_

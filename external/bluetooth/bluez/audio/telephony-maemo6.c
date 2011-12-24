@@ -38,6 +38,7 @@
 
 #include "log.h"
 #include "telephony.h"
+#include "error.h"
 
 /* SSC D-Bus definitions */
 #define SSC_DBUS_NAME  "com.nokia.phone.SSC"
@@ -64,17 +65,6 @@ enum net_registration_status {
 	NETWORK_REG_STATUS_REJECTED,
 	NETWORK_REG_STATUS_UNKOWN
 };
-
-/* Driver definitions */
-#define TELEPHONY_MAEMO_PATH		"/com/nokia/MaemoTelephony"
-#define TELEPHONY_MAEMO_INTERFACE	"com.nokia.MaemoTelephony"
-
-#define CALLERID_BASE		"/var/lib/bluetooth/maemo-callerid-"
-#define ALLOWED_FLAG_FILE	"/var/lib/bluetooth/maemo-callerid-allowed"
-#define RESTRICTED_FLAG_FILE	"/var/lib/bluetooth/maemo-callerid-restricted"
-#define NONE_FLAG_FILE		"/var/lib/bluetooth/maemo-callerid-none"
-
-static uint32_t callerid = 0;
 
 /* CSD CALL plugin D-Bus definitions */
 #define CSD_CALL_BUS_NAME	"com.nokia.csd.Call"
@@ -144,11 +134,18 @@ static struct {
 	.signal_bars = 0,
 };
 
+struct pending_req {
+	DBusPendingCall *call;
+	void *user_data;
+};
+
 static int get_property(const char *iface, const char *prop);
 
 static DBusConnection *connection = NULL;
 
 static GSList *calls = NULL;
+static GSList *watches = NULL;
+static GSList *pending = NULL;
 
 /* Reference count for determining the call indicator status */
 static GSList *active_calls = NULL;
@@ -167,16 +164,6 @@ static gboolean events_enabled = FALSE;
 
 /* Supported set of call hold operations */
 static const char *chld_str = "0,1,1x,2,2x,3,4";
-
-/* Response and hold state
- * -1 = none
- *  0 = incoming call is put on hold in the AG
- *  1 = held incoming call is accepted in the AG
- *  2 = held incoming call is rejected in the AG
- */
-static int response_and_hold = -1;
-
-static char *last_dialed_number = NULL;
 
 /* Timer for tracking call creation requests */
 static guint create_request_timer = 0;
@@ -461,10 +448,31 @@ void telephony_device_connected(void *telephony_device)
 	}
 }
 
+static void pending_req_finalize(struct pending_req *req)
+{
+	if (!dbus_pending_call_get_completed(req->call))
+		dbus_pending_call_cancel(req->call);
+
+	dbus_pending_call_unref(req->call);
+	g_free(req);
+}
+
+static void remove_pending_by_data(gpointer data, gpointer user_data)
+{
+	struct pending_req *req = data;
+
+	if (req->user_data == user_data) {
+		pending = g_slist_remove(pending, req);
+		pending_req_finalize(req);
+	}
+}
+
 void telephony_device_disconnected(void *telephony_device)
 {
 	DBG("telephony-maemo6: device %p disconnected", telephony_device);
 	events_enabled = FALSE;
+
+	g_slist_foreach(pending, remove_pending_by_data, telephony_device);
 }
 
 void telephony_event_reporting_req(void *telephony_device, int ind)
@@ -476,28 +484,14 @@ void telephony_event_reporting_req(void *telephony_device, int ind)
 
 void telephony_response_and_hold_req(void *telephony_device, int rh)
 {
-	response_and_hold = rh;
-
-	telephony_response_and_hold_ind(response_and_hold);
-
-	telephony_response_and_hold_rsp(telephony_device, CME_ERROR_NONE);
-}
-
-void telephony_last_dialed_number_req(void *telephony_device)
-{
-	DBG("telephony-maemo6: last dialed number request");
-
-	if (last_dialed_number)
-		telephony_dial_number_req(telephony_device,
-						last_dialed_number);
-	else
-		telephony_last_dialed_number_rsp(telephony_device,
-						CME_ERROR_NOT_ALLOWED);
+	telephony_response_and_hold_rsp(telephony_device,
+						CME_ERROR_NOT_SUPPORTED);
 }
 
 void telephony_terminate_call_req(void *telephony_device)
 {
 	struct csd_call *call;
+	struct csd_call *alerting;
 	int err;
 
 	call = find_call_with_status(CSD_CALL_STATUS_ACTIVE);
@@ -511,7 +505,10 @@ void telephony_terminate_call_req(void *telephony_device)
 		return;
 	}
 
-	if (call->conference)
+	alerting = find_call_with_status(CSD_CALL_STATUS_MO_ALERTING);
+	if (call->on_hold && alerting)
+		err = release_call(alerting);
+	else if (call->conference)
 		err = release_conference();
 	else
 		err = release_call(call);
@@ -558,6 +555,7 @@ static int send_method_call(const char *dest, const char *path,
 	DBusMessage *msg;
 	DBusPendingCall *call;
 	va_list args;
+	struct pending_req *req;
 
 	msg = dbus_message_new_method_call(dest, path, interface, method);
 	if (!msg) {
@@ -587,10 +585,79 @@ static int send_method_call(const char *dest, const char *path,
 	}
 
 	dbus_pending_call_set_notify(call, cb, user_data, NULL);
-	dbus_pending_call_unref(call);
+
+	req = g_new0(struct pending_req, 1);
+	req->call = call;
+	req->user_data = user_data;
+
+	pending = g_slist_prepend(pending, req);
 	dbus_message_unref(msg);
 
 	return 0;
+}
+
+static struct pending_req *find_request(const DBusPendingCall *call)
+{
+	GSList *l;
+
+	for (l = pending; l; l = l->next) {
+		struct pending_req *req = l->data;
+
+		if (req->call == call)
+			return req;
+	}
+
+	return NULL;
+}
+
+static void remove_pending(DBusPendingCall *call)
+{
+	struct pending_req *req = find_request(call);
+
+	pending = g_slist_remove(pending, req);
+	pending_req_finalize(req);
+}
+
+static void create_call_reply(DBusPendingCall *call, void *user_data)
+{
+	DBusError err;
+	DBusMessage *reply;
+	void *telephony_device = user_data;
+
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&err);
+	if (dbus_set_error_from_message(&err, reply)) {
+		error("csd replied with an error: %s, %s",
+				err.name, err.message);
+		if (g_strcmp0(err.name,
+				"com.nokia.csd.Call.Error.CSInactive") == 0)
+			telephony_dial_number_rsp(telephony_device,
+						CME_ERROR_NO_NETWORK_SERVICE);
+		else
+			telephony_dial_number_rsp(telephony_device,
+							CME_ERROR_AG_FAILURE);
+		dbus_error_free(&err);
+	} else
+		telephony_dial_number_rsp(telephony_device, CME_ERROR_NONE);
+
+	dbus_message_unref(reply);
+	remove_pending(call);
+}
+
+void telephony_last_dialed_number_req(void *telephony_device)
+{
+	int ret;
+
+	DBG("telephony-maemo6: last dialed number request");
+
+	ret = send_method_call(CSD_CALL_BUS_NAME, CSD_CALL_PATH,
+				CSD_CALL_INTERFACE, "CreateFromLast",
+				create_call_reply, telephony_device,
+				DBUS_TYPE_INVALID);
+	if (ret < 0)
+		telephony_dial_number_rsp(telephony_device,
+						CME_ERROR_AG_FAILURE);
 }
 
 static const char *memory_dial_lookup(int location)
@@ -603,18 +670,15 @@ static const char *memory_dial_lookup(int location)
 
 void telephony_dial_number_req(void *telephony_device, const char *number)
 {
-	uint32_t flags = callerid;
 	int ret;
 
 	DBG("telephony-maemo6: dial request to %s", number);
 
-	if (strncmp(number, "*31#", 4) == 0) {
+	if (strncmp(number, "*31#", 4) == 0)
 		number += 4;
-		flags = CALL_FLAG_PRESENTATION_ALLOWED;
-	} else if (strncmp(number, "#31#", 4) == 0) {
+	else if (strncmp(number, "#31#", 4) == 0)
 		number += 4;
-		flags = CALL_FLAG_PRESENTATION_RESTRICTED;
-	} else if (number[0] == '>') {
+	else if (number[0] == '>') {
 		const char *location = &number[1];
 
 		number = memory_dial_lookup(strtol(&number[1], NULL, 0));
@@ -627,18 +691,13 @@ void telephony_dial_number_req(void *telephony_device, const char *number)
 	}
 
 	ret = send_method_call(CSD_CALL_BUS_NAME, CSD_CALL_PATH,
-				CSD_CALL_INTERFACE, "CreateWith",
-				NULL, NULL,
+				CSD_CALL_INTERFACE, "Create",
+				create_call_reply, telephony_device,
 				DBUS_TYPE_STRING, &number,
-				DBUS_TYPE_UINT32, &flags,
 				DBUS_TYPE_INVALID);
-	if (ret < 0) {
+	if (ret < 0)
 		telephony_dial_number_rsp(telephony_device,
 						CME_ERROR_AG_FAILURE);
-		return;
-	}
-
-	telephony_dial_number_rsp(telephony_device, CME_ERROR_NONE);
 }
 
 void telephony_transmit_dtmf_req(void *telephony_device, char tone)
@@ -780,8 +839,11 @@ void telephony_call_hold_req(void *telephony_device, const char *cmd)
 
 	switch (cmd[0]) {
 	case '0':
-		foreach_call_with_status(CSD_CALL_STATUS_HOLD, release_call);
-		foreach_call_with_status(CSD_CALL_STATUS_WAITING,
+		if (find_call_with_status(CSD_CALL_STATUS_WAITING))
+			foreach_call_with_status(CSD_CALL_STATUS_WAITING,
+								release_call);
+		else
+			foreach_call_with_status(CSD_CALL_STATUS_HOLD,
 								release_call);
 		break;
 	case '1':
@@ -907,15 +969,16 @@ static void handle_incoming_call(DBusMessage *msg)
 	g_free(call->number);
 	call->number = g_strdup(number);
 
-	telephony_update_indicator(maemo_indicators, "callsetup",
-					EV_CALLSETUP_INCOMING);
-
-	if (find_call_with_status(CSD_CALL_STATUS_ACTIVE))
+	if (find_call_with_status(CSD_CALL_STATUS_ACTIVE) ||
+			find_call_with_status(CSD_CALL_STATUS_HOLD))
 		telephony_call_waiting_ind(call->number,
 						number_type(call->number));
 	else
 		telephony_incoming_call_ind(call->number,
 						number_type(call->number));
+
+	telephony_update_indicator(maemo_indicators, "callsetup",
+					EV_CALLSETUP_INCOMING);
 }
 
 static void handle_outgoing_call(DBusMessage *msg)
@@ -942,9 +1005,6 @@ static void handle_outgoing_call(DBusMessage *msg)
 
 	g_free(call->number);
 	call->number = g_strdup(number);
-
-	g_free(last_dialed_number);
-	last_dialed_number = g_strdup(number);
 
 	if (create_request_timer) {
 		g_source_remove(create_request_timer);
@@ -973,37 +1033,16 @@ static void handle_create_requested(DBusMessage *msg)
 					EV_CALLSETUP_OUTGOING);
 }
 
-static void handle_call_status(DBusMessage *msg, const char *call_path)
+static void call_set_status(struct csd_call *call, dbus_uint32_t status)
 {
-	struct csd_call *call;
-	dbus_uint32_t status, cause_type, cause;
+	dbus_uint32_t prev_status;
 	int callheld = telephony_get_indicator(maemo_indicators, "callheld");
 
-	if (!dbus_message_get_args(msg, NULL,
-					DBUS_TYPE_UINT32, &status,
-					DBUS_TYPE_UINT32, &cause_type,
-					DBUS_TYPE_UINT32, &cause,
-					DBUS_TYPE_INVALID)) {
-		error("Unexpected paramters in Instance.CallStatus() signal");
-		return;
-	}
+	prev_status = call->status;
+	DBG("Call %s changed from %s to %s", call->object_path,
+		call_status_str[prev_status], call_status_str[status]);
 
-	call = find_call(call_path);
-	if (!call) {
-		error("Didn't find any matching call object for %s",
-				call_path);
-		return;
-	}
-
-	if (status > 16) {
-		error("Invalid call status %u", status);
-		return;
-	}
-
-	DBG("Call %s changed from %s to %s", call_path,
-		call_status_str[call->status], call_status_str[status]);
-
-	if (call->status == (int) status) {
+	if (prev_status == status) {
 		DBG("Ignoring CSD Call state change to existing state");
 		return;
 	}
@@ -1043,6 +1082,14 @@ static void handle_call_status(DBusMessage *msg, const char *call_path)
 						EV_CALLSETUP_ALERTING);
 		break;
 	case CSD_CALL_STATUS_MT_ALERTING:
+		/* Some headsets expect incoming call notification before they
+		 * can send ATA command. When call changed status from waiting
+		 * to alerting we need to send missing notification. Otherwise
+		 * headsets like Nokia BH-108 or BackBeat 903 are unable to
+		 * answer incoming call that was previously waiting. */
+		if (prev_status == CSD_CALL_STATUS_WAITING)
+			telephony_incoming_call_ind(call->number,
+						number_type(call->number));
 		break;
 	case CSD_CALL_STATUS_WAITING:
 		break;
@@ -1121,6 +1168,35 @@ static void handle_call_status(DBusMessage *msg, const char *call_path)
 		error("Unknown call status %u", status);
 		break;
 	}
+}
+
+static void handle_call_status(DBusMessage *msg, const char *call_path)
+{
+	struct csd_call *call;
+	dbus_uint32_t status, cause_type, cause;
+
+	if (!dbus_message_get_args(msg, NULL,
+					DBUS_TYPE_UINT32, &status,
+					DBUS_TYPE_UINT32, &cause_type,
+					DBUS_TYPE_UINT32, &cause,
+					DBUS_TYPE_INVALID)) {
+		error("Unexpected paramters in Instance.CallStatus() signal");
+		return;
+	}
+
+	call = find_call(call_path);
+	if (!call) {
+		error("Didn't find any matching call object for %s",
+				call_path);
+		return;
+	}
+
+	if (status > 16) {
+		error("Invalid call status %u", status);
+		return;
+	}
+
+	call_set_status(call, status);
 }
 
 static void handle_conference(DBusMessage *msg, gboolean joined)
@@ -1342,8 +1418,10 @@ static void hal_battery_level_reply(DBusPendingCall *call, void *user_data)
 
 		telephony_update_indicator(maemo_indicators, "battchg", new);
 	}
+
 done:
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
 static void hal_get_integer(const char *path, const char *key, void *user_data)
@@ -1453,13 +1531,12 @@ static void parse_call_list(DBusMessageIter *iter)
 		if (!call) {
 			call = g_new0(struct csd_call, 1);
 			call->object_path = g_strdup(object_path);
-			call->status = (int) status;
 			calls = g_slist_append(calls, call);
 			DBG("telephony-maemo6: new csd call instance at %s",
 								object_path);
 		}
 
-		if (call->status == CSD_CALL_STATUS_IDLE)
+		if (status == CSD_CALL_STATUS_IDLE)
 			continue;
 
 		/* CSD gives incorrect call_hold property sometimes */
@@ -1476,6 +1553,9 @@ static void parse_call_list(DBusMessageIter *iter)
 		g_free(call->number);
 		call->number = g_strdup(number);
 
+		/* Update indicators */
+		call_set_status(call, status);
+
 	} while (dbus_message_iter_next(iter));
 }
 
@@ -1485,8 +1565,7 @@ static void update_operator_name(const char *name)
 		return;
 
 	g_free(net.operator_name);
-	net.operator_name = g_strdup(name);
-
+	net.operator_name = g_strndup(name, 16);
 	DBG("telephony-maemo6: operator name updated: %s", name);
 }
 
@@ -1539,6 +1618,7 @@ static void get_property_reply(DBusPendingCall *call, void *user_data)
 done:
 	g_free(prop);
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
 static int get_property(const char *iface, const char *prop)
@@ -1598,61 +1678,9 @@ static void call_info_reply(DBusPendingCall *call, void *user_data)
 
 done:
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
-static void hal_find_device_reply(DBusPendingCall *call, void *user_data)
-{
-	DBusError err;
-	DBusMessage *reply;
-	DBusMessageIter iter, sub;
-	const char *path;
-	char match_string[256];
-	int type;
-
-	reply = dbus_pending_call_steal_reply(call);
-
-	dbus_error_init(&err);
-	if (dbus_set_error_from_message(&err, reply)) {
-		error("hald replied with an error: %s, %s",
-				err.name, err.message);
-		dbus_error_free(&err);
-		goto done;
-	}
-
-	dbus_message_iter_init(reply, &iter);
-
-	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
-		error("Unexpected signature in FindDeviceByCapability return");
-		goto done;
-	}
-
-	dbus_message_iter_recurse(&iter, &sub);
-
-	type = dbus_message_iter_get_arg_type(&sub);
-
-	if (type != DBUS_TYPE_OBJECT_PATH && type != DBUS_TYPE_STRING) {
-		error("No hal device with battery capability found");
-		goto done;
-	}
-
-	dbus_message_iter_get_basic(&sub, &path);
-
-	DBG("telephony-maemo6: found battery device at %s", path);
-
-	snprintf(match_string, sizeof(match_string),
-			"type='signal',"
-			"path='%s',"
-			"interface='org.freedesktop.Hal.Device',"
-			"member='PropertyModified'", path);
-	dbus_bus_add_match(connection, match_string, NULL);
-
-	hal_get_integer(path, "battery.charge_level.last_full", &battchg_last);
-	hal_get_integer(path, "battery.charge_level.current", &battchg_cur);
-	hal_get_integer(path, "battery.charge_level.design", &battchg_design);
-
-done:
-	dbus_message_unref(reply);
-}
 
 static void phonebook_read_reply(DBusPendingCall *call, void *user_data)
 {
@@ -1701,6 +1729,7 @@ static void phonebook_read_reply(DBusPendingCall *call, void *user_data)
 
 done:
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
 static void csd_init(void)
@@ -1744,109 +1773,6 @@ static void csd_init(void)
 	}
 }
 
-static inline DBusMessage *invalid_args(DBusMessage *msg)
-{
-	return g_dbus_create_error(msg,"org.bluez.Error.InvalidArguments",
-					"Invalid arguments in method call");
-}
-
-static uint32_t get_callflag(const char *callerid_setting)
-{
-	if (callerid_setting != NULL) {
-		if (g_str_equal(callerid_setting, "allowed"))
-			return CALL_FLAG_PRESENTATION_ALLOWED;
-		else if (g_str_equal(callerid_setting, "restricted"))
-			return CALL_FLAG_PRESENTATION_RESTRICTED;
-		else
-			return CALL_FLAG_NONE;
-	} else
-		return CALL_FLAG_NONE;
-}
-
-static void generate_flag_file(const char *filename)
-{
-	int fd;
-
-	if (g_file_test(ALLOWED_FLAG_FILE, G_FILE_TEST_EXISTS) ||
-			g_file_test(RESTRICTED_FLAG_FILE, G_FILE_TEST_EXISTS) ||
-			g_file_test(NONE_FLAG_FILE, G_FILE_TEST_EXISTS))
-		return;
-
-	fd = open(filename, O_WRONLY | O_CREAT, 0);
-	if (fd >= 0)
-		close(fd);
-}
-
-static void save_callerid_to_file(const char *callerid_setting)
-{
-	char callerid_file[FILENAME_MAX];
-
-	snprintf(callerid_file, sizeof(callerid_file), "%s%s",
-					CALLERID_BASE, callerid_setting);
-
-	if (g_file_test(ALLOWED_FLAG_FILE, G_FILE_TEST_EXISTS))
-		rename(ALLOWED_FLAG_FILE, callerid_file);
-	else if (g_file_test(RESTRICTED_FLAG_FILE, G_FILE_TEST_EXISTS))
-		rename(RESTRICTED_FLAG_FILE, callerid_file);
-	else if (g_file_test(NONE_FLAG_FILE, G_FILE_TEST_EXISTS))
-		rename(NONE_FLAG_FILE, callerid_file);
-	else
-		generate_flag_file(callerid_file);
-}
-
-static uint32_t callerid_from_file(void)
-{
-	if (g_file_test(ALLOWED_FLAG_FILE, G_FILE_TEST_EXISTS))
-		return CALL_FLAG_PRESENTATION_ALLOWED;
-	else if (g_file_test(RESTRICTED_FLAG_FILE, G_FILE_TEST_EXISTS))
-		return CALL_FLAG_PRESENTATION_RESTRICTED;
-	else if (g_file_test(NONE_FLAG_FILE, G_FILE_TEST_EXISTS))
-		return CALL_FLAG_NONE;
-	else
-		return CALL_FLAG_NONE;
-}
-
-static DBusMessage *set_callerid(DBusConnection *conn, DBusMessage *msg,
-					void *data)
-{
-	const char *callerid_setting;
-
-	if (dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING,
-						&callerid_setting,
-						DBUS_TYPE_INVALID) == FALSE)
-		return invalid_args(msg);
-
-	if (g_str_equal(callerid_setting, "allowed") ||
-			g_str_equal(callerid_setting, "restricted") ||
-			g_str_equal(callerid_setting, "none")) {
-		save_callerid_to_file(callerid_setting);
-		callerid = get_callflag(callerid_setting);
-		DBG("telephony-maemo6 setting callerid flag: %s",
-							callerid_setting);
-		return dbus_message_new_method_return(msg);
-	}
-
-	error("telephony-maemo6: invalid argument %s for method call"
-					" SetCallerId", callerid_setting);
-		return invalid_args(msg);
-}
-
-static DBusMessage *clear_lastnumber(DBusConnection *conn, DBusMessage *msg,
-					void *data)
-{
-	g_free(last_dialed_number);
-	last_dialed_number = NULL;
-
-	return dbus_message_new_method_return(msg);
-}
-
-static GDBusMethodTable telephony_maemo_methods[] = {
-	{ "SetCallerId",	"s",	"",	set_callerid,
-						G_DBUS_METHOD_FLAG_ASYNC },
-	{ "ClearLastNumber",	"",	"",	clear_lastnumber },
-	{ }
-};
-
 static void handle_modem_state(DBusMessage *msg)
 {
 	const char *state;
@@ -1879,15 +1805,13 @@ static void modem_state_reply(DBusPendingCall *call, void *user_data)
 		handle_modem_state(reply);
 
 	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
-static DBusHandlerResult signal_filter(DBusConnection *conn,
-						DBusMessage *msg, void *data)
+static gboolean signal_filter(DBusConnection *conn, DBusMessage *msg,
+								void *data)
 {
 	const char *path = dbus_message_get_path(msg);
-
-	if (dbus_message_get_type(msg) != DBUS_MESSAGE_TYPE_SIGNAL)
-		return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 
 	if (dbus_message_is_signal(msg, CSD_CALL_INTERFACE, "Coming"))
 		handle_incoming_call(msg);
@@ -1918,7 +1842,68 @@ static DBusHandlerResult signal_filter(DBusConnection *conn,
 						"modem_state_changed_ind"))
 		handle_modem_state(msg);
 
-	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+	return TRUE;
+}
+
+static void add_watch(const char *sender, const char *path,
+				const char *interface, const char *member)
+{
+	guint watch;
+
+	watch = g_dbus_add_signal_watch(connection, sender, path, interface,
+					member, signal_filter, NULL, NULL);
+
+	watches = g_slist_prepend(watches, GUINT_TO_POINTER(watch));
+}
+
+static void hal_find_device_reply(DBusPendingCall *call, void *user_data)
+{
+	DBusError err;
+	DBusMessage *reply;
+	DBusMessageIter iter, sub;
+	const char *path;
+	int type;
+
+	reply = dbus_pending_call_steal_reply(call);
+
+	dbus_error_init(&err);
+	if (dbus_set_error_from_message(&err, reply)) {
+		error("hald replied with an error: %s, %s",
+				err.name, err.message);
+		dbus_error_free(&err);
+		goto done;
+	}
+
+	dbus_message_iter_init(reply, &iter);
+
+	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY) {
+		error("Unexpected signature in FindDeviceByCapability return");
+		goto done;
+	}
+
+	dbus_message_iter_recurse(&iter, &sub);
+
+	type = dbus_message_iter_get_arg_type(&sub);
+
+	if (type != DBUS_TYPE_OBJECT_PATH && type != DBUS_TYPE_STRING) {
+		error("No hal device with battery capability found");
+		goto done;
+	}
+
+	dbus_message_iter_get_basic(&sub, &path);
+
+	DBG("telephony-maemo6: found battery device at %s", path);
+
+	add_watch(NULL, path, "org.freedesktop.Hal.Device",
+							"PropertyModified");
+
+	hal_get_integer(path, "battery.charge_level.last_full", &battchg_last);
+	hal_get_integer(path, "battery.charge_level.current", &battchg_cur);
+	hal_get_integer(path, "battery.charge_level.design", &battchg_design);
+
+done:
+	dbus_message_unref(reply);
+	remove_pending(call);
 }
 
 int telephony_init(void)
@@ -1931,51 +1916,34 @@ int telephony_init(void)
 				AG_FEATURE_ENHANCED_CALL_CONTROL |
 				AG_FEATURE_EXTENDED_ERROR_RESULT_CODES |
 				AG_FEATURE_THREE_WAY_CALLING;
+	int i;
+
+	DBG("");
 
 	connection = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
 
-	if (!dbus_connection_add_filter(connection, signal_filter,
-						NULL, NULL))
-		error("Can't add signal filter");
-
-	dbus_bus_add_match(connection,
-			"type=signal,interface=" CSD_CALL_INTERFACE, NULL);
-	dbus_bus_add_match(connection,
-			"type=signal,interface=" CSD_CALL_INSTANCE, NULL);
-	dbus_bus_add_match(connection,
-			"type=signal,interface=" CSD_CALL_CONFERENCE, NULL);
-	dbus_bus_add_match(connection,
-			"type=signal,interface=" CSD_CSNET_REGISTRATION,
-			NULL);
-	dbus_bus_add_match(connection,
-			"type=signal,interface=" CSD_CSNET_OPERATOR,
-			NULL);
-	dbus_bus_add_match(connection,
-			"type=signal,interface=" CSD_CSNET_SIGNAL,
-			NULL);
-	dbus_bus_add_match(connection,
-				"type=signal,interface=" SSC_DBUS_IFACE
-				",member=modem_state_changed_ind", NULL);
+	add_watch(NULL, NULL, CSD_CALL_INTERFACE, NULL);
+	add_watch(NULL, NULL, CSD_CALL_INSTANCE, NULL);
+	add_watch(NULL, NULL, CSD_CALL_CONFERENCE, NULL);
+	add_watch(NULL, NULL, CSD_CSNET_REGISTRATION, "RegistrationChanged");
+	add_watch(NULL, NULL, CSD_CSNET_OPERATOR, "OperatorNameChanged");
+	add_watch(NULL, NULL, CSD_CSNET_SIGNAL, "SignalBarsChanged");
+	add_watch(NULL, NULL, SSC_DBUS_IFACE, "modem_state_changed_ind");
 
 	if (send_method_call(SSC_DBUS_NAME, SSC_DBUS_PATH, SSC_DBUS_IFACE,
 					"get_modem_state", modem_state_reply,
 					NULL, DBUS_TYPE_INVALID) < 0)
 		error("Unable to send " SSC_DBUS_IFACE ".get_modem_state()");
 
-	generate_flag_file(NONE_FLAG_FILE);
-	callerid = callerid_from_file();
-
-	if (!g_dbus_register_interface(connection, TELEPHONY_MAEMO_PATH,
-			TELEPHONY_MAEMO_INTERFACE, telephony_maemo_methods,
-			NULL, NULL, NULL, NULL)) {
-		error("telephony-maemo6 interface %s init failed on path %s",
-			TELEPHONY_MAEMO_INTERFACE, TELEPHONY_MAEMO_PATH);
+	/* Reset indicators */
+	for (i = 0; maemo_indicators[i].desc != NULL; i++) {
+		if (g_str_equal(maemo_indicators[i].desc, "battchg"))
+			maemo_indicators[i].val = 5;
+		else
+			maemo_indicators[i].val = 0;
 	}
 
-	DBG("telephony-maemo6 registering %s interface on path %s",
-			TELEPHONY_MAEMO_INTERFACE, TELEPHONY_MAEMO_PATH);
-
-	telephony_ready_ind(features, maemo_indicators, response_and_hold,
+	telephony_ready_ind(features, maemo_indicators, BTRH_NOT_SUPPORTED,
 								chld_str);
 	if (send_method_call("org.freedesktop.Hal",
 				"/org/freedesktop/Hal/Manager",
@@ -1989,20 +1957,38 @@ int telephony_init(void)
 	return 0;
 }
 
+static void remove_watch(gpointer data)
+{
+	g_dbus_remove_watch(connection, GPOINTER_TO_UINT(data));
+}
+
 void telephony_exit(void)
 {
+	DBG("");
+
 	g_free(net.operator_name);
 	net.operator_name = NULL;
 
-	g_free(last_dialed_number);
-	last_dialed_number = NULL;
+	net.status = NETWORK_REG_STATUS_UNKOWN;
+	net.signal_bars = 0;
+
+	g_slist_free(active_calls);
+	active_calls = NULL;
 
 	g_slist_foreach(calls, (GFunc) csd_call_free, NULL);
 	g_slist_free(calls);
 	calls = NULL;
 
-	dbus_connection_remove_filter(connection, signal_filter, NULL);
+	g_slist_foreach(pending, (GFunc) pending_req_finalize, NULL);
+	g_slist_free(pending);
+	pending = NULL;
+
+	g_slist_foreach(watches, (GFunc) remove_watch, NULL);
+	g_slist_free(watches);
+	watches = NULL;
 
 	dbus_connection_unref(connection);
 	connection = NULL;
+
+	telephony_deinit();
 }

@@ -10,73 +10,17 @@ AC_DEFUN([AC_PROG_CC_PIE], [
 	])
 ])
 
-AC_DEFUN([AC_INIT_BLUEZ], [
-	AC_PREFIX_DEFAULT(/usr/local)
-
+AC_DEFUN([COMPILER_FLAGS], [
 	if (test "${CFLAGS}" = ""); then
-		CFLAGS="-Wall -O2"
+		CFLAGS="-Wall -O2 -D_FORTIFY_SOURCE=2"
 	fi
-
-	if (test "${prefix}" = "NONE"); then
-		dnl no prefix and no sysconfdir, so default to /etc
-		if (test "$sysconfdir" = '${prefix}/etc'); then
-			AC_SUBST([sysconfdir], ['/etc'])
-		fi
-
-		dnl no prefix and no mandir, so use ${prefix}/share/man as default
-		if (test "$mandir" = '${prefix}/man'); then
-			AC_SUBST([mandir], ['${prefix}/share/man'])
-		fi
-
-		prefix="${ac_default_prefix}"
-	fi
-
-	if (test "${libdir}" = '${exec_prefix}/lib'); then
-		libdir="${prefix}/lib"
-	fi
-
-	if (test "$sysconfdir" = '${prefix}/etc'); then
-		configdir="${prefix}/etc/bluetooth"
-	else
-		configdir="${sysconfdir}/bluetooth"
-	fi
-
-	AC_DEFINE_UNQUOTED(CONFIGDIR, "${configdir}", [Directory for the configuration files])
-])
-
-AC_DEFUN([AC_PATH_BLUEZ], [
-	PKG_CHECK_MODULES(BLUEZ, bluez, dummy=yes, AC_MSG_ERROR(Bluetooth library is required))
-	AC_SUBST(BLUEZ_CFLAGS)
-	AC_SUBST(BLUEZ_LIBS)
-])
-
-AC_DEFUN([AC_ARG_BLUEZ], [
-	debug_enable=no
-	fortify_enable=yes
-	pie_enable=yes
-
-	AC_ARG_ENABLE(fortify, AC_HELP_STRING([--disable-fortify], [disable compile time buffer checks]), [
-		fortify_enable=${enableval}
-	])
-
-	AC_ARG_ENABLE(pie, AC_HELP_STRING([--disable-pie], [enable position independent executables flag]), [
-		pie_enable=${enableval}
-	])
-
-	AC_ARG_ENABLE(debug, AC_HELP_STRING([--enable-debug], [enable compiling with debugging information]), [
-		debug_enable=${enableval}
-	])
-
-	if (test "${fortify_enable}" = "yes"); then
-		CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2"
-	fi
-
-	if (test "${pie_enable}" = "yes" && test "${ac_cv_prog_cc_pie}" = "yes"); then
-		CFLAGS="$CFLAGS -fPIE"
-		LDFLAGS="$LDFLAGS -pie"
-	fi
-
-	if (test "${debug_enable}" = "yes" && test "${ac_cv_prog_cc_g}" = "yes"); then
-		CFLAGS="$CFLAGS -g -O0"
+	if (test "$USE_MAINTAINER_MODE" = "yes"); then
+		CFLAGS+=" -Wextra"
+		CFLAGS+=" -Wno-unused-parameter"
+		CFLAGS+=" -Wno-missing-field-initializers"
+		CFLAGS+=" -Wdeclaration-after-statement"
+		CFLAGS+=" -Wmissing-declarations"
+		CFLAGS+=" -Wredundant-decls"
+		CFLAGS+=" -Wcast-align"
 	fi
 ])

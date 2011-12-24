@@ -186,7 +186,8 @@ static int write_key(const char *pathname, const char *key, const char *value, i
 {
 	struct stat st;
 	char *map, *off, *end, *str;
-	off_t size, pos; size_t base;
+	off_t size;
+	size_t base;
 	int fd, len, err = 0;
 
 	fd = open(pathname, O_RDWR);
@@ -207,7 +208,7 @@ static int write_key(const char *pathname, const char *key, const char *value, i
 
 	if (!size) {
 		if (value) {
-			pos = lseek(fd, size, SEEK_SET);
+			lseek(fd, size, SEEK_SET);
 			err = write_key_value(fd, key, value);
 		}
 		goto unlock;
@@ -225,7 +226,7 @@ static int write_key(const char *pathname, const char *key, const char *value, i
 	if (!off) {
 		if (value) {
 			munmap(map, size);
-			pos = lseek(fd, size, SEEK_SET);
+			lseek(fd, size, SEEK_SET);
 			err = write_key_value(fd, key, value);
 		}
 		goto unlock;
@@ -253,7 +254,7 @@ static int write_key(const char *pathname, const char *key, const char *value, i
 			err = errno;
 			goto unlock;
 		}
-		pos = lseek(fd, base, SEEK_SET);
+		lseek(fd, base, SEEK_SET);
 		if (value)
 			err = write_key_value(fd, key, value);
 
@@ -279,7 +280,7 @@ static int write_key(const char *pathname, const char *key, const char *value, i
 		free(str);
 		goto unlock;
 	}
-	pos = lseek(fd, base, SEEK_SET);
+	lseek(fd, base, SEEK_SET);
 	if (value)
 		err = write_key_value(fd, key, value);
 
@@ -399,8 +400,7 @@ char *textfile_caseget(const char *pathname, const char *key)
 	return read_key(pathname, key, 1);
 }
 
-int textfile_foreach(const char *pathname,
-		void (*func)(char *key, char *value, void *data), void *data)
+int textfile_foreach(const char *pathname, textfile_cb func, void *data)
 {
 	struct stat st;
 	char *map, *off, *end, *key, *value;

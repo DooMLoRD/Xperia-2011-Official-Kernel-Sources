@@ -38,6 +38,7 @@
 
 #include "log.h"
 #include "telephony.h"
+#include "error.h"
 
 /* SSC D-Bus definitions */
 #define SSC_DBUS_NAME  "com.nokia.phone.SSC"
@@ -208,14 +209,6 @@ static gboolean events_enabled = FALSE;
 
 /* Supported set of call hold operations */
 static const char *chld_str = "0,1,1x,2,2x,3,4";
-
-/* Response and hold state
- * -1 = none
- *  0 = incoming call is put on hold in the AG
- *  1 = held incoming call is accepted in the AG
- *  2 = held incoming call is rejected in the AG
- */
-static int response_and_hold = -1;
 
 static char *last_dialed_number = NULL;
 
@@ -516,11 +509,8 @@ void telephony_event_reporting_req(void *telephony_device, int ind)
 
 void telephony_response_and_hold_req(void *telephony_device, int rh)
 {
-	response_and_hold = rh;
-
-	telephony_response_and_hold_ind(response_and_hold);
-
-	telephony_response_and_hold_rsp(telephony_device, CME_ERROR_NONE);
+	telephony_response_and_hold_rsp(telephony_device,
+						CME_ERROR_NOT_SUPPORTED);
 }
 
 void telephony_last_dialed_number_req(void *telephony_device)
@@ -1880,12 +1870,6 @@ static void csd_init(void)
 	}
 }
 
-static inline DBusMessage *invalid_args(DBusMessage *msg)
-{
-	return g_dbus_create_error(msg,"org.bluez.Error.InvalidArguments",
-					"Invalid arguments in method call");
-}
-
 static uint32_t get_callflag(const char *callerid_setting)
 {
 	if (callerid_setting != NULL) {
@@ -1950,7 +1934,7 @@ static DBusMessage *set_callerid(DBusConnection *conn, DBusMessage *msg,
 	if (dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING,
 						&callerid_setting,
 						DBUS_TYPE_INVALID) == FALSE)
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 
 	if (g_str_equal(callerid_setting, "allowed") ||
 			g_str_equal(callerid_setting, "restricted") ||
@@ -1964,7 +1948,7 @@ static DBusMessage *set_callerid(DBusConnection *conn, DBusMessage *msg,
 
 	error("telephony-maemo: invalid argument %s for method call"
 					" SetCallerId", callerid_setting);
-		return invalid_args(msg);
+		return btd_error_invalid_args(msg);
 }
 
 static GDBusMethodTable telephony_maemo_methods[] = {
@@ -2091,7 +2075,7 @@ int telephony_init(void)
 	DBG("telephony-maemo registering %s interface on path %s",
 			TELEPHONY_MAEMO_INTERFACE, TELEPHONY_MAEMO_PATH);
 
-	telephony_ready_ind(features, maemo_indicators, response_and_hold,
+	telephony_ready_ind(features, maemo_indicators, BTRH_NOT_SUPPORTED,
 								chld_str);
 	if (send_method_call("org.freedesktop.Hal",
 				"/org/freedesktop/Hal/Manager",
@@ -2115,4 +2099,6 @@ void telephony_exit(void)
 
 	dbus_connection_unref(connection);
 	connection = NULL;
+
+	telephony_deinit();
 }

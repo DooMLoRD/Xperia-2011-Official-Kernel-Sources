@@ -2,7 +2,7 @@
  *
  *  D-Bus helper library
  *
- *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2004-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -95,6 +95,7 @@ static gboolean watch_func(GIOChannel *chan, GIOCondition cond, gpointer data)
 {
 	struct watch_info *info = data;
 	unsigned int flags = 0;
+	DBusDispatchStatus status;
 
 	dbus_connection_ref(info->conn);
 
@@ -104,6 +105,9 @@ static gboolean watch_func(GIOChannel *chan, GIOCondition cond, gpointer data)
 	if (cond & G_IO_ERR) flags |= DBUS_WATCH_ERROR;
 
 	dbus_watch_handle(info->watch, flags);
+
+	status = dbus_connection_get_dispatch_status(info->conn);
+	queue_dispatch(info->conn, status);
 
 	dbus_connection_unref(info->conn);
 
@@ -226,9 +230,6 @@ static dbus_bool_t add_timeout(DBusTimeout *timeout, void *data)
 
 static void remove_timeout(DBusTimeout *timeout, void *data)
 {
-	if (dbus_timeout_get_enabled(timeout))
-		return;
-
 	/* will trigger timeout_handler_free() */
 	dbus_timeout_set_data(timeout, NULL, NULL);
 }

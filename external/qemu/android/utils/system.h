@@ -14,6 +14,13 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <inttypes.h>  /* for PRId64 et al. */
+#include "android/utils/assert.h"
+
+/* internal helpers */
+void*  _android_array_alloc( size_t  itemSize, size_t  count );
+void*  _android_array_alloc0( size_t  itemSize, size_t  count );
+void*  _android_array_realloc( void* block, size_t  itemSize, size_t  count );
 
 /* the following functions perform 'checked allocations', i.e.
  * they abort if there is not enough memory.
@@ -42,10 +49,9 @@ void   android_free( void*  block );
 #define  AMEM_COPY(dst,src,size)  memcpy((char*)(dst),(const char*)(src),(size_t)(size))
 #define  AMEM_MOVE(dst,src,size)  memmove((char*)(dst),(const char*)(src),(size_t)(size))
 
-#define  AARRAY_NEW(p,count)          ((p) = android_alloc(sizeof(*p)*(count)))
-#define  AARRAY_NEW0(p,count)         ((p) = android_alloc0(sizeof(*p)*(count)))
-
-#define  AARRAY_RENEW(p,count)        ((p) = android_realloc((p),sizeof(*(p))*(count)))
+#define  AARRAY_NEW(p,count)          (AASSERT_LOC(), (p) = _android_array_alloc(sizeof(*p),(count)))
+#define  AARRAY_NEW0(p,count)         (AASSERT_LOC(), (p) = _android_array_alloc0(sizeof(*p),(count)))
+#define  AARRAY_RENEW(p,count)        (AASSERT_LOC(), (p) = _android_array_realloc((p),sizeof(*(p)),(count)))
 
 #define  AARRAY_COPY(dst,src,count)   AMEM_COPY(dst,src,(count)*sizeof((dst)[0]))
 #define  AARRAY_MOVE(dst,src,count)   AMEM_MOVE(dst,src,(count)*sizeof((dst)[0]))
@@ -155,6 +161,24 @@ extern  void   restore_sigalrm( signal_state_t  *state );
  **/
 
 extern  void   sleep_ms( int  timeout );
+
+/** FORMATTING int64_t in printf() statements
+ **
+ ** Normally defined in <inttypes.h> except on Windows and maybe others.
+ **/
+
+#ifndef PRId64
+#  define PRId64  "lld"
+#endif
+#ifndef PRIx64
+#  define PRIx64  "llx"
+#endif
+#ifndef PRUd64
+#  define PRUd64  "llu"
+#endif
+#ifndef PRUx64
+#  define PRUx64  "llx"
+#endif
 
 /* */
 

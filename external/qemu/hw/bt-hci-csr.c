@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "qemu-common.h"
@@ -89,7 +88,7 @@ static inline void csrhci_fifo_wake(struct csrhci_s *s)
     }
 
     if (s->out_len)
-        qemu_mod_timer(s->out_tm, qemu_get_clock(vm_clock) + s->baud_delay);
+        qemu_mod_timer(s->out_tm, qemu_get_clock_ns(vm_clock) + s->baud_delay);
 }
 
 #define csrhci_out_packetz(s, len) memset(csrhci_out_packet(s, len), 0, len)
@@ -227,7 +226,7 @@ static void csrhci_in_packet(struct csrhci_s *s, uint8_t *pkt)
         *rpkt ++ = 0x20;	/* Operational settings negotation Ok */
         memcpy(rpkt, pkt, 7); rpkt += 7;
         *rpkt ++ = 0xff;
-        *rpkt ++ = 0xff;
+        *rpkt = 0xff;
         break;
 
     case H4_ALIVE_PKT:
@@ -239,7 +238,7 @@ static void csrhci_in_packet(struct csrhci_s *s, uint8_t *pkt)
         rpkt = csrhci_out_packet_csr(s, H4_ALIVE_PKT, 2);
 
         *rpkt ++ = 0xcc;
-        *rpkt ++ = 0x00;
+        *rpkt = 0x00;
         break;
 
     default:
@@ -364,7 +363,7 @@ static int csrhci_ioctl(struct CharDriverState *chr, int cmd, void *arg)
     switch (cmd) {
     case CHR_IOCTL_SERIAL_SET_PARAMS:
         ssp = (QEMUSerialSetParams *) arg;
-        s->baud_delay = ticks_per_sec / ssp->speed;
+        s->baud_delay = get_ticks_per_sec() / ssp->speed;
         /* Moments later... (but shorter than 100ms) */
         s->modem_state |= CHR_TIOCM_CTS;
         break;
@@ -390,7 +389,7 @@ static void csrhci_reset(struct csrhci_s *s)
     s->out_len = 0;
     s->out_size = FIFO_LEN;
     s->in_len = 0;
-    s->baud_delay = ticks_per_sec;
+    s->baud_delay = get_ticks_per_sec();
     s->enable = 0;
     s->in_hdr = INT_MAX;
     s->in_data = INT_MAX;
@@ -447,7 +446,7 @@ CharDriverState *uart_hci_init(qemu_irq wakeup)
     s->hci->evt_recv = csrhci_out_hci_packet_event;
     s->hci->acl_recv = csrhci_out_hci_packet_acl;
 
-    s->out_tm = qemu_new_timer(vm_clock, csrhci_out_tick, s);
+    s->out_tm = qemu_new_timer_ns(vm_clock, csrhci_out_tick, s);
     s->pins = qemu_allocate_irqs(csrhci_pins, s, __csrhci_pins);
     csrhci_reset(s);
 

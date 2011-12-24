@@ -3,7 +3,7 @@
  *  BlueZ - Bluetooth protocol stack for Linux
  *
  *  Copyright (C) 2000-2002  Maxim Krasnyansky <maxk@qualcomm.com>
- *  Copyright (C) 2003-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2003-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -306,6 +306,22 @@ static char *mode2str(uint8_t mode)
 		return "Retransmission";
 	case 0x02:
 		return "Flow control";
+	case 0x03:
+		return "Enhanced Retransmission";
+	case 0x04:
+		return "Streaming";
+	default:
+		return "Reserved";
+	}
+}
+
+static char *fcs2str(uint8_t fcs)
+{
+	switch (fcs) {
+	case 0x00:
+		return "No FCS";
+	case 0x01:
+		return "CRC16 Check";
 	default:
 		return "Reserved";
 	}
@@ -336,8 +352,9 @@ static char *supervisory2str(uint8_t supervisory)
 	case 0x01:
 		return "Reject (REJ)";
 	case 0x02:
+		return "Receiver Not Ready (RNR)";
 	case 0x03:
-		return "Reserved Supervisory";
+		return "Select Reject (SREJ)";
 	default:
 		return "Bad Supervisory";
 	}
@@ -428,7 +445,7 @@ static void conf_rfc(void *ptr, int len, int in, uint16_t cid)
 	set_mode(in, cid, mode);
 
 	printf("RFC 0x%02x (%s", mode, mode2str(mode));
-	if (mode == 0x01 || mode == 0x02) {
+	if (mode >= 0x01 && mode <= 0x04) {
 		uint8_t txwin, maxtrans;
 		uint16_t rto, mto, mps;
 		txwin = *((uint8_t *) (ptr + 1));
@@ -440,6 +457,16 @@ static void conf_rfc(void *ptr, int len, int in, uint16_t cid)
 					txwin, maxtrans, rto, mto, mps);
 	}
 	printf(")");
+}
+
+static void conf_fcs(void *ptr, int len)
+{
+	uint8_t fcs;
+
+	fcs = *((uint8_t *) ptr);
+	printf("FCS Option");
+	if (len > 0)
+		printf(" 0x%2.2x (%s)", fcs, fcs2str(fcs));
 }
 
 static void conf_opt(int level, void *ptr, int len, int in, uint16_t cid)
@@ -478,6 +505,10 @@ static void conf_opt(int level, void *ptr, int len, int in, uint16_t cid)
 			conf_rfc(h->val, h->len, in, cid);
 			break;
 
+		case L2CAP_CONF_FCS:
+			conf_fcs(h->val, h->len);
+			break;
+
 		default:
 			printf("Unknown (type %2.2x, len %d)", h->type & 0x7f, h->len);
 			break;
@@ -509,6 +540,9 @@ static void conf_list(int level, uint8_t *list, int len)
 			break;
 		case L2CAP_CONF_RFC:
 			printf("RFC ");
+			break;
+		case L2CAP_CONF_FCS:
+			printf("FCS ");
 			break;
 		default:
 			printf("%2.2x ", list[i] & 0x7f);
@@ -633,6 +667,9 @@ static void info_opt(int level, int type, void *ptr, int len)
 				printf("Bi-directional QoS\n");
 			}
 		}
+		break;
+	case 0x0003:
+		printf("Fixed channel list\n");
 		break;
 	default:
 		printf("Unknown (len %d)\n", len);
@@ -810,7 +847,9 @@ static void l2cap_parse(int level, struct frame *frm)
 				}
 				printf(" ReqSeq %d", (ctrl & 0x3f00) >> 8);
 				if (ctrl & 0x80)
-					printf(" Retransmission Disable");
+					printf(" F-bit");
+				if (ctrl & 0x10)
+					printf(" P-bit");
 				printf("\n");
 			}
 		}
@@ -859,6 +898,13 @@ static void l2cap_parse(int level, struct frame *frm)
 				raw_dump(level + 1, frm);
 			break;
 
+		case 0x1f:
+			if (!p_filter(FILT_ATT))
+				att_dump(level, frm);
+			else
+				raw_dump(level + 1, frm);
+			break;
+
 		default:
 			proto = get_proto(frm->handle, psm, 0);
 
@@ -895,11 +941,11 @@ void l2cap_dump(int level, struct frame *frm)
 	l2cap_hdr *hdr;
 	uint16_t dlen;
 
-	if (frm->flags & ACL_START) {
+	if ((frm->flags & ACL_START) || frm->flags == ACL_START_NO_FLUSH) {
 		hdr  = frm->ptr;
 		dlen = btohs(hdr->len);
 
-		if (frm->len == (dlen + L2CAP_HDR_SIZE)) {
+		if ((int) frm->len == (dlen + L2CAP_HDR_SIZE)) {
 			/* Complete frame */
 			l2cap_parse(level, frm);
 			return;

@@ -152,7 +152,6 @@ int get_stored_device_info(const bdaddr_t *src, const bdaddr_t *dst, struct hidp
 			&vendor, &product, &version, &subclass, &country,
 			&parser, desc, &req->flags, &pos);
 
-	free(str);
 
 	req->vendor   = vendor;
 	req->product  = product;
@@ -163,6 +162,7 @@ int get_stored_device_info(const bdaddr_t *src, const bdaddr_t *dst, struct hidp
 
 	snprintf(req->name, 128, "%s", str + pos);
 
+	free(str);
 	req->rd_size = strlen(desc) / 2;
 	req->rd_data = malloc(req->rd_size);
 	if (!req->rd_data) {
@@ -248,22 +248,23 @@ int get_sdp_device_info(const bdaddr_t *src, const bdaddr_t *dst, struct hidp_co
 
 	rec = (sdp_record_t *) hid_rsp->data;
 
-	pdlist = sdp_data_get(rec, 0x0101);
-	pdlist2 = sdp_data_get(rec, 0x0102);
-	if (pdlist) {
-		if (pdlist2) {
-			if (strncmp(pdlist->val.str, pdlist2->val.str, 5)) {
-				strncpy(req->name, pdlist2->val.str, sizeof(req->name) - 1);
-				strcat(req->name, " ");
-			}
-			strncat(req->name, pdlist->val.str,
-					sizeof(req->name) - strlen(req->name));
-		} else
-			strncpy(req->name, pdlist->val.str, sizeof(req->name) - 1);
-	} else {
-		pdlist2 = sdp_data_get(rec, 0x0100);
-		if (pdlist2)
-			strncpy(req->name, pdlist2->val.str, sizeof(req->name) - 1);
+	pdlist2 = sdp_data_get(rec, 0x0100);
+	if (pdlist2)
+		strncpy(req->name, pdlist2->val.str, sizeof(req->name) - 1);
+	else {
+		pdlist = sdp_data_get(rec, 0x0101);
+		pdlist2 = sdp_data_get(rec, 0x0102);
+		if (pdlist) {
+			if (pdlist2) {
+				if (strncmp(pdlist->val.str, pdlist2->val.str, 5)) {
+					strncpy(req->name, pdlist2->val.str, sizeof(req->name) - 1);
+					strcat(req->name, " ");
+				}
+				strncat(req->name, pdlist->val.str,
+						sizeof(req->name) - strlen(req->name));
+			} else
+				strncpy(req->name, pdlist->val.str, sizeof(req->name) - 1);
+		}
 	}
 
 	pdlist = sdp_data_get(rec, 0x0201);

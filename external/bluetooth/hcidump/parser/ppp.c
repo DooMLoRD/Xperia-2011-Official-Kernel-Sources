@@ -2,7 +2,7 @@
  *
  *  BlueZ - Bluetooth protocol stack for Linux
  *
- *  Copyright (C) 2004-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2004-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -46,7 +46,7 @@ static unsigned char ppp_magic3[] = { 0x7e, 0x7d, 0xdf, 0x7d, 0x23, 0xc0, 0x21 }
 
 static inline int check_for_ppp_traffic(unsigned char *data, int size)
 {
-	int i;
+	unsigned int i;
 
 	for (i = 0; i < size - sizeof(ppp_magic1); i++)
 		if (!memcmp(data + i, ppp_magic1, sizeof(ppp_magic1))) {

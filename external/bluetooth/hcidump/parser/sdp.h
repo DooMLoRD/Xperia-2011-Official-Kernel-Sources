@@ -3,7 +3,7 @@
  *  BlueZ - Bluetooth protocol stack for Linux
  *
  *  Copyright (C) 2001-2002  Ricky Yuen <ryuen@qualcomm.com>
- *  Copyright (C) 2003-2007  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2003-2011  Marcel Holtmann <marcel@holtmann.org>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -129,8 +129,8 @@
 #define SDP_ATTR_ID_BLUETOOTH_PROFILE_DESCRIPTOR_LIST  0x0009
 #define SDP_ATTR_ID_DOCUMENTATION_URL                  0x000A
 #define SDP_ATTR_ID_CLIENT_EXECUTABLE_URL              0x000B
-#define SDP_ATTR_ID_ICON_10                            0x000C
-#define SDP_ATTR_ID_ICON_URL                           0x000D
+#define SDP_ATTR_ID_ICON_URL                           0x000C
+#define SDP_ATTR_ID_ADDITIONAL_PROTOCOL_DESC_LISTS     0x000D
 #define SDP_ATTR_ID_SERVICE_NAME                       0x0100
 #define SDP_ATTR_ID_SERVICE_DESCRIPTION                0x0101
 #define SDP_ATTR_ID_PROVIDER_NAME                      0x0102

@@ -68,7 +68,6 @@ CFG_PARAM( datadir, "<dir>",  "write user data into <dir>" )
 CFG_PARAM( kernel,  "<file>", "use specific emulated kernel" )
 CFG_PARAM( ramdisk, "<file>", "ramdisk image (default <system>/ramdisk.img" )
 CFG_PARAM( image,   "<file>", "obsolete, use -system <file> instead" )
-CFG_PARAM( init_data, "<file>", "initial data image (default <system>/userdata.img" )
 CFG_PARAM( initdata, "<file>", "same as '-init-data <file>'" )
 CFG_PARAM( data,     "<file>", "data image (default <datadir>/userdata-qemu.img" )
 CFG_PARAM( partition_size, "<size>", "system/data partition size in MBs" )
@@ -76,7 +75,15 @@ CFG_PARAM( cache,    "<file>", "cache partition image (default is temporary file
 CFG_FLAG ( no_cache, "disable the cache partition" )
 CFG_FLAG ( nocache,  "same as -no-cache" )
 OPT_PARAM( sdcard, "<file>", "SD card image (default <system>/sdcard.img")
-OPT_FLAG ( wipe_data, "reset the use data image (copy it from initdata)" )
+OPT_PARAM( snapstorage,    "<file>", "file that contains all state snapshots (default <datadir>/snapshots.img)")
+OPT_FLAG ( no_snapstorage, "do not mount a snapshot storage file (this disables all snapshot functionality)" )
+OPT_PARAM( snapshot,       "<name>", "name of snapshot within storage file for auto-start and auto-save (default 'default-boot')" )
+OPT_FLAG ( no_snapshot,    "perform a full boot and do not do not auto-save, but qemu vmload and vmsave operate on snapstorage" )
+OPT_FLAG ( no_snapshot_save, "do not auto-save to snapshot on exit: abandon changed state" )
+OPT_FLAG ( no_snapshot_load, "do not auto-start from snapshot: perform a full boot" )
+OPT_FLAG ( snapshot_list,  "show a list of available snapshots" )
+OPT_FLAG ( no_snapshot_update_time, "do not do try to correct snapshot time on restore" )
+OPT_FLAG ( wipe_data, "reset the user data image (copy it from initdata)" )
 CFG_PARAM( avd, "<name>", "use a specific android virtual device" )
 CFG_PARAM( skindir, "<dir>", "search skins in <dir> (default <system>/skins)" )
 CFG_PARAM( skin, "<name>", "select a given skin" )
@@ -98,8 +105,6 @@ OPT_PARAM( logcat, "<tags>", "enable logcat output with given tags" )
 OPT_FLAG ( no_audio, "disable audio support" )
 OPT_FLAG ( noaudio,  "same as -no-audio" )
 OPT_PARAM( audio,    "<backend>", "use specific audio backend" )
-OPT_PARAM( audio_in, "<backend>", "use specific audio input backend" )
-OPT_PARAM( audio_out,"<backend>", "use specific audio output backend" )
 
 OPT_FLAG ( raw_keys, "disable Unicode keyboard reverse-mapping" )
 OPT_PARAM( radio, "<device>", "redirect radio modem interface to character device" )
@@ -126,7 +131,6 @@ OPT_PARAM( report_console, "<socket>", "report console port to remote socket" )
 OPT_PARAM( gps, "<device>", "redirect NMEA GPS to character device" )
 OPT_PARAM( keyset, "<name>", "specify keyset file name" )
 OPT_PARAM( shell_serial, "<device>", "specific character device for root shell" )
-OPT_FLAG ( old_system, "support old (pre 1.4) system images" )
 OPT_PARAM( tcpdump, "<file>", "capture network packets to file" )
 
 OPT_PARAM( bootchart, "<timeout>", "enable bootcharting")
@@ -144,6 +148,16 @@ OPT_PARAM( nand_limits, "<nlimits>", "enforce NAND/Flash read/write thresholds" 
 #ifdef CONFIG_MEMCHECK
 OPT_PARAM( memcheck, "<flags>", "enable memory access checking" )
 #endif  // CONFIG_MEMCHECK
+
+#ifdef CONFIG_STANDALONE_UI
+OPT_PARAM( list_cores, "<host>", "list running core process" )
+OPT_PARAM( attach_core, "<console socket>", "attach to a running core process" )
+#endif  // CONFIG_STANDALONE_UI
+
+OPT_PARAM( gpu, "<mode>", "set hardware OpenGLES emulation mode" )
+
+OPT_PARAM( fake_camera, "<mode>", "set fake camera emulation mode" )
+OPT_LIST( webcam, "name=<name>[,dir=<direction>]", "setup web camera emulation" )
 
 #undef CFG_FLAG
 #undef CFG_PARAM

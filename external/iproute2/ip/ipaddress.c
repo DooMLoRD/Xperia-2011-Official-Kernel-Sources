@@ -62,7 +62,7 @@ static void usage(void)
 		iplink_usage();
 	}
 	fprintf(stderr, "Usage: ip addr {add|change|replace} IFADDR dev STRING [ LIFETIME ]\n");
-	fprintf(stderr, "                                                      [ CONFFLAG-LIST]\n");
+	fprintf(stderr, "                                                      [ CONFFLAG-LIST ]\n");
 	fprintf(stderr, "       ip addr del IFADDR dev STRING\n");
 	fprintf(stderr, "       ip addr {show|flush} [ dev STRING ] [ scope SCOPE-ID ]\n");
 	fprintf(stderr, "                            [ to PREFIX ] [ FLAG-LIST ] [ label PATTERN ]\n");
@@ -72,7 +72,8 @@ static void usage(void)
 	fprintf(stderr, "SCOPE-ID := [ host | link | global | NUMBER ]\n");
 	fprintf(stderr, "FLAG-LIST := [ FLAG-LIST ] FLAG\n");
 	fprintf(stderr, "FLAG  := [ permanent | dynamic | secondary | primary |\n");
-	fprintf(stderr, "           tentative | deprecated | CONFFLAG-LIST ]\n");
+	fprintf(stderr, "           tentative | deprecated | dadfailed | temporary |\n");
+	fprintf(stderr, "           CONFFLAG-LIST ]\n");
 	fprintf(stderr, "CONFFLAG-LIST := [ CONFFLAG-LIST ] CONFFLAG\n");
 	fprintf(stderr, "CONFFLAG  := [ home | nodad ]\n");
 	fprintf(stderr, "LIFETIME := [ valid_lft LFT ] [ preferred_lft LFT ]\n");
@@ -186,6 +187,36 @@ static void print_linktype(FILE *fp, struct rtattr *tb)
 	}
 }
 
+static void print_vfinfo(FILE *fp, struct rtattr *vfinfo)
+{
+	struct ifla_vf_mac *vf_mac;
+	struct ifla_vf_vlan *vf_vlan;
+	struct ifla_vf_tx_rate *vf_tx_rate;
+	struct rtattr *vf[IFLA_VF_MAX+1];
+	SPRINT_BUF(b1);
+
+	if (vfinfo->rta_type != IFLA_VF_INFO) {
+		fprintf(stderr, "BUG: rta type is %d\n", vfinfo->rta_type);
+		return;
+	}
+
+	parse_rtattr_nested(vf, IFLA_VF_MAX, vfinfo);
+
+	vf_mac = RTA_DATA(vf[IFLA_VF_MAC]);
+	vf_vlan = RTA_DATA(vf[IFLA_VF_VLAN]);
+	vf_tx_rate = RTA_DATA(vf[IFLA_VF_TX_RATE]);
+
+	fprintf(fp, "\n    vf %d MAC %s", vf_mac->vf,
+		ll_addr_n2a((unsigned char *)&vf_mac->mac,
+		ETH_ALEN, 0, b1, sizeof(b1)));
+	if (vf_vlan->vlan)
+		fprintf(fp, ", vlan %d", vf_vlan->vlan);
+	if (vf_vlan->qos)
+		fprintf(fp, ", qos %d", vf_vlan->qos);
+	if (vf_tx_rate->rate)
+		fprintf(fp, ", tx rate %d (Mbps)", vf_tx_rate->rate);
+}
+
 int print_linkinfo(const struct sockaddr_nl *who,
 		   struct nlmsghdr *n, void *arg)
 {
@@ -283,7 +314,60 @@ int print_linkinfo(const struct sockaddr_nl *who,
 		fprintf(fp,"\n    alias %s", 
 			(const char *) RTA_DATA(tb[IFLA_IFALIAS]));
 
-	if (do_link && tb[IFLA_STATS] && show_stats) {
+	if (do_link && tb[IFLA_STATS64] && show_stats) {
+		struct rtnl_link_stats64 slocal;
+		struct rtnl_link_stats64 *s = RTA_DATA(tb[IFLA_STATS64]);
+		if (((unsigned long)s) & (sizeof(unsigned long)-1)) {
+			memcpy(&slocal, s, sizeof(slocal));
+			s = &slocal;
+		}
+		fprintf(fp, "%s", _SL_);
+		fprintf(fp, "    RX: bytes  packets  errors  dropped overrun mcast   %s%s",
+			s->rx_compressed ? "compressed" : "", _SL_);
+		fprintf(fp, "    %-10llu %-8llu %-7llu %-7llu %-7llu %-7llu",
+			(unsigned long long)s->rx_bytes,
+			(unsigned long long)s->rx_packets,
+			(unsigned long long)s->rx_errors,
+			(unsigned long long)s->rx_dropped,
+			(unsigned long long)s->rx_over_errors,
+			(unsigned long long)s->multicast);
+		if (s->rx_compressed)
+			fprintf(fp, " %-7llu",
+				(unsigned long long)s->rx_compressed);
+		if (show_stats > 1) {
+			fprintf(fp, "%s", _SL_);
+			fprintf(fp, "    RX errors: length  crc     frame   fifo    missed%s", _SL_);
+			fprintf(fp, "               %-7llu  %-7llu %-7llu %-7llu %-7llu",
+				(unsigned long long)s->rx_length_errors,
+				(unsigned long long)s->rx_crc_errors,
+				(unsigned long long)s->rx_frame_errors,
+				(unsigned long long)s->rx_fifo_errors,
+				(unsigned long long)s->rx_missed_errors);
+		}
+		fprintf(fp, "%s", _SL_);
+		fprintf(fp, "    TX: bytes  packets  errors  dropped carrier collsns %s%s",
+			s->tx_compressed ? "compressed" : "", _SL_);
+		fprintf(fp, "    %-10llu %-8llu %-7llu %-7llu %-7llu %-7llu",
+			(unsigned long long)s->tx_bytes,
+			(unsigned long long)s->tx_packets,
+			(unsigned long long)s->tx_errors,
+			(unsigned long long)s->tx_dropped,
+			(unsigned long long)s->tx_carrier_errors,
+			(unsigned long long)s->collisions);
+		if (s->tx_compressed)
+			fprintf(fp, " %-7llu",
+				(unsigned long long)s->tx_compressed);
+		if (show_stats > 1) {
+			fprintf(fp, "%s", _SL_);
+			fprintf(fp, "    TX errors: aborted fifo    window  heartbeat%s", _SL_);
+			fprintf(fp, "               %-7llu  %-7llu %-7llu %-7llu",
+				(unsigned long long)s->tx_aborted_errors,
+				(unsigned long long)s->tx_fifo_errors,
+				(unsigned long long)s->tx_window_errors,
+				(unsigned long long)s->tx_heartbeat_errors);
+		}
+	}
+	if (do_link && !tb[IFLA_STATS64] && tb[IFLA_STATS] && show_stats) {
 		struct rtnl_link_stats slocal;
 		struct rtnl_link_stats *s = RTA_DATA(tb[IFLA_STATS]);
 		if (((unsigned long)s) & (sizeof(unsigned long)-1)) {
@@ -330,6 +414,13 @@ int print_linkinfo(const struct sockaddr_nl *who,
 				);
 		}
 	}
+	if (do_link && tb[IFLA_VFINFO_LIST] && tb[IFLA_NUM_VF]) {
+		struct rtattr *i, *vflist = tb[IFLA_VFINFO_LIST];
+		int rem = RTA_PAYLOAD(vflist);
+		for (i = RTA_DATA(vflist); RTA_OK(i, rem); i = RTA_NEXT(i, rem))
+			print_vfinfo(fp, i);
+	}
+
 	fprintf(fp, "\n");
 	fflush(fp);
 	return 0;
@@ -483,7 +574,10 @@ int print_addrinfo(const struct sockaddr_nl *who, struct nlmsghdr *n,
 	fprintf(fp, "scope %s ", rtnl_rtscope_n2a(ifa->ifa_scope, b1, sizeof(b1)));
 	if (ifa->ifa_flags&IFA_F_SECONDARY) {
 		ifa->ifa_flags &= ~IFA_F_SECONDARY;
-		fprintf(fp, "secondary ");
+		if (ifa->ifa_family == AF_INET6)
+			fprintf(fp, "temporary ");
+		else
+			fprintf(fp, "secondary ");
 	}
 	if (ifa->ifa_flags&IFA_F_TENTATIVE) {
 		ifa->ifa_flags &= ~IFA_F_TENTATIVE;
@@ -660,7 +754,8 @@ static int ipaddr_list_or_flush(int argc, char **argv, int flush)
 		} else if (strcmp(*argv, "permanent") == 0) {
 			filter.flags |= IFA_F_PERMANENT;
 			filter.flagmask |= IFA_F_PERMANENT;
-		} else if (strcmp(*argv, "secondary") == 0) {
+		} else if (strcmp(*argv, "secondary") == 0 ||
+			   strcmp(*argv, "temporary") == 0) {
 			filter.flags |= IFA_F_SECONDARY;
 			filter.flagmask |= IFA_F_SECONDARY;
 		} else if (strcmp(*argv, "primary") == 0) {
@@ -678,6 +773,9 @@ static int ipaddr_list_or_flush(int argc, char **argv, int flush)
 		} else if (strcmp(*argv, "nodad") == 0) {
 			filter.flags |= IFA_F_NODAD;
 			filter.flagmask |= IFA_F_NODAD;
+		} else if (strcmp(*argv, "dadfailed") == 0) {
+			filter.flags |= IFA_F_DADFAILED;
+			filter.flagmask |= IFA_F_DADFAILED;
 		} else if (strcmp(*argv, "label") == 0) {
 			NEXT_ARG();
 			filter.label = *argv;
@@ -1006,7 +1104,7 @@ static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 	}
 	if (l && matches(d, l) != 0) {
 		fprintf(stderr, "\"dev\" (%s) must match \"label\" (%s).\n", d, l);
-		exit(1);
+		return -1;
 	}
 
 	if (peer_len == 0 && local_len) {
@@ -1071,7 +1169,7 @@ static int ipaddr_modify(int cmd, int flags, int argc, char **argv)
 	}
 
 	if (rtnl_talk(&rth, &req.n, 0, 0, NULL, NULL, NULL) < 0)
-		exit(2);
+		return -2;
 
 	return 0;
 }
