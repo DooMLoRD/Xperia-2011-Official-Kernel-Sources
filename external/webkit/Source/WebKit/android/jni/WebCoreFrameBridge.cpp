@@ -1,7 +1,8 @@
 /*
  * Copyright 2006, The Android Open Source Project
  *
- * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
+ * Portions created by Sony Ericsson are Copyright (C) 2011,
+ * 2012 Sony Ericsson Mobile Communications AB.
  * All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 /*
- * This file has been modified by Sony Ericsson on 2011-04-05.
+ * This file has been modified by Sony Ericsson on 2011-04-05, 2012-02-04.
  */
 
 #define LOG_TAG "webcoreglue"
@@ -341,6 +342,9 @@ WebFrame::WebFrame(JNIEnv* env, jobject obj, jobject historyList, WebCore::Page*
     mUserInitiatedAction = false;
     mBlockNetworkLoads = false;
     m_renderSkins = 0;
+#if USE(CHROME_NETWORK_STACK)
+    mUserAgentProfile = WTF::String();
+#endif
 }
 
 WebFrame::~WebFrame()
@@ -965,6 +969,12 @@ WebFrame::density() const
 }
 
 #if USE(CHROME_NETWORK_STACK)
+const WTF::String
+WebFrame::userAgentProfile()
+{
+    return mUserAgentProfile;
+}
+
 void
 WebFrame::didReceiveAuthenticationChallenge(WebUrlLoaderClient* client, const std::string& host, const std::string& realm, bool useCachedCredentials, bool suppressDialog)
 {
@@ -2120,6 +2130,25 @@ static void OrientationChanged(JNIEnv *env, jobject obj, int orientation)
     pFrame->sendOrientationChangeEvent(orientation);
 }
 
+static jboolean GetShouldStartScrolledRight(JNIEnv *env, jobject obj,
+        jint browserFrame)
+{
+    jboolean startScrolledRight = false; // default is start scrolled left
+    WebCore::Frame* frame = reinterpret_cast<WebCore::Frame*>(browserFrame);
+    WebCore::Document* document = frame->document();
+    if (document) {
+        RenderStyle* style = document->renderer()->style();
+        WritingMode writingMode = style->writingMode();
+        LOG_ASSERT(writingMode != WebCore::BottomToTopWritingMode,
+                "BottomToTopWritingMode isn't supported");
+        if (writingMode == WebCore::RightToLeftWritingMode)
+            startScrolledRight = true; // vertical-rl pages start scrolled right
+        else if (writingMode == WebCore::TopToBottomWritingMode)
+            startScrolledRight = !style->isLeftToRightDirection(); // RTL starts right
+    }
+    return startScrolledRight;
+}
+
 #if USE(CHROME_NETWORK_STACK)
 
 static void AuthenticationProceed(JNIEnv *env, jobject obj, int handle, jstring jUsername, jstring jPassword)
@@ -2318,6 +2347,8 @@ static JNINativeMethod gBrowserFrameNativeMethods[] = {
         (void*) SslCertErrorCancel },
     { "nativeSslClientCert", "(I[B[[B)V",
         (void*) SslClientCert },
+    { "nativeGetShouldStartScrolledRight", "(I)Z",
+        (void*) GetShouldStartScrolledRight },
 };
 
 int registerWebFrame(JNIEnv* env)

@@ -23,11 +23,14 @@ $(WL12XX_BUILD_PATH)/net/wireless/cfg80211.ko: $(WL12XX_BUILD_PATH)/compat/compa
 
 files := drivers/net/wireless/wl12xx/wl12xx_sdio.ko drivers/net/wireless/wl12xx/wl12xx.ko compat/compat.ko net/wireless/cfg80211.ko net/mac80211/mac80211.ko
 
+files_to_strip := compat/compat.ko net/wireless/cfg80211.ko net/mac80211/mac80211.ko
+
 copy_from := $(addprefix $(WL12XX_BUILD_PATH)/,$(files))
 copy_to := $(addprefix $(TARGET_OUT)/lib/modules/,$(files))
 
 $(TARGET_OUT)/lib/modules/%.ko : $(WL12XX_BUILD_PATH)/%.ko | $(ACP)
 	$(transform-prebuilt-to-target)
+	$(if $(findstring $@,$(addprefix $(TARGET_OUT)/lib/modules/,$(files_to_strip))), $(TARGET_STRIP) -dx $@)
 
 ALL_PREBUILT += $(copy_to)
 

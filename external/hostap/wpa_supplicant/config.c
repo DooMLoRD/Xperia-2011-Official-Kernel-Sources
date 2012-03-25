@@ -1,6 +1,7 @@
 /*
  * WPA Supplicant / Configuration parser and common functions
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -224,6 +225,26 @@ static char * wpa_config_write_str(const struct parse_data *data,
 
 	return wpa_config_write_string((const u8 *) *src, len);
 }
+
+#ifdef WPA_UNICODE_SSID
+static char * wpa_config_write_str_unicode(const struct parse_data *data,
+						struct wpa_ssid *ssid)
+{
+	size_t len;
+	char **src;
+
+	src = (char **) (((u8 *) ssid) + (long) data->param1);
+	if (*src == NULL)
+		return NULL;
+
+	if (data->param2)
+		len = *((size_t *) (((u8 *) ssid) + (long) data->param2));
+	else
+		len = os_strlen(*src);
+
+	return wpa_config_write_string_ascii((const u8 *) *src, len);
+}
+#endif
 #endif /* NO_CONFIG_WRITE */
 
 
@@ -355,63 +376,6 @@ static int wpa_config_parse_wapi_psk(const struct parse_data *data,
 
 	ssid->key_mgmt = WPA_KEY_MGMT_WAPI_PSK;
 	ssid->proto    = WPA_PROTO_WAPI;
-	ssid->wapi_auth &= ~WAPI_AUTH_PSK_HEX;
-	ssid->wapi_auth |= WAPI_AUTH_PSK_ASCII;
-
-	return 0;
-}
-
-
-static int wpa_config_parse_wapi_psk_hex(const struct parse_data *data,
-				struct wpa_ssid *ssid, int line,
-				const char *value)
-{
-	const char *pos;
-	size_t len;
-	BIGNUM *parsed = NULL;
-	char temp[WAPI_MAX_PSK_HEX_LEN];
-
-	if (*value != '"')
-		return -1;
-
-	value++;
-	pos = os_strrchr(value, '"');
-	if (pos)
-		len = pos - value;
-	else
-		len = os_strlen(value);
-
-	if (len > 128) {
-		wpa_printf(MSG_ERROR, "WAPI: hex PSK cannot be "
-				"longer than 128 characters");
-		return -1;
-	}
-
-	os_memcpy(temp, value, len);
-	temp[len] = '\0';
-
-	parsed = BN_new();
-	if (!parsed) {
-		wpa_printf(MSG_ERROR, "WAPI: cannot create BIGNUM");
-		return -1;
-	}
-	if (!BN_hex2bn(&parsed, temp)) {
-		wpa_printf(MSG_ERROR, "WAPI: provided string does "
-				"not contain a valid hex number");
-		if (parsed)
-			BN_free(parsed);
-		return -1;
-	}
-
-	ssid->wapi_psk_hex_len = BN_bn2bin(parsed, ssid->wapi_psk_hex);
-
-	ssid->key_mgmt = WPA_KEY_MGMT_WAPI_PSK;
-	ssid->proto    = WPA_PROTO_WAPI;
-	ssid->wapi_auth &= ~WAPI_AUTH_PSK_ASCII;
-	ssid->wapi_auth |= WAPI_AUTH_PSK_HEX;
-
-	if (parsed)
-		BN_free(parsed);
 
 	return 0;
 }
@@ -429,137 +393,6 @@ static char *wpa_config_write_wapi_psk(const struct parse_data *data,
 }
 
 
-static char *wpa_config_write_wapi_psk_hex(const struct parse_data *data,
-				   struct wpa_ssid *ssid)
-{
-	char *buf;
-	int i;
-	size_t len = ssid->wapi_psk_hex_len;
-
-	if (!len)
-		return NULL;
-
-	buf = os_malloc(2*len + 3);
-	if (buf == NULL) {
-		wpa_printf(MSG_ERROR, "WAPI: error mallocing");
-		return NULL;
-	}
-
-	buf[0] = '"';
-
-	for (i = 0; i < len; ++i)
-		sprintf(buf+1+i*2, "%02X", ssid->wapi_psk_hex[i]);
-
-	buf[i*2 + 1] = '"';
-	buf[i*2 + 2] = '\0';
-
-	return buf;
-}
-
-
-static int wpa_config_parse_wapi_cert(const struct parse_data *data,
-				struct wpa_ssid *ssid, int line,
-				const char *value)
-{
-	ssid->key_mgmt = WPA_KEY_MGMT_WAPI_CERT;
-	ssid->proto    = WPA_PROTO_WAPI;
-	ssid->wapi_auth |= WAPI_AUTH_CERT;
-
-	return 0;
-}
-
-
-static char *wpa_config_write_wapi_cert(const struct parse_data *data,
-				   struct wpa_ssid *ssid)
-{
-	if (ssid->wapi_auth & WAPI_AUTH_CERT)
-		return wpa_config_write_string_ascii((const u8 *) "1", 1);
-	return NULL;
-}
-
-
-static int wpa_config_parse_wapi_user_cert(const struct parse_data *data,
-				struct wpa_ssid *ssid, int line,
-				const char *value)
-{
-	const char *pos;
-	size_t len;
-
-	if (*value != '"')
-		return -1;
-
-	value++;
-	pos = os_strrchr(value, '"');
-	if (pos)
-		len = pos - value;
-	else
-		len = os_strlen(value);
-
-	wpa_hexdump_ascii_key(MSG_MSGDUMP, "WAPI CERT (filename)",
-				  (u8 *) value, len);
-
-	os_free(ssid->wapi_user_cert);
-	ssid->wapi_user_cert = os_malloc(len + 1);
-	if (ssid->wapi_user_cert == NULL)
-		return -1;
-	os_memcpy(ssid->wapi_user_cert, value, len);
-	ssid->wapi_user_cert[len] = '\0';
-
-	return 0;
-}
-
-
-static char * wpa_config_write_wapi_user_cert(const struct parse_data *data,
-				   struct wpa_ssid *ssid)
-{
-	if (ssid->wapi_user_cert)
-		return wpa_config_write_string_ascii(
-			(const u8 *) ssid->wapi_user_cert,
-			os_strlen(ssid->wapi_user_cert));
-	return NULL;
-}
-
-
-static int wpa_config_parse_wapi_root_cert(const struct parse_data *data,
-				struct wpa_ssid *ssid, int line,
-				const char *value)
-{
-	const char *pos;
-	size_t len;
-
-	if (*value != '"')
-		return -1;
-
-	value++;
-	pos = os_strrchr(value, '"');
-	if (pos)
-		len = pos - value;
-	else
-		len = os_strlen(value);
-
-	wpa_hexdump_ascii_key(MSG_MSGDUMP, "WAPI PRIV KEY (filename)",
-				  (u8 *) value, len);
-
-	os_free(ssid->wapi_root_cert);
-	ssid->wapi_root_cert = os_malloc(len + 1);
-	if (ssid->wapi_root_cert == NULL)
-		return -1;
-	os_memcpy(ssid->wapi_root_cert, value, len);
-	ssid->wapi_root_cert[len] = '\0';
-
-	return 0;
-}
-
-
-static char * wpa_config_write_wapi_root_cert(const struct parse_data *data,
-				   struct wpa_ssid *ssid)
-{
-	if (ssid->wapi_root_cert)
-		return wpa_config_write_string_ascii(
-			(const u8 *) ssid->wapi_root_cert,
-			os_strlen(ssid->wapi_root_cert));
-	return NULL;
-}
 #endif /* CONFIG_WAPI */
 
 
@@ -664,6 +497,10 @@ static int wpa_config_parse_proto(const struct parse_data *data,
 		else if (os_strcmp(start, "RSN") == 0 ||
 			 os_strcmp(start, "WPA2") == 0)
 			val |= WPA_PROTO_RSN;
+#ifdef CONFIG_WAPI
+		else if (os_strcmp(start, "WAPI") == 0)
+			val |= WPA_PROTO_WAPI;
+#endif
 		else {
 			wpa_printf(MSG_ERROR, "Line %d: invalid proto '%s'",
 				   line, start);
@@ -715,6 +552,16 @@ static char * wpa_config_write_proto(const struct parse_data *data,
 		pos += ret;
 		first = 0;
 	}
+
+#ifdef CONFIG_WAPI
+	if (ssid->proto & WPA_PROTO_WAPI) {
+		ret = os_snprintf(pos, end - pos, "%WAPI", first ? "" : " ");
+		if (ret < 0 || ret >= end - pos)
+			return buf;
+		pos += ret;
+		first = 0;
+	}
+#endif
 
 	return buf;
 }
@@ -769,6 +616,12 @@ static int wpa_config_parse_key_mgmt(const struct parse_data *data,
 		else if (os_strcmp(start, "WPS") == 0)
 			val |= WPA_KEY_MGMT_WPS;
 #endif /* CONFIG_WPS */
+#ifdef CONFIG_WAPI
+		else if (os_strcmp(start, "WAPI-PSK") == 0)
+			val |= WPA_KEY_MGMT_WAPI_PSK;
+		else if (os_strcmp(start, "WAPI-CERT") == 0)
+			val |= WPA_KEY_MGMT_WAPI_CERT;
+#endif
 		else {
 			wpa_printf(MSG_ERROR, "Line %d: invalid key_mgmt '%s'",
 				   line, start);
@@ -880,6 +733,14 @@ static char * wpa_config_write_key_mgmt(const struct parse_data *data,
 		pos += os_snprintf(pos, end - pos, "%sWPS",
 				   pos == buf ? "" : " ");
 #endif /* CONFIG_WPS */
+#ifdef CONFIG_WAPI
+	if (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_PSK)
+		pos += os_snprintf(pos, end - pos, "%sWAPI-PSK",
+				   pos == buf ? "" : " ");
+	if (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_CERT)
+		pos += os_snprintf(pos, end - pos, "%sWAPI-CERT",
+				   pos == buf ? "" : " ");
+#endif
 
 	return buf;
 }
@@ -1633,6 +1494,15 @@ static char * wpa_config_write_wep_key3(const struct parse_data *data,
 	OFFSET(f), (void *) 0
 #define _INTe(f) #f, wpa_config_parse_int, wpa_config_write_int, \
 	OFFSET(eap.f), (void *) 0
+#ifdef WPA_UNICODE_SSID
+/* STR_* variants that do not force conversion to ASCII */
+#define _STR_UNICODE(f) #f, wpa_config_parse_str, wpa_config_write_str_unicode, OFFSET(f)
+#define STR_UNICODE(f) _STR_UNICODE(f), NULL, NULL, NULL, 0
+#define _STR_LEN_UNICODE(f) _STR_UNICODE(f), OFFSET(f ## _len)
+#define STR_LEN_UNICODE(f) _STR_LEN_UNICODE(f), NULL, NULL, 0
+#define _STR_RANGE_UNICODE(f, min, max) _STR_LEN_UNICODE(f), (void *) (min), (void *) (max)
+#define STR_RANGE_UNICODE(f, min, max) _STR_RANGE_UNICODE(f, min, max), 0
+#endif
 #endif /* NO_CONFIG_WRITE */
 
 /* INT: Define an integer variable */
@@ -1677,7 +1547,11 @@ static char * wpa_config_write_wep_key3(const struct parse_data *data,
  * functions.
  */
 static const struct parse_data ssid_fields[] = {
+#ifdef WPA_UNICODE_SSID
+	{ STR_RANGE_UNICODE(ssid, 0, MAX_SSID_LEN) },
+#else
 	{ STR_RANGE(ssid, 0, MAX_SSID_LEN) },
+#endif
 	{ INT_RANGE(scan_ssid, 0, 1) },
 	{ FUNC(bssid) },
 	{ FUNC_KEY(psk) },
@@ -1690,10 +1564,10 @@ static const struct parse_data ssid_fields[] = {
 	{ FUNC(freq_list) },
 #ifdef CONFIG_WAPI
 	{ FUNC(wapi_psk) },
-	{ FUNC(wapi_user_cert) },
-	{ FUNC(wapi_root_cert) },
-	{ FUNC(wapi_psk_hex) },
-	{ FUNC(wapi_cert) },
+        { INT_RANGE(wapi_key_type, 0, 1)},
+	{ STR(user_cert_uri)},
+	{ STR(as_cert_uri)},
+	{ STR(user_key_uri)},
 #endif /* CONFIG_WAPI */
 #ifdef IEEE8021X_EAPOL
 	{ FUNC(eap) },
@@ -1757,6 +1631,15 @@ static const struct parse_data ssid_fields[] = {
 	{ INT(wpa_ptk_rekey) },
 	{ STR(bgscan) },
 };
+
+#ifdef WPA_UNICODE_SSID
+#undef _STR_UNICODE
+#undef STR_UNICODE
+#undef _STR_LEN_UNICODE
+#undef STR_LEN_UNICODE
+#undef _STR_RANGE_UNICODE
+#undef STR_RANGE_UNICODE
+#endif
 
 #undef OFFSET
 #undef _STR

@@ -4,6 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -20,6 +21,8 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
+ *  NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ *  Modifications are licensed under the License.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -2153,8 +2156,15 @@ void device_bonding_complete(struct btd_device *device, uint8_t status)
 		btd_adapter_retry_authentication(device->adapter, &bdaddr);
 		return;
 	} else if (status) {
-		device_cancel_authentication(device, TRUE);
-		device_cancel_bonding(device, status);
+		if (status == 0x05 || status == 0x06 || status == 0x0e ||
+                status == 0x17 || status == 0x18) {
+			device_remove_bonding(device);
+			device_set_paired(device, FALSE);
+            device_set_temporary(device, TRUE);
+		} else {
+			device_cancel_authentication(device, TRUE);
+			device_cancel_bonding(device, status);
+		}
 		return;
 	}
 
@@ -2283,8 +2293,10 @@ static void confirm_cb(struct agent *agent, DBusError *err, void *data)
 
 	((agent_cb) auth->cb)(agent, err, device);
 
-	device->authr->cb = NULL;
-	device->authr->agent = NULL;
+	if (device->authr) {
+		device->authr->cb = NULL;
+		device->authr->agent = NULL;
+	}
 }
 
 static void passkey_cb(struct agent *agent, DBusError *err,

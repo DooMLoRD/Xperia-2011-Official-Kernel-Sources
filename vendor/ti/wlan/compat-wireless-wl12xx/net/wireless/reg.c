@@ -1631,6 +1631,7 @@ int regulatory_hint(struct wiphy *wiphy, const char *alpha2)
 }
 EXPORT_SYMBOL(regulatory_hint);
 
+#ifdef CONFIG_CFG80211_REG_APHINTS
 /*
  * We hold wdev_lock() here so we cannot hold cfg80211_mutex() and
  * therefore cannot iterate over the rdev list here.
@@ -1693,6 +1694,14 @@ void regulatory_hint_11d(struct wiphy *wiphy,
 out:
 	mutex_unlock(&reg_mutex);
 }
+#else
+void regulatory_hint_11d(struct wiphy *wiphy,
+			 enum ieee80211_band band,
+			 u8 *country_ie,
+			 u8 country_ie_len)
+{
+}
+#endif
 
 static void restore_alpha2(char *alpha2, bool reset_user)
 {
@@ -1855,6 +1864,7 @@ void regulatory_hint_disconnect(void)
 	restore_regulatory_settings(false);
 }
 
+#ifdef CONFIG_CFG80211_REG_APHINTS
 static bool freq_is_chan_12_13_14(u16 freq)
 {
 	if (freq == ieee80211_channel_to_frequency(12, IEEE80211_BAND_2GHZ) ||
@@ -1902,6 +1912,14 @@ int regulatory_hint_found_beacon(struct wiphy *wiphy,
 
 	return 0;
 }
+#else
+int regulatory_hint_found_beacon(struct wiphy *wiphy,
+				 struct ieee80211_channel *beacon_chan,
+				 gfp_t gfp)
+{
+	return 0;
+}
+#endif
 
 static void print_rd_rules(const struct ieee80211_regdomain *rd)
 {

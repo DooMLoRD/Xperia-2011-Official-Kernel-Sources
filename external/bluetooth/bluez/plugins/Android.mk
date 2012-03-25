@@ -23,7 +23,6 @@ LOCAL_C_INCLUDES:= \
         $(LOCAL_PATH)/../src \
         $(call include-path-for, glib) \
         $(call include-path-for, dbus) \
-        $(call include-path-for, bluedroid)
 
 LOCAL_SHARED_LIBRARIES := \
 	libbluetoothd \

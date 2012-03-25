@@ -5835,12 +5835,20 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
             return;
          } else if (ty == Ity_I64) {
             HReg raddr = iselIntExpr_R(env, stmt->Ist.LLSC.addr);
-            HReg dstHi, dstLo;
             addInstr(env, mk_iMOVds_RR(hregARM_R0(), raddr));
             addInstr(env, ARMInstr_LdrEX(8 /* 64-bit */));
-            lookupIRTemp64(&dstHi, &dstLo, env, res);
-            addInstr(env, mk_iMOVds_RR(dstHi, hregARM_R2()) );
-            addInstr(env, mk_iMOVds_RR(dstLo, hregARM_R3()) );
+            if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+                HReg tmp = lookupIRTemp(env, res);
+                addInstr(env, ARMInstr_VXferD(True, tmp, hregARM_R2(),
+                        hregARM_R3()));
+            } else {
+                HReg dstHi, dstLo;
+                /* The returned value is in r1:r0.  Park it in the
+                   register-pair associated with tmp. */
+                lookupIRTemp64( &dstHi, &dstLo, env, res);
+                addInstr(env, mk_iMOVds_RR(dstHi, hregARM_R2()) );
+                addInstr(env, mk_iMOVds_RR(dstLo, hregARM_R3()) );
+            }
             return;
          }
          /* else fall thru; is unhandled */

@@ -118,6 +118,7 @@ static int wpas_p2p_scan(void *ctx, enum p2p_scan_type type, int freq,
 
 	p2p_scan_ie(wpa_s->global->p2p, ies);
 
+	params.p2p_probe = 1;
 	params.extra_ies = wpabuf_head(ies);
 	params.extra_ies_len = wpabuf_len(ies);
 
@@ -2343,11 +2344,6 @@ int wpas_p2p_init(struct wpa_global *global, struct wpa_supplicant *wpa_s)
 	}
 #endif /* CONFIG_CLIENT_MLME */
 
-	if (wpa_drv_disable_11b_rates(wpa_s, 1) < 0) {
-		wpa_printf(MSG_DEBUG, "P2P: Failed to disable 11b rates");
-		/* Continue anyway; this is not really a fatal error */
-	}
-
 	if (global->p2p)
 		return 0;
 
@@ -2769,6 +2765,7 @@ static void wpas_p2p_join_scan(void *eloop_ctx, void *timeout_ctx)
 
 	p2p_scan_ie(wpa_s->global->p2p, ies);
 
+	params.p2p_probe = 1;
 	params.extra_ies = wpabuf_head(ies);
 	params.extra_ies_len = wpabuf_len(ies);
 
@@ -3272,6 +3269,12 @@ int wpas_p2p_group_add(struct wpa_supplicant *wpa_s, int persistent_group,
 	if (freq > 0 && !p2p_supported_freq(wpa_s->global->p2p, freq)) {
 		wpa_printf(MSG_DEBUG, "P2P: The forced channel for GO "
 			   "(%u MHz) is not supported for P2P uses",
+			   freq);
+		return -1;
+	}
+
+	if (p2p_prepare_channel(wpa_s->global->p2p, freq) < 0) {
+		wpa_printf(MSG_DEBUG, "P2P: Can't prepare channel %d MHz",
 			   freq);
 		return -1;
 	}

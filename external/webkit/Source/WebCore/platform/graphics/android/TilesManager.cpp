@@ -1,5 +1,6 @@
 /*
  * Copyright 2010, The Android Open Source Project
+ * Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -22,7 +23,13 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+* This file has been modified by SonyEricsson.
+* 2012-02-16:
+*     Let the TexturesGenerator thread run at default
+*     priority instead of background in order to improve
+*     rendering performance.
+*/
 #include "config.h"
 #include "TilesManager.h"
 
@@ -77,6 +84,8 @@
 
 #define BYTES_PER_PIXEL 4 // 8888 config
 
+#define LAYER_TEXTURES_DESTROY_TIMEOUT 60 // If we do not need layers for 60 seconds, free the textures
+
 namespace WebCore {
 
 GLint TilesManager::getMaxTextureSize()
@@ -95,11 +104,15 @@ int TilesManager::getMaxTextureAllocation()
 TilesManager::TilesManager()
     : m_layerTexturesRemain(true)
     , m_maxTextureCount(0)
+    , m_maxLayerTextureCount(0)
     , m_generatorReady(false)
     , m_showVisualIndicator(false)
     , m_invertedScreen(false)
     , m_invertedScreenSwitch(false)
+    , m_useMinimalMemory(true)
     , m_drawGLCount(1)
+    , m_lastTimeLayersUsed(0)
+    , m_hasLayerTextures(false)
 {
     XLOG("TilesManager ctor");
     m_textures.reserveCapacity(MAX_TEXTURE_ALLOCATION);
@@ -107,7 +120,7 @@ TilesManager::TilesManager()
     m_tilesTextures.reserveCapacity(MAX_TEXTURE_ALLOCATION);
     m_availableTilesTextures.reserveCapacity(MAX_TEXTURE_ALLOCATION);
     m_pixmapsGenerationThread = new TexturesGenerator();
-    m_pixmapsGenerationThread->run("TexturesGenerator");
+    m_pixmapsGenerationThread->run("TexturesGenerator", android::PRIORITY_DEFAULT);
 }
 
 void TilesManager::allocateTiles()
@@ -127,9 +140,9 @@ void TilesManager::allocateTiles()
         nbTexturesAllocated++;
     }
 
-    int nbLayersTexturesToAllocate = m_maxTextureCount - m_tilesTextures.size();
+    int nbLayersTexturesToAllocate = m_maxLayerTextureCount - m_tilesTextures.size();
     XLOG("%d layers tiles to allocate (%d textures planned)",
-         nbLayersTexturesToAllocate, m_maxTextureCount);
+         nbLayersTexturesToAllocate, m_maxLayerTextureCount);
     int nbLayersTexturesAllocated = 0;
     for (int i = 0; i < nbLayersTexturesToAllocate; i++) {
         BaseTileTexture* texture = new BaseTileTexture(
@@ -152,7 +165,6 @@ void TilesManager::allocateTiles()
 void TilesManager::deallocateTextures(bool allTextures)
 {
     const unsigned int max = m_textures.size();
-    const unsigned int maxLayer = m_tilesTextures.size();
 
     unsigned long long sparedDrawCount = ~0; // by default, spare no textures
     if (!allTextures) {
@@ -164,24 +176,41 @@ void TilesManager::deallocateTextures(bool allTextures)
                 sparedDrawCount = std::max(sparedDrawCount, owner->drawCount());
         }
     }
+    deallocateTexturesVector(sparedDrawCount, m_textures);
+    deallocateTexturesVector(sparedDrawCount, m_tilesTextures);
+}
 
+void TilesManager::deallocateTexturesVector(unsigned long long sparedDrawCount,
+                                            WTF::Vector<BaseTileTexture*>& textures)
+{
+    const unsigned int max = textures.size();
     int dealloc = 0;
     for (unsigned int i = 0; i < max; i++) {
-        TextureOwner* owner = m_textures[i]->owner();
+        TextureOwner* owner = textures[i]->owner();
         if (!owner || owner->drawCount() < sparedDrawCount) {
-            m_textures[i]->discardGLTexture();
-            dealloc++;
-        }
-    }
-    for (unsigned int i = 0; i < maxLayer; i++) {
-        TextureOwner* owner = m_tilesTextures[i]->owner();
-        if (!owner || owner->drawCount() < sparedDrawCount) {
-            m_tilesTextures[i]->discardGLTexture();
+            textures[i]->discardGLTexture();
             dealloc++;
         }
     }
     XLOG("Deallocated %d gl textures (out of %d base tiles and %d layer tiles)",
          dealloc, max, maxLayer);
+}
+
+void TilesManager::gatherTexturesNumbers(int* nbTextures, int* nbAllocatedTextures,
+                                        int* nbLayerTextures, int* nbAllocatedLayerTextures)
+{
+    *nbTextures = m_textures.size();
+    for (unsigned int i = 0; i < m_textures.size(); i++) {
+        BaseTileTexture* texture = m_textures[i];
+        if (texture->m_ownTextureId)
+            *nbAllocatedTextures += 1;
+    }
+    *nbLayerTextures = m_tilesTextures.size();
+    for (unsigned int i = 0; i < m_tilesTextures.size(); i++) {
+        BaseTileTexture* texture = m_tilesTextures[i];
+        if (texture->m_ownTextureId)
+            *nbAllocatedLayerTextures += 1;
+    }
 }
 
 void TilesManager::printTextures()
@@ -205,21 +234,6 @@ void TilesManager::printTextures()
     }
     XLOG("------");
 #endif // DEBUG
-}
-
-void TilesManager::swapLayersTextures(LayerAndroid* oldTree, LayerAndroid* newTree)
-{
-    if (oldTree)
-        oldTree->assignTextureTo(newTree);
-
-    if (newTree)
-        newTree->createTexture();
-
-    GLWebViewState* oldState = 0;
-    if (oldTree && !newTree)
-        oldState = oldTree->state();
-
-    paintedSurfacesCleanup(oldState);
 }
 
 void TilesManager::addPaintedSurface(PaintedSurface* surface)
@@ -351,6 +365,12 @@ int TilesManager::maxTextureCount()
     return m_maxTextureCount;
 }
 
+int TilesManager::maxLayerTextureCount()
+{
+    android::Mutex::Autolock lock(m_texturesLock);
+    return m_maxLayerTextureCount;
+}
+
 void TilesManager::setMaxTextureCount(int max)
 {
     XLOG("setMaxTextureCount: %d (current: %d, total:%d)",
@@ -368,6 +388,36 @@ void TilesManager::setMaxTextureCount(int max)
 
     allocateTiles();
 }
+
+void TilesManager::setMaxLayerTextureCount(int max)
+{
+    XLOG("setMaxLayerTextureCount: %d (current: %d, total:%d)",
+         max, m_maxLayerTextureCount, MAX_TEXTURE_ALLOCATION);
+    if (!max && m_hasLayerTextures) {
+        double secondsSinceLayersUsed = WTF::currentTime() - m_lastTimeLayersUsed;
+        if (secondsSinceLayersUsed > LAYER_TEXTURES_DESTROY_TIMEOUT) {
+            unsigned long long sparedDrawCount = ~0; // by default, spare no textures
+            deallocateTexturesVector(sparedDrawCount, m_tilesTextures);
+            m_hasLayerTextures = false;
+        }
+        return;
+    }
+    m_lastTimeLayersUsed = WTF::currentTime();
+    if (m_maxLayerTextureCount == MAX_TEXTURE_ALLOCATION ||
+         max <= m_maxLayerTextureCount)
+        return;
+
+    android::Mutex::Autolock lock(m_texturesLock);
+
+    if (max < MAX_TEXTURE_ALLOCATION)
+        m_maxLayerTextureCount = max;
+    else
+        m_maxLayerTextureCount = MAX_TEXTURE_ALLOCATION;
+
+    allocateTiles();
+    m_hasLayerTextures = true;
+}
+
 
 float TilesManager::tileWidth()
 {
@@ -411,13 +461,24 @@ void TilesManager::paintedSurfacesCleanup(GLWebViewState* state)
     WTF::Vector<PaintedSurface*> collect;
     for (unsigned int i = 0; i < m_paintedSurfaces.size(); i++) {
         PaintedSurface* surface = m_paintedSurfaces[i];
-        if (!surface->layer() || (state && surface->layer()->state() == state))
+
+        Layer* drawing = surface->drawingLayer();
+        Layer* painting = surface->paintingLayer();
+
+        XLOG("considering PS %p, drawing %p, painting %p", surface, drawing, painting);
+
+        bool drawingMatchesState = state && drawing && (drawing->state() == state);
+        bool paintingMatchesState = state && painting && (painting->state() == state);
+
+        if ((!painting && !drawing) || drawingMatchesState || paintingMatchesState) {
+            XLOG("trying to remove PS %p, painting %p, drawing %p, DMS %d, PMS %d",
+                 surface, painting, drawing, drawingMatchesState, paintingMatchesState);
             collect.append(surface);
+        }
     }
     for (unsigned int i = 0; i < collect.size(); i++) {
         PaintedSurface* surface = collect[i];
         m_paintedSurfaces.remove(m_paintedSurfaces.find(surface));
-        surface->removeLayer();
         SkSafeUnref(surface);
     }
 }

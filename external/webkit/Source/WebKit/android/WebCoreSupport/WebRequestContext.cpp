@@ -1,5 +1,6 @@
 /*
  * Copyright 2010, The Android Open Source Project
+ * Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -21,6 +22,9 @@
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ * Modifications are licensed under the License.
  */
 
 #include "config.h"
@@ -92,6 +96,14 @@ void WebRequestContext::setUserAgent(const String& string)
     m_userAgent = string.utf8().data();
 }
 
+#if USE(CHROME_NETWORK_STACK)
+void WebRequestContext::setUserAgentProfile(const String& string)
+{
+    MutexLocker lock(m_userAgentProfileMutex);
+    m_userAgentProfile = string.utf8().data();
+}
+#endif
+
 void WebRequestContext::setCacheMode(int mode)
 {
     m_cacheMode = mode;
@@ -107,6 +119,14 @@ const std::string& WebRequestContext::GetUserAgent(const GURL& url) const
     MutexLocker lock(m_userAgentMutex);
     return m_userAgent;
 }
+
+#if USE(CHROME_NETWORK_STACK)
+const std::string& WebRequestContext::GetUserAgentProfile() const
+{
+    MutexLocker lock(m_userAgentProfileMutex);
+    return m_userAgentProfile;
+}
+#endif
 
 void WebRequestContext::setAcceptLanguage(const String& string)
 {

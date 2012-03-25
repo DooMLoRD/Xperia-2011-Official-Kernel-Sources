@@ -88,7 +88,7 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 #ifdef CONFIG_IEEE80211N
 	/*
 	 * Enable HT20 if the driver supports it, by setting conf->ieee80211n
-	 * and conf->ht_capab.
+	 * and a mask of allowed capabilities within conf->ht_capab.
 	 * Using default config settings for: conf->ht_op_mode_fixed,
 	 * conf->secondary_channel, conf->require_ht
 	 */
@@ -103,9 +103,19 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 			}
 		}
 		if (mode && mode->ht_capab) {
-			bss->wmm_enabled = 1;
 			conf->ieee80211n = 1;
-			conf->ht_capab = mode->ht_capab;
+
+			/*
+			 * white-list capabilities that won't cause issues
+			 * to connecting stations, while leaving the current
+			 * capabilities intact (currently disabled SMPS).
+			 */
+			conf->ht_capab |= mode->ht_capab &
+			(HT_CAP_INFO_GREEN_FIELD |
+			HT_CAP_INFO_SHORT_GI20MHZ |
+			HT_CAP_INFO_SHORT_GI40MHZ |
+			HT_CAP_INFO_RX_STBC_MASK |
+			HT_CAP_INFO_MAX_AMSDU_SIZE);
 		}
 		ieee80211_sta_free_hw_features(modes, num_modes);
 		modes = NULL;

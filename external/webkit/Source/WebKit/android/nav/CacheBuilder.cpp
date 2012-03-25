@@ -1166,8 +1166,6 @@ void CacheBuilder::BuildFrame(Frame* root, Frame* frame,
         absBounds.move(globalOffsetX, globalOffsetY);
         hasClip = nodeRenderer->hasOverflowClip();
 
-        if (node->hasTagName(HTMLNames::canvasTag))
-            mPictureSetDisabled = true;
         if (checkForPluginViewThatWantsFocus(nodeRenderer)) {
             bounds = absBounds;
             isUnclipped = true;
@@ -1274,6 +1272,7 @@ void CacheBuilder::BuildFrame(Frame* root, Frame* frame,
             type = TEXT_INPUT_CACHEDNODETYPE;
             cachedInput.setFormPointer(area->form());
             cachedInput.setIsTextArea(true);
+            cachedInput.setSpellcheck(area->spellcheck());
             exported = area->value().threadsafeCopy();
         } else if (node->hasTagName(HTMLNames::aTag)) {
             const HTMLAnchorElement* anchorNode = 
@@ -1411,7 +1410,6 @@ void CacheBuilder::BuildFrame(Frame* root, Frame* frame,
             else if (cachedNode.clip(clip) == false)
                 continue; // skip this node if outside of the clip
         }
-        cachedNode.setNavableRects();
         cachedNode.setColorIndex(colorIndex);
         cachedNode.setExport(exported);
         cachedNode.setHasCursorRing(hasCursorRing);
@@ -1483,7 +1481,6 @@ bool CacheBuilder::CleanUpContainedNodes(CachedRoot* cachedRoot,
             lastNode->hasTagName(HTMLNames::formTag)) {
         lastCached->setBounds(IntRect(0, 0, 0, 0));
         lastCached->mCursorRing.clear();
-        lastCached->setNavableRects();
         return false;
     }
     CachedNode* onlyChildCached = cachedFrame->lastNode();
@@ -2888,8 +2885,6 @@ bool CacheBuilder::setData(CachedFrame* cachedFrame)
         return false;
     RenderLayer* layer = renderer->enclosingLayer();
     if (layer == NULL)
-        return false;
-    if (layer->width() == 0 || layer->height() == 0)
         return false;
     if (!frame->view())
         return false;

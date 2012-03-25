@@ -1,6 +1,7 @@
 /*
  * WPA Supplicant / Network configuration structures
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -187,31 +188,24 @@ struct wpa_ssid {
 	char *wapi_psk;
 
 	/**
-	 * wapi_user_cert - path to WAPI user certificate
+	 * wapi_key_type - 0 = ASCII, 1 = HEX
 	 */
-	char *wapi_user_cert;
+	int wapi_key_type;
 
 	/**
-	 * wapi_root_cert - path to WAPI root certificate
+	 * as_cert_uri - WAPI root certificate URI
 	 */
-	char *wapi_root_cert;
+	char *as_cert_uri;
 
 	/**
-	 * wapi_psk_hex - WAPI pre-shared HEX key
+	 * user_cert_uri - WAPI user certificate URI
 	 */
-	u8 wapi_psk_hex[WAPI_MAX_PSK_HEX_LEN];
+	char *user_cert_uri;
 
 	/**
-	 * wapi_psk_hex_len - Length of the WAPI pre-shared HEX key
+	 * ser_key_uri - WAPI user key certificate URI
 	 */
-	size_t wapi_psk_hex_len;
-
-	/**
-	 * wapi_auth - Bitfield of WAPI authentication method
-	 *
-	 * WAPI_AUTH_*
-	 */
-	int wapi_auth;
+	char *user_key_uri;
 #endif /* CONFIG_WAPI */
 
 #ifdef IEEE8021X_EAPOL

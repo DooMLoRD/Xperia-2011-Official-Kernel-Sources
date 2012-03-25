@@ -1271,6 +1271,25 @@ static int wpa_cli_cmd_log_level(struct wpa_ctrl *ctrl, int argc, char *argv[])
 
 	return wpa_ctrl_command(ctrl, cmd);
 }
+
+static int wpa_cli_cmd_driver(struct wpa_ctrl *ctrl, int argc,
+				      char *argv[])
+{
+	char cmd[32];
+
+	if (argc < 1) {
+		printf("Invalid DRIVER command: needs one argument (cmd)\n");
+		return -1;
+	}
+
+	if (argc > 1)
+		os_snprintf(cmd, sizeof(cmd), "DRIVER %s %s", argv[0], argv[1]);
+	else
+		os_snprintf(cmd, sizeof(cmd), "DRIVER %s", argv[0]);
+	cmd[sizeof(cmd) - 1] = '\0';
+
+	return wpa_ctrl_command(ctrl, cmd);
+}
 #endif /* ANDROID */
 
 
@@ -1731,27 +1750,6 @@ static int wpa_cli_cmd_roam(struct wpa_ctrl *ctrl, int argc, char *argv[])
 	return wpa_ctrl_command(ctrl, cmd);
 }
 
-
-#ifdef ANDROID
-static int wpa_cli_cmd_driver(struct wpa_ctrl *ctrl, int argc,
-				      char *argv[])
-{
-	char cmd[32];
-
-	if (argc < 1) {
-		printf("Invalid DRIVER command: needs one argument (cmd)\n");
-		return -1;
-	}
-
-	if (argc > 1)
-		os_snprintf(cmd, sizeof(cmd), "DRIVER %s %s", argv[0], argv[1]);
-	else
-		os_snprintf(cmd, sizeof(cmd), "DRIVER %s", argv[0]);
-	cmd[sizeof(cmd) - 1] = '\0';
-
-	return wpa_ctrl_command(ctrl, cmd);
-}
-#endif
 
 #ifdef CONFIG_P2P
 
@@ -2367,7 +2365,6 @@ static int wpa_cli_cmd_tdls_teardown(struct wpa_ctrl *ctrl, int argc,
 	return wpa_ctrl_command(ctrl, cmd);
 }
 
-
 static int wpa_cli_cmd_signal_poll(struct wpa_ctrl *ctrl, int argc,
 				   char *argv[])
 {
@@ -2473,6 +2470,9 @@ static struct wpa_cli_cmd wpa_cli_commands[] = {
 	  cli_cmd_flag_none,
 	  "<level> [<timestamp>] = update the log level/timestamp of wpa_supplicant\n"
 	  "log_level = display the current log level and log options" },
+	{ "driver", wpa_cli_cmd_driver,
+	  cli_cmd_flag_none,
+	  "<command> = driver private commands" },
 #endif /* ANDROID */
 	{ "list_networks", wpa_cli_cmd_list_networks,
 	  cli_cmd_flag_none,
@@ -2704,11 +2704,6 @@ static struct wpa_cli_cmd wpa_cli_commands[] = {
 	{ "signal_poll", wpa_cli_cmd_signal_poll,
 	  cli_cmd_flag_none,
 	  "= get signal parameters" },
-#ifdef ANDROID
-	{ "driver", wpa_cli_cmd_driver,
-	  cli_cmd_flag_none,
-	  "<command> = driver private commands" },
-#endif
 	{ NULL, NULL, cli_cmd_flag_none, NULL }
 };
 

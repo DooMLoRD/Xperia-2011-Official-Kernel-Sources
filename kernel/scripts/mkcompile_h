@@ -69,8 +69,8 @@ UTS_TRUNCATE="cut -b -$UTS_LEN"
 	echo \#define LINUX_COMPILE_HOST \"`hostname | $UTS_TRUNCATE`\"
   else
 	echo \#define LINUX_COMPILE_TIME \"`date --date="$TIMESTAMP" +%R:%S`\"
-	echo \#define LINUX_COMPILE_BY \"SEMCUser\"
-	echo \#define LINUX_COMPILE_HOST \"SEMCHost\"
+	echo \#define LINUX_COMPILE_BY \"BuildUser\"
+	echo \#define LINUX_COMPILE_HOST \"BuildHost\"
   fi
 
   if [ -x /bin/dnsdomainname ]; then

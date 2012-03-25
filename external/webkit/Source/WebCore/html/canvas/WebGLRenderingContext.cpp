@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011, 2012 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -328,29 +329,14 @@ private:
 
 void WebGLRenderingContext::WebGLRenderingContextRestoreTimer::fired()
 {
-    // Timer is started when m_contextLost is false.  It will first call
-    // onLostContext, which will set m_contextLost to true.  Then it will keep
-    // calling restoreContext and reschedule itself until m_contextLost is back
-    // to false.
-    if (!m_context->m_contextLost) {
-        m_context->onLostContext();
-        startOneShot(secondsBetweenRestoreAttempts);
-    } else {
-        // The rendering context is not restored if there is no handler for
-        // the context restored event.
-        if (!m_context->canvas()->hasEventListeners(eventNames().webglcontextrestoredEvent))
-            return;
-
-        m_context->restoreContext();
-        if (m_context->m_contextLost)
-            startOneShot(secondsBetweenRestoreAttempts);
-    }
+    m_context->maybeRestoreContext(RealLostContext);
 }
 
 class WebGLRenderingContextLostCallback : public GraphicsContext3D::ContextLostCallback {
 public:
     WebGLRenderingContextLostCallback(WebGLRenderingContext* cb) : m_contextLostCallback(cb) {}
-    virtual void onContextLost() { m_contextLostCallback->forceLostContext(); }
+    virtual void onContextLost() {
+        m_contextLostCallback->forceLostContext(WebGLRenderingContext::RealLostContext); }
     virtual ~WebGLRenderingContextLostCallback() {}
 private:
     WebGLRenderingContext* m_contextLostCallback;
@@ -367,7 +353,11 @@ PassOwnPtr<WebGLRenderingContext> WebGLRenderingContext::create(HTMLCanvasElemen
             attributes.antialias = false;
     }
 
+#if PLATFORM(ANDROID)
+    RefPtr<GraphicsContext3D> context(GraphicsContext3D::create(canvas, attributes, 0));
+#else
     RefPtr<GraphicsContext3D> context(GraphicsContext3D::create(attributes, hostWindow));
+#endif
 
     if (!context) {
         canvas->dispatchEvent(WebGLContextEvent::create(eventNames().webglcontextcreationerrorEvent, false, true, "Could not create a WebGL context."));
@@ -381,6 +371,7 @@ WebGLRenderingContext::WebGLRenderingContext(HTMLCanvasElement* passedCanvas, Pa
                                              GraphicsContext3D::Attributes attributes)
     : CanvasRenderingContext(passedCanvas)
     , m_context(context)
+    , m_restoreAllowed(false)
     , m_restoreTimer(this)
     , m_videoCache(4)
     , m_contextLost(false)
@@ -554,9 +545,10 @@ void WebGLRenderingContext::paintRenderingResultsToCanvas()
 {
     // Until the canvas is written to by the application, the clear that
     // happened after it was composited should be ignored by the compositor.
-    if (m_context->layerComposited() && !m_attributes.preserveDrawingBuffer)
+    if (m_context->layerComposited() && !m_attributes.preserveDrawingBuffer) {
+        m_context->paintCompositedResultsToCanvas(this);
         canvas()->makePresentationCopy();
-    else
+    } else
         canvas()->clearPresentationCopy();
     clearIfComposited();
     if (!m_markedCanvasDirty && !m_layerCleared)
@@ -577,6 +569,18 @@ bool WebGLRenderingContext::paintsIntoCanvasBuffer() const
     return m_context->paintsIntoCanvasBuffer();
 }
 
+#if PLATFORM(ANDROID)
+void WebGLRenderingContext::recreateSurface()
+{
+    m_context->recreateSurface();
+}
+
+void WebGLRenderingContext::releaseSurface()
+{
+    m_context->releaseSurface();
+}
+#endif
+
 void WebGLRenderingContext::reshape(int width, int height)
 {
     if (m_needsUpdate) {
@@ -591,6 +595,20 @@ void WebGLRenderingContext::reshape(int width, int height)
     // We don't have to mark the canvas as dirty, since the newly created image buffer will also start off
     // clear (and this matches what reshape will do).
     m_context->reshape(width, height);
+}
+
+GC3Dsizei WebGLRenderingContext::drawingBufferWidth()
+{
+    if (isContextLost())
+        return 0;
+    return m_context->getInternalFramebufferSize().width();
+}
+
+GC3Dsizei WebGLRenderingContext::drawingBufferHeight()
+{
+    if (isContextLost())
+        return 0;
+    return m_context->getInternalFramebufferSize().height();
 }
 
 unsigned int WebGLRenderingContext::sizeInBytes(GC3Denum type)
@@ -856,7 +874,9 @@ void WebGLRenderingContext::bufferData(GC3Denum target, ArrayBuffer* data, GC3De
         }
     }
 
-    m_context->bufferData(target, data->byteLength(), data->data(), usage);
+    // Some platforms incorrectly signal GL_OUT_OF_MEMORY if size == 0
+    if (data->byteLength() > 0)
+        m_context->bufferData(target, data->byteLength(), data->data(), usage);
     cleanupAfterGraphicsCall(false);
 }
 
@@ -879,7 +899,9 @@ void WebGLRenderingContext::bufferData(GC3Denum target, ArrayBufferView* data, G
         }
     }
 
-    m_context->bufferData(target, data->byteLength(), data->baseAddress(), usage);
+    // Some platforms incorrectly signal GL_OUT_OF_MEMORY if size == 0
+    if (data->byteLength() > 0)
+        m_context->bufferData(target, data->byteLength(), data->baseAddress(), usage);
     cleanupAfterGraphicsCall(false);
 }
 
@@ -1048,8 +1070,10 @@ void WebGLRenderingContext::copyTexImage2D(GC3Denum target, GC3Dint level, GC3De
         return;
     }
     clearIfComposited();
-    if (isResourceSafe())
-        m_context->copyTexImage2D(target, level, internalformat, x, y, width, height, border);
+    if (isResourceSafe()) {
+        if (width > 0 && height > 0)
+            m_context->copyTexImage2D(target, level, internalformat, x, y, width, height, border);
+    }
     else {
         GC3Dint clippedX, clippedY;
         GC3Dsizei clippedWidth, clippedHeight;
@@ -1060,8 +1084,11 @@ void WebGLRenderingContext::copyTexImage2D(GC3Denum target, GC3Dint level, GC3De
                 m_context->copyTexSubImage2D(target, level, clippedX - x, clippedY - y,
                                              clippedX, clippedY, clippedWidth, clippedHeight);
             }
-        } else
-            m_context->copyTexImage2D(target, level, internalformat, x, y, width, height, border);
+        } else {
+            if (width > 0 && height > 0)
+                m_context->copyTexImage2D(target, level, internalformat,
+                                          x, y, width, height, border);
+        }
     }
     // FIXME: if the framebuffer is not complete, none of the below should be executed.
     tex->setLevelInfo(target, level, internalformat, width, height, GraphicsContext3D::UNSIGNED_BYTE);
@@ -1914,6 +1941,12 @@ WebGLGetInfo WebGLRenderingContext::getBufferParameter(GC3Denum target, GC3Denum
         return WebGLGetInfo();
     }
 
+    // Some platforms fail to raise INVALID_OPERATION if no array buffer is bound
+    if (target == GraphicsContext3D::ARRAY_BUFFER && !m_boundArrayBuffer) {
+        m_context->synthesizeGLError(GraphicsContext3D::INVALID_OPERATION);
+        return WebGLGetInfo();
+    }
+
     WebGLStateRestorer(this, false);
     GC3Dint value = 0;
     m_context->getBufferParameteriv(target, pname, &value);
@@ -2647,14 +2680,6 @@ GC3Dboolean WebGLRenderingContext::isBuffer(WebGLBuffer* buffer)
 
 bool WebGLRenderingContext::isContextLost()
 {
-    if (m_restoreTimer.isActive())
-        return true;
-
-    bool newContextLost = m_context->getExtensions()->getGraphicsResetStatusARB() != GraphicsContext3D::NO_ERROR;
-
-    if (newContextLost != m_contextLost)
-        m_restoreTimer.startOneShot(secondsBetweenRestoreAttempts);
-
     return m_contextLost;
 }
 
@@ -2796,10 +2821,9 @@ void WebGLRenderingContext::readPixels(GC3Dint x, GC3Dint y, GC3Dsizei width, GC
 {
     if (isContextLost())
         return;
-    if (!canvas()->originClean()) {
-        ec = SECURITY_ERR;
-        return;
-    }
+    // Due to WebGL's same-origin restrictions, it is not possible to
+    // taint the origin using the WebGL API.
+    ASSERT(canvas()->originClean());
     // Validate input parameters.
     if (!pixels) {
         m_context->synthesizeGLError(GraphicsContext3D::INVALID_VALUE);
@@ -2851,7 +2875,51 @@ void WebGLRenderingContext::readPixels(GC3Dint x, GC3Dint y, GC3Dsizei width, GC
     }
     clearIfComposited();
     void* data = pixels->baseAddress();
-    m_context->readPixels(x, y, width, height, format, type, data);
+
+    // WebGL requires that areas lying outside the frame buffer should be filled with 0.
+    // Most OpenGL platforms do not support this directly.
+    GC3Dint clippedX, clippedY;
+    GC3Dsizei clippedWidth, clippedHeight;
+    if (clip2D(x, y, width, height, getBoundFramebufferWidth(), getBoundFramebufferHeight(),
+               &clippedX, &clippedY, &clippedWidth, &clippedHeight)) {
+        unsigned int padding = 0;
+        m_context->computeImageSizeInBytes(format, type, clippedWidth, clippedHeight,
+                                           m_packAlignment, &totalBytesRequired, &padding);
+        char *tmp = (char *)fastMalloc(totalBytesRequired);
+        // Some platforms incorrectly signal GL_INVALID_VALUE if width == 0 || height == 0
+        if (clippedWidth > 0 && clippedHeight > 0)
+            m_context->readPixels(clippedX, clippedY, clippedWidth,
+                                  clippedHeight, format, type, tmp);
+
+        unsigned int bytesPerComponent, componentsPerPixel;
+        m_context->computeFormatAndTypeParameters(format, type, &componentsPerPixel,
+                                                  &bytesPerComponent);
+        int clippedRowBytes = bytesPerComponent * componentsPerPixel * clippedWidth;
+        int clippedStride = clippedRowBytes + padding;
+        int rowBytes = bytesPerComponent * componentsPerPixel * width;
+        int stride = rowBytes + padding;
+        char *src = tmp;
+        char *dst = (char *)data;
+        int xdelta = (clippedX - x) * bytesPerComponent * componentsPerPixel;
+        for (int r = y; r < y + height; r++) {
+            if (r < y + height - 1)
+                memset(dst, 0, stride);
+            else
+                memset(dst, 0, rowBytes);
+            if (r >= clippedY && r < clippedY + clippedHeight) {
+                memcpy(dst + xdelta, src, clippedRowBytes);
+                src += clippedStride;
+            }
+            dst += stride;
+        }
+        fastFree(tmp);
+    }
+    else {
+        // Some platforms incorrectly signal GL_INVALID_VALUE if width == 0 || height == 0
+        if (width > 0 && height > 0)
+            m_context->readPixels(x, y, width, height, format, type, data);
+    }
+
 #if OS(DARWIN)
     // FIXME: remove this section when GL driver bug on Mac is fixed, i.e.,
     // when alpha is off, readPixels should set alpha to 255 instead of 0.
@@ -3142,7 +3210,10 @@ void WebGLRenderingContext::texImage2D(GC3Denum target, GC3Dint level, GC3Denum 
         return;
     if (!validateHTMLImageElement(image))
         return;
-    checkOrigin(image);
+    if (wouldTaintOrigin(image)) {
+        ec = SECURITY_ERR;
+        return;
+    }
     texImage2DImpl(target, level, internalformat, format, type, image->cachedImage()->image(),
                    m_unpackFlipY, m_unpackPremultiplyAlpha, ec);
 }
@@ -3157,7 +3228,10 @@ void WebGLRenderingContext::texImage2D(GC3Denum target, GC3Dint level, GC3Denum 
         m_context->synthesizeGLError(GraphicsContext3D::INVALID_VALUE);
         return;
     }
-    checkOrigin(canvas);
+    if (wouldTaintOrigin(canvas)) {
+        ec = SECURITY_ERR;
+        return;
+    }
     RefPtr<ImageData> imageData = canvas->getImageData();
     if (imageData)
         texImage2D(target, level, internalformat, format, type, imageData.get(), ec);
@@ -3167,7 +3241,8 @@ void WebGLRenderingContext::texImage2D(GC3Denum target, GC3Dint level, GC3Denum 
 }
 
 #if ENABLE(VIDEO)
-PassRefPtr<Image> WebGLRenderingContext::videoFrameToImage(HTMLVideoElement* video)
+PassRefPtr<Image> WebGLRenderingContext::videoFrameToImage(HTMLVideoElement* video,
+                                                           ExceptionCode& ec)
 {
     if (!video || !video->videoWidth() || !video->videoHeight()) {
         m_context->synthesizeGLError(GraphicsContext3D::INVALID_VALUE);
@@ -3179,7 +3254,10 @@ PassRefPtr<Image> WebGLRenderingContext::videoFrameToImage(HTMLVideoElement* vid
         m_context->synthesizeGLError(GraphicsContext3D::OUT_OF_MEMORY);
         return 0;
     }
-    checkOrigin(video);
+    if (wouldTaintOrigin(video)) {
+        ec = SECURITY_ERR;
+        return 0;
+    }
     IntRect destRect(0, 0, size.width(), size.height());
     // FIXME: Turn this into a GPU-GPU texture copy instead of CPU readback.
     video->paintCurrentFrameInContext(buf->context(), destRect);
@@ -3192,7 +3270,7 @@ void WebGLRenderingContext::texImage2D(GC3Denum target, GC3Dint level, GC3Denum 
     ec = 0;
     if (isContextLost())
         return;
-    RefPtr<Image> image = videoFrameToImage(video);
+    RefPtr<Image> image = videoFrameToImage(video, ec);
     if (!video)
         return;
     texImage2DImpl(target, level, internalformat, format, type, image.get(), m_unpackFlipY, m_unpackPremultiplyAlpha, ec);
@@ -3334,7 +3412,10 @@ void WebGLRenderingContext::texSubImage2D(GC3Denum target, GC3Dint level, GC3Din
         return;
     if (!validateHTMLImageElement(image))
         return;
-    checkOrigin(image);
+    if (wouldTaintOrigin(image)) {
+        ec = SECURITY_ERR;
+        return;
+    }
     texSubImage2DImpl(target, level, xoffset, yoffset, format, type, image->cachedImage()->image(),
                       m_unpackFlipY, m_unpackPremultiplyAlpha, ec);
 }
@@ -3349,7 +3430,10 @@ void WebGLRenderingContext::texSubImage2D(GC3Denum target, GC3Dint level, GC3Din
         m_context->synthesizeGLError(GraphicsContext3D::INVALID_VALUE);
         return;
     }
-    checkOrigin(canvas);
+    if (wouldTaintOrigin(canvas)) {
+        ec = SECURITY_ERR;
+        return;
+    }
     RefPtr<ImageData> imageData = canvas->getImageData();
     if (imageData)
         texSubImage2D(target, level, xoffset, yoffset, format, type, imageData.get(), ec);
@@ -3365,7 +3449,7 @@ void WebGLRenderingContext::texSubImage2D(GC3Denum target, GC3Dint level, GC3Din
     ec = 0;
     if (isContextLost())
         return;
-    RefPtr<Image> image = videoFrameToImage(video);
+    RefPtr<Image> image = videoFrameToImage(video, ec);
     if (!video)
         return;
     texSubImage2DImpl(target, level, xoffset, yoffset, format, type, image.get(), m_unpackFlipY, m_unpackPremultiplyAlpha, ec);
@@ -3872,17 +3956,30 @@ void WebGLRenderingContext::viewport(GC3Dint x, GC3Dint y, GC3Dsizei width, GC3D
     cleanupAfterGraphicsCall(false);
 }
 
-void WebGLRenderingContext::forceLostContext()
+void WebGLRenderingContext::forceLostContext(WebGLRenderingContext::LostContextMode mode)
 {
     if (isContextLost()) {
         m_context->synthesizeGLError(GraphicsContext3D::INVALID_OPERATION);
         return;
     }
 
-    m_restoreTimer.startOneShot(0);
+    loseContext();
+
+    if (mode == RealLostContext)
+        m_restoreTimer.startOneShot(0);
 }
 
-void WebGLRenderingContext::onLostContext()
+void WebGLRenderingContext::forceRestoreContext()
+{
+    if (!isContextLost()) {
+        m_context->synthesizeGLError(GraphicsContext3D::INVALID_OPERATION);
+        return;
+    }
+
+    maybeRestoreContext(SyntheticLostContext);
+}
+
+void WebGLRenderingContext::loseContext()
 {
     m_contextLost = true;
 
@@ -3890,7 +3987,7 @@ void WebGLRenderingContext::onLostContext()
 
     // There is no direct way to clear errors from a GL implementation and
     // looping until getError() becomes NO_ERROR might cause an infinite loop if
-    // the driver or context implementation had a bug.  So, loop a reasonably
+    // the driver or context implementation had a bug. So, loop a reasonably
     // large number of times to clear any existing errors.
     for (int i = 0; i < 100; ++i) {
         if (m_context->getError() == GraphicsContext3D::NO_ERROR)
@@ -3898,14 +3995,67 @@ void WebGLRenderingContext::onLostContext()
     }
     m_context->synthesizeGLError(GraphicsContext3D::CONTEXT_LOST_WEBGL);
 
-    canvas()->dispatchEvent(WebGLContextEvent::create(eventNames().webglcontextlostEvent, false, true, ""));
+    RefPtr<WebGLContextEvent> event = WebGLContextEvent::create(eventNames().webglcontextlostEvent, false, true, "");
+    canvas()->dispatchEvent(event);
+    m_restoreAllowed = event->defaultPrevented();
 }
 
-void WebGLRenderingContext::restoreContext()
+void WebGLRenderingContext::maybeRestoreContext(WebGLRenderingContext::LostContextMode mode)
 {
-    RefPtr<GraphicsContext3D> context(GraphicsContext3D::create(m_attributes, canvas()->document()->view()->root()->hostWindow()));
-    if (!context)
+    if (!m_contextLost) {
+        ASSERT(mode == SyntheticLostContext);
+        m_context->synthesizeGLError(GraphicsContext3D::INVALID_OPERATION);
         return;
+    }
+
+    // The rendering context is not restored unless the default
+    // behavior of the webglcontextlost event was prevented earlier.
+    if (!m_restoreAllowed) {
+        if (mode == SyntheticLostContext)
+            m_context->synthesizeGLError(GraphicsContext3D::INVALID_OPERATION);
+        return;
+    }
+
+    int contextLostReason = m_context->getExtensions()->getGraphicsResetStatusARB();
+
+    switch (contextLostReason) {
+    case GraphicsContext3D::NO_ERROR:
+        // The GraphicsContext3D implementation might not fully
+        // support GL_ARB_robustness semantics yet. Alternatively, the
+        // WebGL WEBKIT_lose_context extension might have been used to
+        // force a lost context.
+        break;
+    case Extensions3D::GUILTY_CONTEXT_RESET_ARB:
+        // The rendering context is not restored if this context was
+        // guilty of causing the graphics reset.
+        printWarningToConsole("WARNING: WebGL content on the page caused the graphics card to reset; not restoring the context");
+        return;
+    case Extensions3D::INNOCENT_CONTEXT_RESET_ARB:
+        // Always allow the context to be restored.
+        break;
+    case Extensions3D::UNKNOWN_CONTEXT_RESET_ARB:
+        // Warn. Ideally, prompt the user telling them that WebGL
+        // content on the page might have caused the graphics card to
+        // reset and ask them whether they want to continue running
+        // the content. Only if they say "yes" should we start
+        // attempting to restore the context.
+        printWarningToConsole("WARNING: WebGL content on the page might have caused the graphics card to reset");
+        break;
+    }
+
+#if PLATFORM(ANDROID)
+    RefPtr<GraphicsContext3D> context(GraphicsContext3D::create(canvas(), m_attributes, 0));
+#else
+    RefPtr<GraphicsContext3D> context(GraphicsContext3D::create(m_attributes, canvas()->document()->view()->root()->hostWindow()));
+#endif
+    if (!context) {
+        if (mode == RealLostContext)
+            m_restoreTimer.startOneShot(secondsBetweenRestoreAttempts);
+        else
+            // This likely shouldn't happen but is the best way to report it to the WebGL app.
+            m_context->synthesizeGLError(GraphicsContext3D::INVALID_OPERATION);
+        return;
+    }
 
     m_context = context;
     m_contextLost = false;

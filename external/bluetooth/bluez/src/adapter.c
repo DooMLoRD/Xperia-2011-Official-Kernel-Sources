@@ -4,7 +4,7 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
- *  Copyright (C) 2011  Sony Ericsson Mobile Communications AB
+ *  Copyright (C) 2011, 2012  Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -3344,6 +3344,14 @@ static char **strlist2array(GSList *list)
 		array[i] = g_strdup((const gchar *) list->data);
 
 	return array;
+}
+
+void adapter_emit_powerstate_off(struct btd_adapter *adapter)
+{
+	gboolean powered = FALSE;
+	emit_property_changed(connection, adapter->path,
+					ADAPTER_INTERFACE, "Powered",
+					DBUS_TYPE_BOOLEAN, &powered);
 }
 
 void adapter_emit_device_found(struct btd_adapter *adapter,

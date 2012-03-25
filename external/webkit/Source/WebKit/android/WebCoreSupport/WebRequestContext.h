@@ -1,5 +1,6 @@
 /*
  * Copyright 2010, The Android Open Source Project
+ * Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -21,6 +22,9 @@
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ * Modifications are licensed under the License.
  */
 
 #ifndef WebRequestContext_h
@@ -38,12 +42,18 @@ class WebRequestContext : public net::URLRequestContext {
 public:
     // URLRequestContext overrides.
     virtual const std::string& GetUserAgent(const GURL&) const;
+#if USE(CHROME_NETWORK_STACK)
+    virtual const std::string& GetUserAgentProfile() const;
+#endif
     virtual const std::string& accept_language() const;
 
     WebRequestContext(bool isPrivateBrowsing);
 
     // These methods are threadsafe.
     void setUserAgent(const WTF::String&);
+#if USE(CHROME_NETWORK_STACK)
+    void setUserAgentProfile(const WTF::String&);
+#endif
     void setCacheMode(int);
     int getCacheMode();
     static void setAcceptLanguage(const WTF::String&);
@@ -57,6 +67,10 @@ private:
     int m_cacheMode;
     mutable WTF::Mutex m_userAgentMutex;
     bool m_isPrivateBrowsing;
+#if USE(CHROME_NETWORK_STACK)
+    std::string m_userAgentProfile;
+    mutable WTF::Mutex m_userAgentProfileMutex;
+#endif
 };
 
 } // namespace android

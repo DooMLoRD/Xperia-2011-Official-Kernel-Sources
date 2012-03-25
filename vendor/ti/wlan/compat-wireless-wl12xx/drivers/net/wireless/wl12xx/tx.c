@@ -456,7 +456,7 @@ static int wl1271_prepare_tx_frame(struct wl1271 *wl, struct sk_buff *skb,
 
 	if (info->control.hw_key &&
 	    info->control.hw_key->cipher == WLAN_CIPHER_SUITE_TKIP)
-		extra = WL1271_TKIP_IV_SPACE;
+		extra = WL1271_EXTRA_SPACE_TKIP;
 
 	if (info->control.hw_key) {
 		bool is_wep;
@@ -541,7 +541,6 @@ u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set,
 		rate_set >>= 1;
 	}
 
-#ifdef CONFIG_WL12XX_HT
 	/* MCS rates indication are on bits 16 - 23 */
 	rate_set >>= HW_HT_RATES_OFFSET - band->n_bitrates;
 
@@ -550,7 +549,6 @@ u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set,
 			enabled_rates |= (CONF_HW_BIT_RATE_MCS_0 << bit);
 		rate_set >>= 1;
 	}
-#endif
 
 	return enabled_rates;
 }
@@ -815,6 +813,7 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 	struct sk_buff *skb;
 	int id = result->id;
 	int rate = -1;
+	u8 rate_flags = 0;
 	u8 retries = 0;
 
 	/* check for id legality */
@@ -835,7 +834,8 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 	if (result->status == TX_SUCCESS) {
 		if (!(info->flags & IEEE80211_TX_CTL_NO_ACK))
 			info->flags |= IEEE80211_TX_STAT_ACK;
-		rate = wl1271_rate_to_idx(result->rate_class_index, wl->band);
+		rate = wl->max_tx_rate;
+		rate_flags = wl->max_tx_rate_flags;
 		retries = result->ack_failures;
 	} else if (result->status == TX_RETRY_EXCEEDED) {
 		wl->stats.excessive_retries++;
@@ -844,7 +844,7 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 
 	info->status.rates[0].idx = rate;
 	info->status.rates[0].count = retries;
-	info->status.rates[0].flags = 0;
+	info->status.rates[0].flags = rate_flags;
 	info->status.ack_signal = -1;
 
 	wl->stats.retry_count += result->ack_failures;
@@ -875,8 +875,9 @@ static void wl1271_tx_complete_packet(struct wl1271 *wl,
 	if (info->control.hw_key &&
 	    info->control.hw_key->cipher == WLAN_CIPHER_SUITE_TKIP) {
 		int hdrlen = ieee80211_get_hdrlen_from_skb(skb);
-		memmove(skb->data + WL1271_TKIP_IV_SPACE, skb->data, hdrlen);
-		skb_pull(skb, WL1271_TKIP_IV_SPACE);
+		memmove(skb->data + WL1271_EXTRA_SPACE_TKIP, skb->data,
+			hdrlen);
+		skb_pull(skb, WL1271_EXTRA_SPACE_TKIP);
 	}
 
 	wl1271_debug(DEBUG_TX, "tx status id %u skb 0x%p failures %u rate 0x%x"
@@ -1027,9 +1028,9 @@ void wl1271_tx_reset(struct wl1271 *wl, bool reset_tx_queues)
 			    info->control.hw_key->cipher ==
 			    WLAN_CIPHER_SUITE_TKIP) {
 				int hdrlen = ieee80211_get_hdrlen_from_skb(skb);
-				memmove(skb->data + WL1271_TKIP_IV_SPACE,
+				memmove(skb->data + WL1271_EXTRA_SPACE_TKIP,
 					skb->data, hdrlen);
-				skb_pull(skb, WL1271_TKIP_IV_SPACE);
+				skb_pull(skb, WL1271_EXTRA_SPACE_TKIP);
 			}
 
 			info->status.rates[0].idx = -1;
@@ -1071,4 +1072,56 @@ u32 wl1271_tx_min_rate_get(struct wl1271 *wl, u32 rate_set)
 		return 0;
 
 	return BIT(__ffs(rate_set));
+}
+
+/* Map of CONF_HW RATE -> rate index. Ordered by rate descending */
+static const u8 sorted_rates[][2] = {
+	{CONF_HW_RATE_INDEX_MCS_7, 7},
+	{CONF_HW_RATE_INDEX_MCS_6, 6},
+	{CONF_HW_RATE_INDEX_54MBPS, 11},
+	{CONF_HW_RATE_INDEX_MCS_5, 5},
+	{CONF_HW_RATE_INDEX_48MBPS, 10},
+	{CONF_HW_RATE_INDEX_MCS_4, 4},
+	{CONF_HW_RATE_INDEX_36MBPS, 9},
+	{CONF_HW_RATE_INDEX_MCS_3, 3},
+	{CONF_HW_RATE_INDEX_24MBPS, 8},
+	{CONF_HW_RATE_INDEX_22MBPS, 8},
+	{CONF_HW_RATE_INDEX_MCS_2, 2},
+	{CONF_HW_RATE_INDEX_18MBPS, 7},
+	{CONF_HW_RATE_INDEX_MCS_1, 1},
+	{CONF_HW_RATE_INDEX_12MBPS, 6},
+	{CONF_HW_RATE_INDEX_11MBPS, 3},
+	{CONF_HW_RATE_INDEX_9MBPS, 5},
+	{CONF_HW_RATE_INDEX_MCS_0, 0},
+	{CONF_HW_RATE_INDEX_6MBPS, 4},
+	{CONF_HW_RATE_INDEX_5_5MBPS, 2},
+	{CONF_HW_RATE_INDEX_2MBPS, 1},
+	{CONF_HW_RATE_INDEX_1MBPS, 0},
+};
+
+void wl1271_tx_set_max_rate(struct wl1271 *wl, u32 enabled_rates,
+			    struct ieee80211_sta_ht_cap *sta_ht_cap)
+{
+	int i;
+	u8 r;
+
+	wl->max_tx_rate = 0;
+	wl->max_tx_rate_flags = 0;
+
+	/* Find highest enabled rate */
+	for (i = 0; i < ARRAY_SIZE(sorted_rates); i++) {
+		r = sorted_rates[i][0];
+		if (BIT(r) & enabled_rates) {
+			wl->max_tx_rate = sorted_rates[i][1];
+			break;
+		}
+	}
+
+	if (sta_ht_cap->ht_supported) {
+		if (wl->max_tx_rate >= CONF_HW_RATE_INDEX_MCS_MIN)
+			wl->max_tx_rate -= CONF_HW_RATE_INDEX_MCS_MIN;
+		wl->max_tx_rate_flags = IEEE80211_TX_RC_MCS;
+		if (sta_ht_cap->cap & IEEE80211_HT_CAP_SGI_20)
+			wl->max_tx_rate_flags |= IEEE80211_TX_RC_SHORT_GI;
+	}
 }

@@ -479,8 +479,22 @@ static void hdp_tmp_dc_data_destroy(gpointer data)
 
 static void abort_mdl_cb(GError *err, gpointer data)
 {
+	struct hdp_device *dev;
+	struct hdp_channel *hdp_chan = data;
 	if (err)
 		error("Aborting error: %s", err->message);
+
+	if (hdp_chan) {
+		dev = hdp_chan->dev;
+		if (dev && hdp_chan->mdep != HDP_MDEP_ECHO)
+			g_dbus_emit_signal(dev->conn,
+						device_get_path(dev->dev),
+						HEALTH_DEVICE,
+						"ChannelConnected",
+						DBUS_TYPE_OBJECT_PATH,
+						&hdp_chan->path,
+						DBUS_TYPE_INVALID);
+	}
 }
 
 static void hdp_mdl_reconn_cb(struct mcap_mdl *mdl, GError *err, gpointer data)
@@ -1646,7 +1660,7 @@ static void hdp_mdl_conn_cb(struct mcap_mdl *mdl, GError *err, gpointer data)
 
 		/* Send abort request because remote side */
 		/* is now in PENDING state */
-		if (!mcap_mdl_abort(hdp_chann->mdl, abort_mdl_cb, NULL,
+		if (!mcap_mdl_abort(hdp_chann->mdl, abort_mdl_cb, hdp_chann,
 								NULL, &gerr)) {
 			error("%s", gerr->message);
 			g_error_free(gerr);
@@ -1668,6 +1682,15 @@ static void hdp_mdl_conn_cb(struct mcap_mdl *mdl, GError *err, gpointer data)
 		return;
 
 	dev->fr = hdp_channel_ref(hdp_chann);
+
+	if (dev->fr->mdep != HDP_MDEP_ECHO)
+		g_dbus_emit_signal(dev->conn,
+					device_get_path(dev->dev),
+					HEALTH_DEVICE,
+					"ChannelConnected",
+					DBUS_TYPE_OBJECT_PATH, &dev->fr->path,
+					DBUS_TYPE_INVALID);
+
 
 	emit_property_changed(dev->conn, device_get_path(dev->dev),
 					HEALTH_DEVICE, "MainChannel",
@@ -1713,14 +1736,6 @@ static void device_create_mdl_cb(struct mcap_mdl *mdl, uint8_t conf,
 	if (!hdp_chan)
 		goto fail;
 
-	if (user_data->mdep != HDP_MDEP_ECHO)
-		g_dbus_emit_signal(user_data->conn,
-					device_get_path(hdp_chan->dev->dev),
-					HEALTH_DEVICE,
-					"ChannelConnected",
-					DBUS_TYPE_OBJECT_PATH, &hdp_chan->path,
-					DBUS_TYPE_INVALID);
-
 	hdp_conn = g_new0(struct hdp_tmp_dc_data, 1);
 	hdp_conn->msg = dbus_message_ref(user_data->msg);
 	hdp_conn->conn = dbus_connection_ref(user_data->conn);
@@ -1743,7 +1758,7 @@ static void device_create_mdl_cb(struct mcap_mdl *mdl, uint8_t conf,
 	hdp_tmp_dc_data_unref(hdp_conn);
 
 	/* Send abort request because remote side is now in PENDING state */
-	if (!mcap_mdl_abort(mdl, abort_mdl_cb, NULL, NULL, &gerr)) {
+	if (!mcap_mdl_abort(mdl, abort_mdl_cb, hdp_chan, NULL, &gerr)) {
 		error("%s", gerr->message);
 		g_error_free(gerr);
 	}

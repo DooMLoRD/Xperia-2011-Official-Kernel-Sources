@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -70,6 +71,9 @@ public:
     virtual bool is3d() const { return true; }
     virtual bool isAccelerated() const { return true; }
     virtual bool paintsIntoCanvasBuffer() const;
+
+    GC3Dsizei drawingBufferWidth();
+    GC3Dsizei drawingBufferHeight();
 
     void activeTexture(GC3Denum texture, ExceptionCode&);
     void attachShader(WebGLProgram*, WebGLShader*, ExceptionCode&);
@@ -274,9 +278,16 @@ public:
 
     void viewport(GC3Dint x, GC3Dint y, GC3Dsizei width, GC3Dsizei height);
 
-    void forceLostContext();
-    void onLostContext();
-    void restoreContext();
+    // WEBKIT_lose_context support
+    enum LostContextMode {
+        // Lost context occurred at the graphics system level.
+        RealLostContext,
+
+        // Lost context provoked by WEBKIT_lose_context.
+        SyntheticLostContext
+    };
+    void forceLostContext(LostContextMode);
+    void forceRestoreContext();
 
     GraphicsContext3D* graphicsContext3D() const { return m_context.get(); }
 #if USE(ACCELERATED_COMPOSITING)
@@ -296,6 +307,11 @@ public:
     // Helpers for JSC bindings.
     int getNumberOfExtensions();
     WebGLExtension* getExtensionNumber(int i);
+
+#if PLATFORM(ANDROID)
+    void recreateSurface();
+    void releaseSurface();
+#endif
 
   private:
     friend class WebGLObject;
@@ -348,7 +364,7 @@ public:
     bool validateWebGLObject(WebGLObject*);
 
 #if ENABLE(VIDEO)
-    PassRefPtr<Image> videoFrameToImage(HTMLVideoElement*);
+    PassRefPtr<Image> videoFrameToImage(HTMLVideoElement*, ExceptionCode& ec);
 #endif
 
     RefPtr<GraphicsContext3D> m_context;
@@ -361,6 +377,7 @@ public:
         WebGLRenderingContext* m_context;
     };
 
+    bool m_restoreAllowed;
     WebGLRenderingContextRestoreTimer m_restoreTimer;
 
     bool m_needsUpdate;
@@ -611,6 +628,10 @@ public:
     void initVertexAttrib0();
     bool simulateVertexAttrib0(GC3Dsizei numVertex);
     void restoreStatesAfterVertexAttrib0Simulation();
+
+    void loseContext();
+    // Helper for restoration after context lost.
+    void maybeRestoreContext(LostContextMode);
 
     friend class WebGLStateRestorer;
 };

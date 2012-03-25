@@ -1,6 +1,7 @@
 /*
  * Copyright 2006, The Android Open Source Project
- * Portions created by Sony Ericsson are Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
+ * Portions created by Sony Ericsson are Copyright (C) 2011,
+ * 2012 Sony Ericsson Mobile Communications AB.
  * All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,7 +26,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 /*
- * This file has been modified by Sony Ericsson on 2011-11-25.
+ * This file has been modified by Sony Ericsson on 2011-11-25, 2012-02-04.
  */
 
 // TODO: change name to WebFrame.h
@@ -123,6 +124,8 @@ class WebFrame : public WebCoreRefObject {
     float density() const;
 
 #if USE(CHROME_NETWORK_STACK)
+    const WTF::String userAgentProfile();
+    void setUserAgentProfile(WTF::String userAgentProfile) { mUserAgentProfile = userAgentProfile; }
     void didReceiveAuthenticationChallenge(WebUrlLoaderClient*, const std::string& host, const std::string& realm, bool useCachedCredentials, bool suppressDialog);
     void reportSslCertError(WebUrlLoaderClient* client, int cert_error, const std::string& cert, const std::string& url);
     void requestClientCert(WebUrlLoaderClient* client, const std::string& hostAndPort);
@@ -176,6 +179,9 @@ class WebFrame : public WebCoreRefObject {
     bool mBlockNetworkLoads;
     bool mUserInitiatedAction;
     WebCore::RenderSkinAndroid* m_renderSkins;
+#if USE(CHROME_NETWORK_STACK)
+    WTF::String mUserAgentProfile;
+#endif
 };
 
 }   // namespace android

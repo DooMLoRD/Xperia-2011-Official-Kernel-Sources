@@ -1,6 +1,7 @@
 /*
  * WPA Supplicant - Glue code to setup EAPOL and RSN modules
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -819,12 +820,10 @@ void wpa_supplicant_wapi_set_config(struct wpa_supplicant *wpa_s,
 		conf.id = ssid->id;
 		conf.key_mgmt = ssid->key_mgmt;
 		conf.wapi_psk = ssid->wapi_psk;
-		conf.wapi_user_cert = ssid->wapi_user_cert;
-		conf.wapi_root_cert = ssid->wapi_root_cert;
-		os_memcpy(conf.wapi_psk_hex,
-				ssid->wapi_psk_hex, ssid->wapi_psk_hex_len);
-		conf.wapi_psk_hex_len = ssid->wapi_psk_hex_len;
-		conf.wapi_auth = ssid->wapi_auth;
+		conf.wapi_key_type = ssid->wapi_key_type;
+		conf.as_cert_uri = ssid->as_cert_uri;
+		conf.user_cert_uri = ssid->user_cert_uri;
+		conf.user_key_uri = ssid->user_key_uri;
 	}
 	wapi_sm_set_config(wpa_s->wapi, ssid ? &conf : NULL);
 }

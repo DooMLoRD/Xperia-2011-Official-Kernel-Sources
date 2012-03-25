@@ -1,6 +1,7 @@
 /*
  * WPA Supplicant / Configuration backend: text file
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
+ * Copyright (C) 2011 Sony Ericsson Mobile Communications AB.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -394,39 +395,42 @@ static void write_wapi_psk(FILE *f, struct wpa_ssid *ssid)
 }
 
 
-static void write_wapi_psk_hex(FILE *f, struct wpa_ssid *ssid)
+static void write_wapi_psk_key_type(FILE *f, struct wpa_ssid *ssid)
 {
-	char *value = wpa_config_get(ssid, "wapi_psk_hex");
+	char *value = wpa_config_get(ssid, "wapi_key_type");
 	if (value == NULL)
 		return;
-	fprintf(f, "\twapi_psk_hex=%s\n", value);
+	fprintf(f, "\twapi_key_type=%s\n", value);
 	os_free(value);
 }
 
 
-static void write_wapi_cert(FILE *f, struct wpa_ssid *ssid)
+static void write_user_cert_uri(FILE *f, struct wpa_ssid *ssid)
 {
-	if (ssid->wapi_auth & WAPI_AUTH_CERT)
-		fprintf(f, "\twapi_cert=\"1\"\n");
-}
-
-
-static void write_wapi_user_cert(FILE *f, struct wpa_ssid *ssid)
-{
-	char *value = wpa_config_get(ssid, "wapi_user_cert");
+	char *value = wpa_config_get(ssid, "user_cert_uri");
 	if (value == NULL)
 		return;
-	fprintf(f, "\twapi_user_cert=%s\n", value);
+	fprintf(f, "\tuser_cert_uri=%s\n", value);
 	os_free(value);
 }
 
 
-static void write_wapi_root_cert(FILE *f, struct wpa_ssid *ssid)
+static void write_as_cert_uri(FILE *f, struct wpa_ssid *ssid)
 {
-	char *value = wpa_config_get(ssid, "wapi_root_cert");
+	char *value = wpa_config_get(ssid, "as_cert_uri");
 	if (value == NULL)
 		return;
-	fprintf(f, "\twapi_root_cert=%s\n", value);
+	fprintf(f, "\tas_cert_uri=%s\n", value);
+	os_free(value);
+}
+
+
+static void write_user_key_uri(FILE *f, struct wpa_ssid *ssid)
+{
+	char *value = wpa_config_get(ssid, "user_key_uri");
+	if (value == NULL)
+		return;
+	fprintf(f, "\tuser_key_uri=%s\n", value);
 	os_free(value);
 }
 #endif /* CONFIG_WAPI */
@@ -560,10 +564,10 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	write_psk(f, ssid);
 #ifdef CONFIG_WAPI
 	write_wapi_psk(f, ssid);
-	write_wapi_user_cert(f, ssid);
-	write_wapi_root_cert(f, ssid);
-	write_wapi_psk_hex(f, ssid);
-	write_wapi_cert(f, ssid);
+	write_wapi_psk_key_type(f, ssid);
+	write_user_cert_uri(f, ssid);
+	write_user_key_uri(f, ssid);
+	write_as_cert_uri(f, ssid);
 #endif /* CONFIG_WAPI */
 	write_proto(f, ssid);
 	write_key_mgmt(f, ssid);

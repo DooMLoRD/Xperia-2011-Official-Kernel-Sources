@@ -74,7 +74,6 @@ LOCAL_SHARED_LIBRARIES := \
 	libdbus \
 	libcutils \
 	libglib \
-	libbluedroid
 
 LOCAL_STATIC_LIBRARIES := \
 	libbuiltinplugin \

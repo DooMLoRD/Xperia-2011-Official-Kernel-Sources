@@ -51,7 +51,9 @@
 #define TX_HW_RESULT_QUEUE_LEN_MASK      0xf
 
 #define WL1271_TX_ALIGN_TO 4
-#define WL1271_TKIP_IV_SPACE 4
+#define WL1271_EXTRA_SPACE_TKIP 4
+#define WL1271_EXTRA_SPACE_AES  8
+#define WL1271_EXTRA_SPACE_MAX  8
 
 /* Used for management frames and dummy packets */
 #define WL1271_TID_MGMT 7
@@ -220,4 +222,6 @@ bool wl12xx_is_dummy_packet(struct wl1271 *wl, struct sk_buff *skb);
 /* from main.c */
 void wl1271_free_sta(struct wl1271 *wl, u8 hlid);
 
+void wl1271_tx_set_max_rate(struct wl1271 *wl, u32 enabled_rates,
+			    struct ieee80211_sta_ht_cap *sta_ht_cap);
 #endif

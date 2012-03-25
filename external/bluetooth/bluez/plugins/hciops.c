@@ -3,6 +3,7 @@
  *  BlueZ - Bluetooth protocol stack for Linux
  *
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2011, 2012  Sony Ericsson Mobile Communications AB
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -38,7 +39,6 @@
 #include <bluetooth/sdp.h>
 #include <bluetooth/sdp_lib.h>
 
-#include <bluedroid/bluetooth.h>
 #include <glib.h>
 
 #include "hcid.h"
@@ -464,6 +464,7 @@ static int hciops_power_off(int index)
 {
 	struct dev_info *dev = &devs[index];
 	uint8_t mode;
+	struct btd_adapter *adapter;
 
 	DBG("hci%d set scan mode off", index);
 	mode = SCAN_DISABLED;
@@ -471,9 +472,11 @@ static int hciops_power_off(int index)
 				1, &mode) < 0)
 		return -errno;
 
-	DBG("hci%d HCIDEVDOWN", index);
+	adapter = manager_find_adapter_by_id(index);
+	if (adapter)
+		adapter_emit_powerstate_off(adapter);
 
-	return bt_disable();
+	return 0;
 }
 
 static void set_event_mask(int index)
@@ -1118,6 +1121,20 @@ static void user_confirm_request(int index, void *ptr)
 					< 0)
 				goto fail;
 			return;
+		}
+	}
+
+	/* If neither side requires no bonding ask the user for
+	 * confirmation. */
+	if ((conn->loc_auth > 0x01) && (conn->loc_auth != 0xff) &&
+			(conn->rem_auth > 0x01)) {
+		if (loc_mitm && rem_mitm) {
+			if (btd_event_user_confirm(&dev->bdaddr, &req->bdaddr,
+					btohl(req->passkey)) == 0)
+				return;
+		} else {
+			if (btd_event_user_consent(&dev->bdaddr, &req->bdaddr) == 0)
+				return;
 		}
 	}
 

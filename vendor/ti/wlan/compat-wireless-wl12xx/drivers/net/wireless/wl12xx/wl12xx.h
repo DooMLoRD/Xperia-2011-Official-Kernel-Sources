@@ -382,6 +382,7 @@ enum wl12xx_flags {
 	WL1271_FLAG_RECOVERY_IN_PROGRESS,
 	WL1271_FLAG_CS_PROGRESS,
 	WL1271_FLAG_PROBE_RESP_SET,
+	WL1271_FLAG_HW_GOING_DOWN,
 };
 
 struct wl1271_link {
@@ -397,6 +398,39 @@ struct wl1271_link {
 	/* bitmap of TIDs where RX BA sessions are active for this link */
 	u8 ba_bitmap;
 };
+
+#define WL1271_MAX_RX_DATA_FILTERS 4
+#define WL1271_RX_DATA_FILTER_MAX_FIELD_PATTERNS 8
+
+/* FW MAX FILTER SIZE is 98 bytes. The MAX_PATTERN_SIZE is imposed
+ * after taking into account the mask bytes and other structs members
+ */
+#define WL1271_RX_DATA_FILTER_MAX_PATTERN_SIZE 43
+#define WL1271_RX_DATA_FILTER_ETH_HEADER_SIZE 14
+
+#define WL1271_RX_DATA_FILTER_FLAG_MASK                BIT(0)
+#define WL1271_RX_DATA_FILTER_FLAG_IP_HEADER           0
+#define WL1271_RX_DATA_FILTER_FLAG_ETHERNET_HEADER     BIT(1)
+
+enum rx_data_filter_action {
+	FILTER_DROP = 0,
+	FILTER_SIGNAL = 1,
+	FILTER_FW_HANDLE = 2
+};
+
+struct wl12xx_rx_data_filter_field {
+	__le16 offset;
+	u8 len;
+	u8 flags;
+	u8 pattern[0];
+} __packed;
+
+struct wl12xx_rx_data_filter {
+	u8 action;
+	int num_fields;
+	int fields_size;
+	struct wl12xx_rx_data_filter_field fields[0];
+} __packed;
 
 struct wl1271 {
 	struct platform_device *plat_dev;
@@ -635,6 +669,11 @@ struct wl1271 {
 	/* bands supported by this instance of wl12xx */
 	struct ieee80211_supported_band bands[IEEE80211_NUM_BANDS];
 
+	/* save the current encryption type for auto-arp config*/
+	u8 encryption_type;
+	__be32 ip_addr;
+	bool qos;
+
 	/* RX BA constraint value */
 	bool ba_support;
 	u8 ba_rx_bitmap;
@@ -682,6 +721,15 @@ struct wl1271 {
 
 	/* AP-mode - work to add stations back on AP reconfig */
 	struct work_struct ap_start_work;
+
+	/* RX Data filter rule status - enabled/disabled */
+	bool rx_data_filters_status[WL1271_MAX_RX_DATA_FILTERS];
+
+	/* Max rate for current STA connection */
+	u8 max_tx_rate;
+
+	/* Rate flags for the rate above */
+	u8 max_tx_rate_flags;
 };
 
 struct wl1271_station {
@@ -709,7 +757,7 @@ size_t wl12xx_copy_fwlog(struct wl1271 *wl, u8 *memblock, size_t maxlen);
 /* WL1271 needs a 200ms sleep after power on, and a 20ms sleep before power
    on in case is has been shut down shortly before */
 #define WL1271_PRE_POWER_ON_SLEEP 20 /* in milliseconds */
-#define WL1271_POWER_ON_SLEEP 200 /* in milliseconds */
+#define WL1271_POWER_ON_SLEEP 130 /* in milliseconds */
 
 /* Macros to handle wl1271.sta_rate_set */
 #define HW_BG_RATES_MASK	0xffff

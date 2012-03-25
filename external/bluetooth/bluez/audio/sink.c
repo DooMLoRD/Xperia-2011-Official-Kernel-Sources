@@ -5,6 +5,8 @@
  *  Copyright (C) 2006-2007  Nokia Corporation
  *  Copyright (C) 2004-2009  Marcel Holtmann <marcel@holtmann.org>
  *  Copyright (C) 2009-2010  Motorola Inc.
+ *  Copyright (C) 2010, Code Aurora Forum
+ *  Copyright (C) 2012 Sony Ericsson Mobile Communications AB
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -65,6 +67,7 @@ struct sink {
 	avdtp_session_state_t session_state;
 	avdtp_state_t stream_state;
 	sink_state_t state;
+	gboolean protected;
 	struct pending_request *connect;
 	struct pending_request *disconnect;
 	DBusConnection *conn;
@@ -102,6 +105,20 @@ static const char *state2str(sink_state_t state)
 		error("Invalid sink state %d", state);
 		return NULL;
 	}
+}
+
+void sink_set_protected(struct audio_device *dev, gboolean protected)
+{
+	struct sink *sink = dev->sink;
+
+	if (sink == NULL)
+		return;
+
+	sink->protected = protected;
+	emit_property_changed(dev->conn, dev->path,
+			AUDIO_SINK_INTERFACE, "Protected",
+			DBUS_TYPE_BOOLEAN, &protected);
+
 }
 
 static void sink_set_state(struct audio_device *dev, sink_state_t new_state)
@@ -308,6 +325,11 @@ static void stream_setup_complete(struct avdtp *session, struct a2dp_sep *sep,
 
 		sink->connect = NULL;
 		pending_request_free(sink->dev, pending);
+
+		if (avdtp_get_protection(stream)!= NULL)
+			sink_set_protected(sink->dev, TRUE);
+		else
+			sink_set_protected(sink->dev, FALSE);
 
 		return;
 	}
@@ -612,6 +634,10 @@ static DBusMessage *sink_get_properties(DBusConnection *conn,
 	/* Connected */
 	value = (sink->stream_state >= AVDTP_STATE_CONFIGURED);
 	dict_append_entry(&dict, "Connected", DBUS_TYPE_BOOLEAN, &value);
+
+	/* Protected */
+	value = sink->protected;
+	dict_append_entry(&dict, "Protected", DBUS_TYPE_BOOLEAN, &value);
 
 	/* State */
 	state = state2str(sink->state);

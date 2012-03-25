@@ -250,6 +250,7 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 	}
 #endif /* CONFIG_P2P */
 
+	wpa_supplicant_cancel_sched_scan(wpa_s);
 	wpa_supplicant_cancel_scan(wpa_s);
 
 	wpa_msg(wpa_s, MSG_INFO, "SME: Trying to authenticate with " MACSTR
@@ -272,7 +273,8 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 	if (wpa_drv_authenticate(wpa_s, &params) < 0) {
 		wpa_msg(wpa_s, MSG_INFO, "SME: Authentication request to the "
 			"driver failed");
-		wpa_supplicant_req_scan(wpa_s, 1, 0);
+		wpas_connection_failed(wpa_s, bss->bssid);
+		wpa_supplicant_mark_disassoc(wpa_s);
 		return;
 	}
 
@@ -512,6 +514,7 @@ void sme_event_auth_timed_out(struct wpa_supplicant *wpa_s,
 {
 	wpa_dbg(wpa_s, MSG_DEBUG, "SME: Authentication timed out");
 	wpas_connection_failed(wpa_s, wpa_s->pending_bssid);
+	wpa_supplicant_mark_disassoc(wpa_s);
 }
 
 

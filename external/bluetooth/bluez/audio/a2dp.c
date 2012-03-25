@@ -4,6 +4,8 @@
  *
  *  Copyright (C) 2006-2010  Nokia Corporation
  *  Copyright (C) 2004-2010  Marcel Holtmann <marcel@holtmann.org>
+ *  Copyright (C) 2010, Code Aurora Forum
+ *  Copyright (C) 2012 Sony Ericsson Mobile Communications AB
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -52,6 +54,9 @@
  * STREAMING state. */
 #define SUSPEND_TIMEOUT 5
 #define RECONFIGURE_TIMEOUT 500
+
+/* Content protection types */
+#define CP_TYPE_SCMS_T 0x0002
 
 #ifndef MIN
 # define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -423,7 +428,7 @@ static gboolean sbc_setconf_ind(struct avdtp *session,
 {
 	struct a2dp_sep *a2dp_sep = user_data;
 	struct a2dp_setup *setup;
-
+	gboolean scmst_protect = FALSE;
 	if (a2dp_sep->type == AVDTP_SEP_TYPE_SINK)
 		DBG("Sink %p: Set_Configuration_Ind", sep);
 	else
@@ -443,6 +448,7 @@ static gboolean sbc_setconf_ind(struct avdtp *session,
 		struct avdtp_service_capability *cap = caps->data;
 		struct avdtp_media_codec_capability *codec_cap;
 		struct sbc_codec_cap *sbc_cap;
+		struct avdtp_content_protection_capability scms_t_cap = {0x02, 0x00};
 
 		if (cap->category == AVDTP_DELAY_REPORTING &&
 					!a2dp_sep->delay_reporting) {
@@ -450,6 +456,11 @@ static gboolean sbc_setconf_ind(struct avdtp *session,
 			avdtp_error_init(setup->err, AVDTP_DELAY_REPORTING,
 						AVDTP_UNSUPPORTED_CONFIGURATION);
 			goto done;
+		}
+		if (cap->category == AVDTP_CONTENT_PROTECTION &&
+				memcmp(cap->data, &scms_t_cap, sizeof(scms_t_cap)) == 0) {
+			scmst_protect = TRUE;
+			continue;
 		}
 
 		if (cap->category != AVDTP_MEDIA_CODEC)
@@ -476,6 +487,9 @@ static gboolean sbc_setconf_ind(struct avdtp *session,
 
 done:
 	g_idle_add(auto_config, setup);
+	if (setup->dev)
+		sink_set_protected(setup->dev,scmst_protect);
+
 	return TRUE;
 }
 
@@ -485,6 +499,8 @@ static gboolean sbc_getcap_ind(struct avdtp *session, struct avdtp_local_sep *se
 {
 	struct a2dp_sep *a2dp_sep = user_data;
 	struct avdtp_service_capability *media_transport, *media_codec;
+	struct avdtp_service_capability *media_scms_t;
+	struct avdtp_content_protection_capability scms_t_cap;
 	struct sbc_codec_cap sbc_cap;
 
 	if (a2dp_sep->type == AVDTP_SEP_TYPE_SINK)
@@ -535,6 +551,14 @@ static gboolean sbc_getcap_ind(struct avdtp *session, struct avdtp_local_sep *se
 						sizeof(sbc_cap));
 
 	*caps = g_slist_append(*caps, media_codec);
+
+	memset(&scms_t_cap, 0, sizeof(scms_t_cap));
+	scms_t_cap.cp_type_lsb = (CP_TYPE_SCMS_T & 0xFF);
+	scms_t_cap.cp_type_msb = (CP_TYPE_SCMS_T >> 8) & 0xFF;
+	media_scms_t = avdtp_service_cap_new(AVDTP_CONTENT_PROTECTION,
+						&scms_t_cap, 2);
+
+	*caps = g_slist_append(*caps, media_scms_t);
 
 	if (get_all) {
 		struct avdtp_service_capability *delay_reporting;
@@ -1850,6 +1874,8 @@ static gboolean select_capabilities(struct avdtp *session,
 					GSList **caps)
 {
 	struct avdtp_service_capability *media_transport, *media_codec;
+	struct avdtp_service_capability *media_scms_t;
+	struct avdtp_content_protection_capability scms_t_cap = {0x02, 0x00};
 	struct sbc_codec_cap sbc_cap;
 
 	media_codec = avdtp_get_codec(rsep);
@@ -1867,6 +1893,13 @@ static gboolean select_capabilities(struct avdtp *session,
 						sizeof(sbc_cap));
 
 	*caps = g_slist_append(*caps, media_codec);
+
+	media_scms_t = avdtp_get_remote_sep_protection(rsep);
+
+	if (media_scms_t && (memcmp(media_scms_t->data, &scms_t_cap, sizeof(scms_t_cap)) == 0)) {
+		media_scms_t = avdtp_service_cap_new(AVDTP_CONTENT_PROTECTION, &scms_t_cap, 2);
+		*caps = g_slist_append(*caps, media_scms_t);
+	}
 
 	if (avdtp_get_delay_reporting(rsep)) {
 		struct avdtp_service_capability *delay_reporting;

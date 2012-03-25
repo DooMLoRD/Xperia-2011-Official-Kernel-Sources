@@ -1242,6 +1242,7 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 			wpa_ssid_txt(ssid->ssid, ssid->ssid_len));
 		os_memset(wpa_s->pending_bssid, 0, ETH_ALEN);
 	}
+	wpa_supplicant_cancel_sched_scan(wpa_s);
 	wpa_supplicant_cancel_scan(wpa_s);
 
 	/* Starting new association, so clear the possibly used WPA IE from the
@@ -1649,12 +1650,14 @@ void wpa_supplicant_enable_network(struct wpa_supplicant *wpa_s,
 				wpas_notify_network_enabled_changed(
 					wpa_s, other_ssid);
 		}
-		if (wpa_s->reassociate)
+		if (wpa_s->reassociate) {
+			wpa_supplicant_req_sched_scan(wpa_s);
 #ifdef ANDROID
 			wpa_supplicant_req_scan(wpa_s, 2, 0);
 #else /* ANDROID */
 			wpa_supplicant_req_scan(wpa_s, 0, 0);
 #endif /* ANDROID */
+		}
 	} else if (ssid->disabled && ssid->disabled != 2) {
 		if (wpa_s->current_ssid == NULL) {
 			/*
@@ -1662,6 +1665,7 @@ void wpa_supplicant_enable_network(struct wpa_supplicant *wpa_s,
 			 * configuration and a new network was made available.
 			 */
 			wpa_s->reassociate = 1;
+			wpa_supplicant_req_sched_scan(wpa_s);
 #ifdef ANDROID
 			wpa_supplicant_req_scan(wpa_s, 2, 0);
 #else /* ANDROID */
@@ -1721,6 +1725,8 @@ void wpa_supplicant_disable_network(struct wpa_supplicant *wpa_s,
 		if (was_disabled != ssid->disabled)
 			wpas_notify_network_enabled_changed(wpa_s, ssid);
 	}
+
+	wpa_supplicant_req_sched_scan(wpa_s);
 }
 
 
@@ -2212,7 +2218,12 @@ int wpa_supplicant_driver_init(struct wpa_supplicant *wpa_s)
 
 	wpa_s->prev_scan_ssid = WILDCARD_SSID_SCAN;
 	if (wpa_supplicant_enabled_networks(wpa_s->conf)) {
-		wpa_supplicant_req_scan(wpa_s, interface_count, 100000);
+		int ret;
+		ret = wpa_supplicant_delayed_sched_scan(wpa_s,
+							interface_count,
+							100000);
+		if (ret)
+			wpa_supplicant_req_scan(wpa_s, interface_count, 100000);
 		interface_count++;
 	} else
 		wpa_supplicant_set_state(wpa_s, WPA_INACTIVE);
@@ -2237,8 +2248,11 @@ static struct wpa_supplicant * wpa_supplicant_alloc(void)
 		return NULL;
 	wpa_s->scan_req = 1;
 	wpa_s->scan_interval = 5;
+	wpa_s->sched_scan_interval = 3;
 	wpa_s->new_connection = 1;
 	wpa_s->parent = wpa_s;
+	wpa_s->sched_scanning = 0;
+	wpa_s->override_sched_scan = 0;
 
 	return wpa_s;
 }
@@ -2408,6 +2422,9 @@ next_driver:
 				return -1;
 		}
 		wpa_s->max_scan_ssids = capa.max_scan_ssids;
+		wpa_s->max_sched_scan_ssids = capa.max_sched_scan_ssids;
+		wpa_s->sched_scan_supported = capa.sched_scan_supported;
+		wpa_s->max_match_sets = capa.max_match_sets;
 		wpa_s->max_remain_on_chan = capa.max_remain_on_chan;
 		wpa_s->max_stations = capa.max_stations;
 	}

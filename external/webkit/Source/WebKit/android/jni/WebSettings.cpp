@@ -1,5 +1,6 @@
 /*
  * Copyright 2007, The Android Open Source Project
+ * Copyright (C) 2011, 2012 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -21,6 +22,9 @@
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * NOTE: This file has been modified by Sony Ericsson Mobile Communications AB.
+ * Modifications are licensed under the License.
  */
 
 #define LOG_TAG "websettings"
@@ -147,6 +151,8 @@ struct FieldIds {
         env->DeleteLocalRef(autoFillProfileClass);
 #endif
 #if USE(CHROME_NETWORK_STACK)
+        mUserAgentProfile = env->GetFieldID(clazz, "mUserAgentProfile",
+                "Ljava/lang/String;");
         mOverrideCacheMode = env->GetFieldID(clazz, "mOverrideCacheMode", "I");
 #endif
 
@@ -268,6 +274,7 @@ struct FieldIds {
     jfieldID mAutoFillProfilePhoneNumber;
 #endif
 #if USE(CHROME_NETWORK_STACK)
+    jfieldID mUserAgentProfile;
     jfieldID mOverrideCacheMode;
 #endif
 };
@@ -371,6 +378,10 @@ public:
         WebFrame::getWebFrame(pFrame)->setUserAgent(jstringToWtfString(env, str));
 #if USE(CHROME_NETWORK_STACK)
         WebViewCore::getWebViewCore(pFrame->view())->setWebRequestContextUserAgent();
+
+        str = (jstring)env->GetObjectField(obj, gFieldIds->mUserAgentProfile);
+        WebFrame::getWebFrame(pFrame)->setUserAgentProfile(jstringToWtfString(env, str));
+        WebViewCore::getWebViewCore(pFrame->view())->setWebRequestContextUserAgentProfile();
 
         jint cacheMode = env->GetIntField(obj, gFieldIds->mOverrideCacheMode);
         WebViewCore::getWebViewCore(pFrame->view())->setWebRequestContextCacheMode(cacheMode);
@@ -571,6 +582,9 @@ public:
         // This is required to enable the XMLTreeViewer when loading an XML document that
         // has no style attached to it. http://trac.webkit.org/changeset/79799
         s->setDeveloperExtrasEnabled(true);
+#if ENABLE(WEBGL)
+        s->setWebGLEnabled(true);
+#endif
     }
 };
 

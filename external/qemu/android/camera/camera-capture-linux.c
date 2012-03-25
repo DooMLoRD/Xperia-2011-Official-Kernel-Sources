@@ -612,7 +612,7 @@ _camera_device_enum_format_sizes(LinuxCameraDevice* cd,
         if(_xioctl(cd->handle, VIDIOC_ENUM_FRAMESIZES, &size_enum)) {
             /* Errors are not welcome here anymore. */
             E("%s: Unexpected failure while getting pixel dimensions: %s",
-              strerror(errno));
+              __FUNCTION__, strerror(errno));
             free(arr);
             return -1;
         }
@@ -670,15 +670,16 @@ _camera_device_enum_format_sizes(LinuxCameraDevice* cd,
 static int
 _camera_device_enum_pixel_formats(LinuxCameraDevice* cd, QemuPixelFormat** fmts)
 {
-    int n;
+    int n, max_fmt;
     int fmt_num = 0;
     int out_num = 0;
     struct v4l2_fmtdesc fmt_enum;
     QemuPixelFormat* arr;
 
     /* Calculate number of supported formats. */
-    for (n = 0; ; n++) {
-        fmt_enum.index = n;
+    for (max_fmt = 0; ; max_fmt++) {
+        memset(&fmt_enum, 0, sizeof(fmt_enum));
+        fmt_enum.index = max_fmt;
         fmt_enum.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if(_xioctl(cd->handle, VIDIOC_ENUM_FMT, &fmt_enum)) {
             break;
@@ -700,14 +701,15 @@ _camera_device_enum_pixel_formats(LinuxCameraDevice* cd, QemuPixelFormat** fmts)
     }
     arr = *fmts;
     memset(arr, 0, fmt_num * sizeof(QemuPixelFormat));
-    for (n = 0; out_num < fmt_num; n++) {
+    for (n = 0; n < max_fmt && out_num < fmt_num; n++) {
+        memset(&fmt_enum, 0, sizeof(fmt_enum));
         fmt_enum.index = n;
         fmt_enum.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if(_xioctl(cd->handle, VIDIOC_ENUM_FMT, &fmt_enum)) {
             int nn;
             /* Errors are not welcome here anymore. */
             E("%s: Unexpected failure while getting pixel format: %s",
-              strerror(errno));
+              __FUNCTION__, strerror(errno));
             for (nn = 0; nn < out_num; nn++) {
                 _qemu_pixel_format_free(arr + nn);
             }
@@ -757,7 +759,7 @@ _camera_device_get_info(LinuxCameraDevice* cd, CameraInfo* cis)
     QemuPixelFormat* formats = NULL;
     int num_pix_fmts = _camera_device_enum_pixel_formats(cd, &formats);
     if (num_pix_fmts <= 0) {
-        return num_pix_fmts;
+        return -1;
     }
 
     /* Lets see if camera supports preferred formats */

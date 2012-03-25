@@ -1,5 +1,6 @@
 /*
  * Copyright 2006, The Android Open Source Project
+ * Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,10 +28,9 @@
 * 2010-09-26:
 *     Check that Node object is still valid after
 *     forceLayout in method setSizeScreenWidthAndScale.
-* 2011-05-24:
-* Take gButtonMutex when adding a SkPicture to PictureSet that might cause
-* a SkPicture draw. Needed in order to ensure that WebCoreThread and UI-thread
-* isn't recording and playback from the same SkPicture object.
+* 2012-02-07:
+*     Get renderer again after event has been processed
+*     since the renderer might been removed.
 */
 #define LOG_TAG "webcoreglue"
 
@@ -345,7 +345,6 @@ static jmethodID GetJMethod(JNIEnv* env, jclass clazz, const char name[], const 
 }
 
 Mutex WebViewCore::gFrameCacheMutex;
-Mutex WebViewCore::gButtonMutex;
 Mutex WebViewCore::gCursorBoundsMutex;
 
 WebViewCore::WebViewCore(JNIEnv* env, jobject javaWebViewCore, WebCore::Frame* mainframe)
@@ -569,19 +568,10 @@ void WebViewCore::recordPicture(SkPicture* picture)
                             view->contentsHeight(), PICT_RECORD_FLAGS);
     SkAutoMemoryUsageProbe mup(__FUNCTION__);
 
-    // Copy m_buttons so we can pass it to our graphics context.
-    gButtonMutex.lock();
-    WTF::Vector<Container> buttons(m_buttons);
-    gButtonMutex.unlock();
-
-    WebCore::PlatformGraphicsContext pgc(arp.getRecordingCanvas(), &buttons);
+    WebCore::PlatformGraphicsContext pgc(arp.getRecordingCanvas());
     WebCore::GraphicsContext gc(&pgc);
     view->platformWidget()->draw(&gc, WebCore::IntRect(0, 0,
         view->contentsWidth(), view->contentsHeight()));
-
-    gButtonMutex.lock();
-    updateButtonList(&buttons);
-    gButtonMutex.unlock();
 }
 
 void WebViewCore::recordPictureSet(PictureSet* content)
@@ -693,10 +683,8 @@ void WebViewCore::recordPictureSet(PictureSet* content)
 
     content->setDimensions(width, height, &m_addInval);
 
-    gButtonMutex.lock();
     // Add the current inval rects to the PictureSet, and rebuild it.
     content->add(m_addInval, 0, 0, false);
-    gButtonMutex.unlock();
 
     // If we have too many invalidations, just get the area bounds
     SkRegion::Iterator iterator(m_addInval);
@@ -797,43 +785,6 @@ void WebViewCore::recordPictureSet(PictureSet* content)
     }
 }
 
-void WebViewCore::updateButtonList(WTF::Vector<Container>* buttons)
-{
-    // All the entries in buttons are either updates of previous entries in
-    // m_buttons or they need to be added to it.
-    Container* end = buttons->end();
-    for (Container* updatedContainer = buttons->begin();
-            updatedContainer != end; updatedContainer++) {
-        bool updated = false;
-        // Search for a previous entry that references the same node as our new
-        // data
-        Container* lastPossibleMatch = m_buttons.end();
-        for (Container* possibleMatch = m_buttons.begin();
-                possibleMatch != lastPossibleMatch; possibleMatch++) {
-            if (updatedContainer->matches(possibleMatch->node())) {
-                // Update our record, and skip to the next one.
-                possibleMatch->setRect(updatedContainer->rect());
-                updated = true;
-                break;
-            }
-        }
-        if (!updated) {
-            // This is a brand new button, so append it to m_buttons
-            m_buttons.append(*updatedContainer);
-        }
-    }
-    size_t i = 0;
-    // count will decrease each time one is removed, so check count each time.
-    while (i < m_buttons.size()) {
-        if (m_buttons[i].canBeRemoved()) {
-            m_buttons[i] = m_buttons.last();
-            m_buttons.removeLast();
-        } else {
-            i++;
-        }
-    }
-}
-
 // note: updateCursorBounds is called directly by the WebView thread
 // This needs to be called each time we call CachedRoot::setCursor() with
 // non-null CachedNode/CachedFrame, since otherwise the WebViewCore's data
@@ -888,24 +839,18 @@ SkPicture* WebViewCore::rebuildPicture(const SkIRect& inval)
     SkAutoMemoryUsageProbe mup(__FUNCTION__);
     SkCanvas* recordingCanvas = arp.getRecordingCanvas();
 
-    gButtonMutex.lock();
-    WTF::Vector<Container> buttons(m_buttons);
-    gButtonMutex.unlock();
-
-    WebCore::PlatformGraphicsContext pgc(recordingCanvas, &buttons);
+    WebCore::PlatformGraphicsContext pgc(recordingCanvas);
     WebCore::GraphicsContext gc(&pgc);
-    recordingCanvas->translate(-inval.fLeft, -inval.fTop);
+    IntPoint origin = view->minimumScrollPosition();
+    WebCore::IntRect drawArea(inval.fLeft + origin.x(), inval.fTop + origin.y(),
+            inval.width(), inval.height());
+    recordingCanvas->translate(-drawArea.x(), -drawArea.y());
     recordingCanvas->save();
-    view->platformWidget()->draw(&gc, WebCore::IntRect(inval.fLeft,
-        inval.fTop, inval.width(), inval.height()));
+    view->platformWidget()->draw(&gc, drawArea);
     m_rebuildInval.op(inval, SkRegion::kUnion_Op);
     DBG_SET_LOGD("m_rebuildInval={%d,%d,r=%d,b=%d}",
         m_rebuildInval.getBounds().fLeft, m_rebuildInval.getBounds().fTop,
         m_rebuildInval.getBounds().fRight, m_rebuildInval.getBounds().fBottom);
-
-    gButtonMutex.lock();
-    updateButtonList(&buttons);
-    gButtonMutex.unlock();
 
     return picture;
 }
@@ -936,10 +881,7 @@ void WebViewCore::rebuildPictureSet(PictureSet* pictureSet)
         const SkIRect& inval = pictureSet->bounds(index);
         DBG_SET_LOGD("pictSet=%p [%d] {%d,%d,w=%d,h=%d}", pictureSet, index,
             inval.fLeft, inval.fTop, inval.width(), inval.height());
-        SkPicture* pic = rebuildPicture(inval);
-        gButtonMutex.lock();
-        pictureSet->setPicture(index, pic);
-        gButtonMutex.unlock();
+        pictureSet->setPicture(index, rebuildPicture(inval));
     }
 
     pictureSet->validate(__FUNCTION__);
@@ -952,11 +894,21 @@ bool WebViewCore::updateLayers(LayerAndroid* layers)
     ChromeClientAndroid* chromeC = static_cast<ChromeClientAndroid*>(m_mainFrame->page()->chrome()->client());
     GraphicsLayerAndroid* root = static_cast<GraphicsLayerAndroid*>(chromeC->layersSync());
     if (root) {
-        root->notifyClientAnimationStarted();
         LayerAndroid* updatedLayer = root->contentLayer();
         return layers->updateWithTree(updatedLayer);
     }
     return true;
+}
+
+void WebViewCore::notifyAnimationStarted()
+{
+    // We notify webkit that the animations have begun
+    // TODO: handle case where not all have begun
+    ChromeClientAndroid* chromeC = static_cast<ChromeClientAndroid*>(m_mainFrame->page()->chrome()->client());
+    GraphicsLayerAndroid* root = static_cast<GraphicsLayerAndroid*>(chromeC->layersSync());
+    if (root)
+        root->notifyClientAnimationStarted();
+
 }
 
 BaseLayerAndroid* WebViewCore::createBaseLayer(SkRegion* region)
@@ -964,17 +916,15 @@ BaseLayerAndroid* WebViewCore::createBaseLayer(SkRegion* region)
     BaseLayerAndroid* base = new BaseLayerAndroid();
     base->setContent(m_content);
 
-    if (!region->isEmpty()) {
-        m_skipContentDraw = true;
-        bool layoutSucceeded = layoutIfNeededRecursive(m_mainFrame);
-        m_skipContentDraw = false;
-        // Layout only fails if called during a layout.
-        LOG_ASSERT(layoutSucceeded, "Can never be called recursively");
-    }
+    m_skipContentDraw = true;
+    bool layoutSucceeded = layoutIfNeededRecursive(m_mainFrame);
+    m_skipContentDraw = false;
+    // Layout only fails if called during a layout.
+    LOG_ASSERT(layoutSucceeded, "Can never be called recursively");
 
 #if USE(ACCELERATED_COMPOSITING)
     // We set the background color
-    if (!region->isEmpty() && m_mainFrame && m_mainFrame->document()
+    if (m_mainFrame && m_mainFrame->document()
         && m_mainFrame->document()->body()) {
         Document* document = m_mainFrame->document();
         RefPtr<RenderStyle> style = document->styleForElementIgnoringPendingStylesheets(document->body());
@@ -989,7 +939,6 @@ BaseLayerAndroid* WebViewCore::createBaseLayer(SkRegion* region)
     ChromeClientAndroid* chromeC = static_cast<ChromeClientAndroid*>(m_mainFrame->page()->chrome()->client());
     GraphicsLayerAndroid* root = static_cast<GraphicsLayerAndroid*>(chromeC->layersSync());
     if (root) {
-        root->notifyClientAnimationStarted();
         LayerAndroid* copyLayer = new LayerAndroid(*root->contentLayer());
         base->addChild(copyLayer);
         copyLayer->unref();
@@ -1163,7 +1112,10 @@ void WebViewCore::didFirstLayout()
             // When redirect with locked history, we would like to reset the
             // scale factor. This is important for www.yahoo.com as it is
             // redirected to www.yahoo.com/?rs=1 on load.
-            || loadType == WebCore::FrameLoadTypeRedirectWithLockedBackForwardList);
+            || loadType == WebCore::FrameLoadTypeRedirectWithLockedBackForwardList
+            // When "request desktop page" is used, we want to treat it as
+            // a newly-loaded page.
+            || loadType == WebCore::FrameLoadTypeSame);
     checkException(env);
 
     DBG_NAV_LOG("call updateFrameCache");
@@ -1409,15 +1361,15 @@ void WebViewCore::setSizeScreenWidthAndScale(int width, int height,
             if (width != screenWidth) {
                 m_mainFrame->view()->setUseFixedLayout(true);
                 m_mainFrame->view()->setFixedLayoutSize(IntSize(width, height));
-            } else {
+            } else
                 m_mainFrame->view()->setUseFixedLayout(false);
-            }
             Frame* frame = NULL;
             if (node)
                 frame = node->document()->frame();
 
             r->setNeedsLayoutAndPrefWidthsRecalc();
-            m_mainFrame->view()->forceLayout();
+            if (m_mainFrame->view()->didFirstLayout())
+                m_mainFrame->view()->forceLayout();
 
             // scroll to restore current screen center
             if (node && frame && CacheBuilder::validNode(m_mainFrame, frame, node.get())) {
@@ -1455,9 +1407,8 @@ void WebViewCore::setSizeScreenWidthAndScale(int width, int height,
         if (width != screenWidth) {
             m_mainFrame->view()->setUseFixedLayout(true);
             m_mainFrame->view()->setFixedLayoutSize(IntSize(width, height));
-        } else {
+        } else
             m_mainFrame->view()->setUseFixedLayout(false);
-        }
     }
 
     // update the currently visible screen as perceived by the plugin
@@ -2983,6 +2934,14 @@ void WebViewCore::passToJs(int generation, const WTF::String& current,
     client->setUiGeneratedSelectionChange(false);
     m_blockTextfieldUpdates = false;
     m_textGeneration = generation;
+
+    // get the renderer again since might removed while the event is processed
+    renderer = focus->renderer();
+    if (!renderer || (!renderer->isTextField() && !renderer->isTextArea())) {
+        DBG_NAV_LOGD("renderer==%p || not text after key(event)", renderer);
+        return;
+    }
+
     WebCore::RenderTextControl* renderText =
         static_cast<WebCore::RenderTextControl*>(renderer);
     WTF::String test = renderText->text();
@@ -3943,6 +3902,13 @@ void WebViewCore::setWebRequestContextUserAgent()
         m_webRequestContext->setUserAgent(WebFrame::getWebFrame(m_mainFrame)->userAgentForURL(0)); // URL not used
 }
 
+void WebViewCore::setWebRequestContextUserAgentProfile()
+{
+    if (m_webRequestContext)
+        m_webRequestContext->setUserAgentProfile(
+                WebFrame::getWebFrame(m_mainFrame)->userAgentProfile());
+}
+
 void WebViewCore::setWebRequestContextCacheMode(int cacheMode)
 {
     m_cacheMode = cacheMode;
@@ -3959,6 +3925,7 @@ WebRequestContext* WebViewCore::webRequestContext()
         Settings* settings = mainFrame()->settings();
         m_webRequestContext = new WebRequestContext(settings && settings->privateBrowsingEnabled());
         setWebRequestContextUserAgent();
+        setWebRequestContextUserAgentProfile();
         setWebRequestContextCacheMode(m_cacheMode);
     }
     return m_webRequestContext.get();
@@ -4175,9 +4142,9 @@ void WebViewCore::addVisitedLink(const UChar* string, int length)
         m_groupForVisitedLinks->addVisitedLink(string, length);
 }
 
-static bool UpdateLayers(JNIEnv *env, jobject obj, jint jbaseLayer)
+static bool UpdateLayers(JNIEnv *env, jobject obj, jint nativeClass, jint jbaseLayer)
 {
-    WebViewCore* viewImpl = GET_NATIVE_VIEW(env, obj);
+    WebViewCore* viewImpl = (WebViewCore*) nativeClass;
     BaseLayerAndroid* baseLayer = (BaseLayerAndroid*)  jbaseLayer;
     if (baseLayer) {
         LayerAndroid* root = static_cast<LayerAndroid*>(baseLayer->getChild(0));
@@ -4185,6 +4152,12 @@ static bool UpdateLayers(JNIEnv *env, jobject obj, jint jbaseLayer)
             return viewImpl->updateLayers(root);
     }
     return true;
+}
+
+static void NotifyAnimationStarted(JNIEnv *env, jobject obj, jint nativeClass)
+{
+    WebViewCore* viewImpl = (WebViewCore*) nativeClass;
+    viewImpl->notifyAnimationStarted();
 }
 
 static jint RecordContent(JNIEnv *env, jobject obj, jobject region, jobject pt)
@@ -4766,8 +4739,10 @@ static JNINativeMethod gJavaWebViewCoreMethods[] = {
         (void*) UpdateFrameCache },
     { "nativeGetContentMinPrefWidth", "()I",
         (void*) GetContentMinPrefWidth },
-    { "nativeUpdateLayers", "(I)Z",
+    { "nativeUpdateLayers", "(II)Z",
         (void*) UpdateLayers },
+    { "nativeNotifyAnimationStarted", "(I)V",
+        (void*) NotifyAnimationStarted },
     { "nativeRecordContent", "(Landroid/graphics/Region;Landroid/graphics/Point;)I",
         (void*) RecordContent },
     { "setViewportSettingsFromNative", "()V",
