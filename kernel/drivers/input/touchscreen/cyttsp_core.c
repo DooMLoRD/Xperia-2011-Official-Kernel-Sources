@@ -161,6 +161,12 @@
 #define CY_BL_RECEPTIVE             (1 << 5)
 #define CY_APP_CHKSUM               (1 << 0)
 
+#define CY_CALI_IDAC_FORCE_GAIN	(1 << 7)
+#define CY_CALI_IDAC_GAIN1	0x00
+#define CY_CALI_IDAC_GAIN2	0x01
+#define CY_CALI_IDAC_GAIN4	0x02
+#define CY_CALI_IDAC_GAIN8	0x03
+
 /* TrueTouch Standard Product Gen3 (Txx3xx) interface definition */
 struct cyttsp_xydata {
 	u8 hst_mode;
@@ -251,7 +257,6 @@ enum mfg_command_status {
 	CY_MFG_DONE = CY_MFG_STAT_COMPLETE | CY_MFG_STAT_PASS,
 };
 
-static const u8 CY_MFG_CMD_IDAC[] = {0x20, 0x00};
 static const u8 CY_MFG_CMD_CLR_STATUS[] = {0x2f};
 
 /* TTSP Bootloader Register Map interface definition */
@@ -1829,6 +1834,31 @@ static struct bin_attribute cyttsp_firmware = {
 	.write = firmware_write,
 };
 
+static u8 cyttsp_get_idac_gain(struct cyttsp *ts)
+{
+	u8 ret;
+
+	switch (ts->platform_data->idac_gain) {
+	case 1:
+		ret = CY_CALI_IDAC_FORCE_GAIN | CY_CALI_IDAC_GAIN1;
+		break;
+	case 2:
+		ret = CY_CALI_IDAC_FORCE_GAIN | CY_CALI_IDAC_GAIN2;
+		break;
+	case 4:
+		ret = CY_CALI_IDAC_FORCE_GAIN | CY_CALI_IDAC_GAIN4;
+		break;
+	case 8:
+		ret = CY_CALI_IDAC_FORCE_GAIN | CY_CALI_IDAC_GAIN8;
+		break;
+	default:
+		ret = 0x00;
+		break;
+	}
+
+	return ret;
+}
+
 static ssize_t attr_fwloader_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
@@ -1866,11 +1896,53 @@ static ssize_t attr_custid_show(struct device *dev,
 }
 
 
+
+static ssize_t attr_calibration_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	int ret;
+	u8 CY_MFG_CMD_IDAC[] = {0x20, 0x00};
+	struct cyttsp *ts = dev_get_drvdata(dev);
+
+	LOCK(ts->mutex);
+
+	if (ts->suspended) {
+		cyttsp_resume(ts);
+		enable_irq(ts->irq);
+	}
+
+	if (cyttsp_set_sysinfo_mode(ts))
+		goto error;
+
+	CY_MFG_CMD_IDAC[1] = cyttsp_get_idac_gain(ts);
+	ret = cyttsp_execute_mfg_command(ts, CY_MFG_CMD_IDAC,
+		sizeof(CY_MFG_CMD_IDAC), true);
+	if (ret)
+		goto error;
+
+	if (cyttsp_set_operational_mode(ts))
+		cyttsp_power_on(ts);
+
+	if (ts->suspended) {
+		dev_info(ts->pdev, "%s: suspending.\n", __func__);
+		disable_irq(ts->irq);
+		cyttsp_suspend(ts);
+		cancel_delayed_work_sync(&ts->work);
+	}
+	UNLOCK(ts->mutex);
+	return snprintf(buf, PAGE_SIZE, "done\n");
+
+error:
+	UNLOCK(ts->mutex);
+	return snprintf(buf, PAGE_SIZE, "fail\n");
+}
+
 static ssize_t attr_fwloader_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t size)
 {
 	int ret;
+	u8 CY_MFG_CMD_IDAC[] = {0x20, 0x00};
 	struct cyttsp *ts = dev_get_drvdata(dev);
 	unsigned long val;
 
@@ -1904,6 +1976,7 @@ remove_file:
 			goto bypass;
 		ret = cyttsp_set_sysinfo_mode(ts);
 		if (!ret) {
+			CY_MFG_CMD_IDAC[1] = cyttsp_get_idac_gain(ts);
 			cyttsp_execute_mfg_command(ts, CY_MFG_CMD_IDAC,
 				sizeof(CY_MFG_CMD_IDAC), true);
 			cyttsp_execute_mfg_command(ts, CY_MFG_CMD_CLR_STATUS,
@@ -1974,6 +2047,7 @@ static struct device_attribute attributes[] = {
 #ifdef CONFIG_TOUCHSCREEN_CYTTSP_CHARGER_MODE
 	__ATTR(touch_cmd, 0200, NULL, attr_cmd_store),
 #endif
+	__ATTR(calibration, 0400, attr_calibration_show, NULL),
 };
 
 static int add_sysfs_interfaces(struct device *dev)
